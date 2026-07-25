@@ -29,3 +29,22 @@ spec:
       allowedRoutes:
         namespaces:
           from: Same
+        # BLOCKED — uncomment together with enabling the controller feature
+        # gate (see pilot/values-controller.yaml `agentgatewayModels.enabled`).
+        #
+        # AgentgatewayModel is opt-in twice over: the controller must be built
+        # with AGW_ENABLE_AGENTGATEWAY_MODELS=true AND the kind must be listed
+        # here, or translator.GenerateSupportedKinds drops it. Applying this
+        # block while the gate is off leaves the listener stuck on
+        # `ResolvedRefs=False / InvalidRouteKinds`, because listing any kinds
+        # switches the listener to an intersection filter and the unsupported
+        # entry can never be satisfied. Verified empirically 2026-07-25.
+        #
+        # Note HTTPRoute must be relisted alongside it: the intersection filter
+        # would otherwise drop the legacy compatibility routes.
+        #
+        # kinds:
+        #   - group: gateway.networking.k8s.io
+        #     kind: HTTPRoute
+        #   - group: agentgateway.dev
+        #     kind: AgentgatewayModel

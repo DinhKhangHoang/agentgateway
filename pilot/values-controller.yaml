@@ -6,6 +6,20 @@ image:
   registry: cr.agentgateway.dev
   tag: v1.4.0-beta.1
 
+# REQUIRED for the AgentgatewayModel API. The chart default is false, which
+# leaves the CRD installed but completely inert: the controller never starts
+# the informer (plugins/collection.go), never runs AgwModelCollection
+# (syncer.go), and rejects `AgentgatewayModel` in a listener's
+# allowedRoutes.kinds. Symptom when off: models apply cleanly and show no
+# status at all, and every LLM request fails `500 no valid backends` with the
+# data plane reporting `modelCatalog: sources: []`.
+#
+# NOTE: applying this requires a helm upgrade of the `agentgateway` release in
+# the agentgateway-system namespace, which was out of scope for the pilot's
+# write permissions. Not yet applied to the dev cluster.
+agentgatewayModels:
+  enabled: true
+
 # Restrict config discovery to the pilot namespace so the controller never
 # reads or reconciles anything in the Kong namespaces.
 discoveryNamespaceSelectors:
