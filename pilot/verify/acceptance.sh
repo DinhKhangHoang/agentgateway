@@ -9,6 +9,25 @@
 # SKIP rather than silently passing — a sweep that cannot test the allow path
 # must say so, not pretend.
 #
+# A USABLE KEY NOW EXISTS. It no longer has to be issued by the remote registry:
+# a synthetic key was minted for the pilot and lives in the `pilot-test-apikey`
+# Secret in user-11377-maas-v2-agw. Export it with:
+#
+#   export PILOT_API_KEY=$(kubectl -n user-11377-maas-v2-agw get secret pilot-test-apikey -o jsonpath='{.data.key}' | base64 -d)
+#
+# (add --kubeconfig=/path/to/aigateway-dev.conf if you have no default context).
+# The key itself is deliberately NOT written into this repo — read it from the
+# Secret every time.
+#
+# WHAT THAT KEY DOES AND DOES NOT PROVE. It is authorized by
+# pilot/16-registry-stub.yaml, a TEST DOUBLE standing in for the tenant/API-key
+# registry, because no key for this pilot exists in the real registry
+# (pub-iamapis.api-dev.vngcloud.tech) and none can be minted. A green sweep
+# therefore proves the plugin server's authn -> acl -> ratelimit pipeline, the
+# extauthz-adapter translation, the gateway's extAuth wiring, model routing and
+# every downstream hop. It proves NOTHING about the real registry integration:
+# that leg is still unverified and must not be reported as covered.
+#
 # Exit status: 0 only if there are no FAILs. SKIPs do not fail the run, but they
 # are counted and printed so an incomplete sweep is never mistaken for a green one.
 set -uo pipefail
@@ -61,8 +80,10 @@ if [ -z "$KEY" ]; then
   echo "----"
   echo "passed=$pass failed=$fail skipped=$skip"
   echo
-  echo "To run the full sweep, export PILOT_API_KEY with a key issued by the"
-  echo "tenant registry at pub-iamapis.api-dev.vngcloud.tech."
+  echo "To run the full sweep, export the pilot's synthetic key:"
+  echo "  export PILOT_API_KEY=\$(kubectl -n user-11377-maas-v2-agw get secret pilot-test-apikey -o jsonpath='{.data.key}' | base64 -d)"
+  echo "(it is authorized by the registry-stub TEST DOUBLE, not the real registry"
+  echo " — see the header of this script and pilot/16-registry-stub.yaml)."
   [ "$fail" -eq 0 ]
   exit $?
 fi

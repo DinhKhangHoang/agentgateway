@@ -1,0 +1,207 @@
+# ############################################################################
+# #                                                                          #
+# #   TEST DOUBLE — NOT A PRODUCTION COMPONENT. PILOT NAMESPACE ONLY.        #
+# #                                                                          #
+# ############################################################################
+#
+# registry-stub impersonates the tenant/API-key registry that
+# ai-gateway-plugin-server resolves keys against. It authorizes EXACTLY ONE
+# synthetic key and nothing else. It must never be deployed outside
+# user-11377-maas-v2-agw and must never sit in front of real tenant traffic.
+#
+# WHY IT EXISTS
+# The pilot's plugin server validates every API key with
+#   GET {APP_BACKEND_API_URL}/v1/keys/{sha256}
+# against the real registry at pub-iamapis.api-dev.vngcloud.tech. No key is
+# registered there for this pilot and none can be minted, so every pilot
+# request denied at the authn stage and the authenticated ALLOW path — the last
+# unverified leg of the whole pilot — could not be exercised AT ALL. Standing up
+# a double for that one lookup is what makes it testable.
+#
+# WHAT IT PROVES / DOES NOT PROVE
+# Proves: the plugin server's authn -> acl -> ratelimit pipeline, the
+# extauthz-adapter status translation, the gateway's extAuth wiring, model
+# routing, and every downstream hop all work for an ALLOWED request.
+# Does NOT prove: anything about the real registry integration. The key is
+# synthetic and the registry response is fabricated by us. Production Kong keeps
+# talking to the real registry; only the PILOT plugin server is repointed here.
+#
+# SECURITY — THE ONE PROPERTY THAT MATTERS
+# The pilot gateway is published on a public LoadBalancer (116.118.88.175). A
+# stub that authorized any key would make that gateway world-open. Therefore:
+#   * exactly ONE key hash is accepted, pinned by ACCEPTED_KEY_SHA256;
+#   * there is no wildcard, no accept-all, no empty-means-allow;
+#   * the process REFUSES TO START unless ACCEPTED_KEY_SHA256 is exactly 64 hex
+#     characters, so a missing/blank env var crash-loops instead of degrading
+#     into an open oracle;
+#   * the comparison is crypto/subtle constant time;
+#   * logs carry only the first 12 characters of a hash, never a full hash and
+#     never the inbound bearer.
+# Source + tests (26 of them, covering exactly these properties):
+#   pilot/registry-stub/main.go, main_test.go
+#
+# NO CREDENTIAL IS IN THIS FILE. ACCEPTED_KEY_SHA256 comes from a secretKeyRef.
+# The synthetic key and its hash were minted imperatively and never written to
+# disk:
+#   key=$(head -c 24 /dev/urandom | base64 | tr -d '/+=')
+#   sha=$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)
+#   kubectl -n user-11377-maas-v2-agw create secret generic pilot-test-apikey \
+#     --from-literal=key="$key" --from-literal=sha256="$sha"
+# To retrieve the key later (for pilot/verify/acceptance.sh):
+#   export PILOT_API_KEY=$(kubectl -n user-11377-maas-v2-agw \
+#     get secret pilot-test-apikey -o jsonpath='{.data.key}' | base64 -d)
+#
+# WHY IT RUNS FROM SOURCE INSTEAD OF A BUILT IMAGE
+# Same reason as pilot/10-adapter.yaml: the registry
+# vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/ is pull-only for the
+# account available here (`docker login` succeeds, `docker push` returns 401),
+# so no image can be published. The committed source is mounted from a
+# ConfigMap into a public golang image and run with `go run`. The stub has ZERO
+# external dependencies (pure stdlib), so this needs no network and no module
+# download.
+#
+# The ConfigMap is generated FROM the real file so the two cannot drift — same
+# convention as extauthz-adapter-src, and the reason the ConfigMap is not
+# inlined here:
+#   kubectl -n user-11377-maas-v2-agw create configmap registry-stub-src \
+#     --from-file=main.go=pilot/registry-stub/main.go --dry-run=client -o yaml \
+#     | kubectl apply -f -
+# (That command is the source of truth; the ConfigMap is not checked in here.)
+#
+# `go run` needs a writable build cache, hence GOCACHE/GOPATH under an emptyDir
+# at /tmp. Compilation takes ~15-30s, hence the patient readiness probe.
+#
+# TO REMOVE THE DOUBLE: delete this Deployment/Service and revert
+# APP_BACKEND_API_URL in 11-plugin-server.yaml to the real registry URL. The
+# pilot then returns to "authenticated path unverifiable" until a real key
+# exists — which is the honest state, not a regression.
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-stub
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app: registry-stub
+    pilot.role: test-double
+spec:
+  selector:
+    app: registry-stub
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry-stub
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app: registry-stub
+    pilot.role: test-double
+spec:
+  # One replica is enough: the plugin server caches positive lookups in-process
+  # for 600s (APP_CACHE_TTL_SECS), so this is hit roughly once per key per
+  # 10 minutes.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry-stub
+  template:
+    metadata:
+      labels:
+        app: registry-stub
+        pilot.role: test-double
+    spec:
+      containers:
+        - name: stub
+          image: golang:1.26-alpine
+          imagePullPolicy: IfNotPresent
+          workingDir: /src
+          command: ["go", "run", "/src/main.go"]
+          env:
+            # THE security control. Sourced from the Secret minted imperatively
+            # above — never a literal in this manifest. If this key is missing
+            # or is not 64 hex characters the process exits non-zero and the pod
+            # CrashLoopBackOffs; it never starts in a permissive state.
+            - name: ACCEPTED_KEY_SHA256
+              valueFrom:
+                secretKeyRef:
+                  name: pilot-test-apikey
+                  key: sha256
+            # Not secret: the tenant the synthetic key is attributed to. The
+            # plugin server returns this as `tenant` on allow and the adapter
+            # re-emits it as the X-Tenant-ID header.
+            - name: TENANT_ID
+              value: "11377"
+            # ACL allow-list. The plugin server matches the requested model
+            # against this list EXACTLY (no normalisation), and the requested
+            # model is whatever the client put in the request body's `model`
+            # field (see 08-policy-extauth.yaml). These strings are therefore
+            # the spec.match.model values of the pilot's AgentgatewayModel CRs,
+            # read from the cluster rather than guessed.
+            #
+            # The two -direct/-dashscope entries are Internal models. They are
+            # listed on PURPOSE so that acceptance criterion 4 ("Internal models
+            # are not directly addressable") is decided by the GATEWAY's
+            # visibility rule and not accidentally by an ACL denial, which would
+            # pass the test for the wrong reason.
+            - name: ALLOWED_MODELS
+              value: "gemini-2.5-flash,gpt-4o,claude-sonnet-4-0,deepseek-v4-pro,deepseek-v4-pro-direct,deepseek-v4-pro-dashscope"
+            - name: PORT
+              value: "8080"
+            # Generous synthetic budgets: this pilot is verifying that the
+            # rate-limit stage RUNS, not that a specific quota bites.
+            - name: RPM_MINUTE
+              value: "600"
+            - name: TPM_MINUTE
+              value: "1000000"
+            # `go run` writes a build cache; the default HOME is not writable
+            # for an arbitrary UID, so point both caches at the emptyDir.
+            - name: GOCACHE
+              value: /tmp/.cache
+            - name: GOPATH
+              value: /tmp/go
+            # Stdlib only: nothing to fetch. `go run <file>` runs outside a
+            # module, so no go.mod is mounted (the ConfigMap is read-only
+            # anyway). GOPROXY=off makes any accidental fetch fail fast
+            # instead of hanging on a network that has no egress.
+            - name: GOPROXY
+              value: "off"
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: src
+              mountPath: /src
+            - name: gocache
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: src
+          configMap:
+            name: registry-stub-src
+        - name: gocache
+          emptyDir: {}

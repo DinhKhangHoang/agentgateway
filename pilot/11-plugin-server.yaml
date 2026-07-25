@@ -92,11 +92,31 @@ spec:
             - name: APP_RATELIMIT_DECLARED_KEYS
               value: "true"
 
-            # Same as production ON PURPOSE: this is the tenant / API-key
-            # registry and is a READ path used to validate keys. Pointing
-            # elsewhere would make every key invalid and the pilot untestable.
+            # === ISOLATION CHANGE 3 ===
+            # Production: https://pub-iamapis.api-dev.vngcloud.tech/cloud-ai-platform-api
+            #
+            # This is the tenant / API-key registry: a READ path used to
+            # validate keys (GET {base}/v1/keys/{sha256}). It was originally
+            # left pointing at production ON PURPOSE, because pointing it
+            # elsewhere would make every key invalid. The problem is that no key
+            # for this pilot exists in that registry and none can be minted, so
+            # EVERY pilot request denied at the authn stage and the
+            # authenticated allow path could not be exercised at all.
+            #
+            # It is therefore repointed at pilot/16-registry-stub.yaml, a TEST
+            # DOUBLE that authorizes exactly ONE synthetic key (see that file's
+            # header for the full rationale and the security argument). The path
+            # suffix /cloud-ai-platform-api is kept so the URL shape — and hence
+            # the request path the client builds — matches production exactly.
+            #
+            # The production Kong plugin server in user-11377-maas-v2 is
+            # untouched and still uses the real registry.
+            #
+            # TO REVERT: restore the production URL above and delete
+            # 16-registry-stub.yaml. The pilot then returns to "authenticated
+            # path unverifiable", which is the honest state.
             - name: APP_BACKEND_API_URL
-              value: "https://pub-iamapis.api-dev.vngcloud.tech/cloud-ai-platform-api"
+              value: "http://registry-stub.user-11377-maas-v2-agw.svc.cluster.local:8080/cloud-ai-platform-api"
             - name: APP_BACKEND_TIMEOUT_MS
               value: "3000"
             - name: APP_HTTP_MAX_IDLE_PER_HOST
