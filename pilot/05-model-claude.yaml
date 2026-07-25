@@ -1,0 +1,23 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: claude-sonnet-4-0
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  match:
+    model: claude-sonnet-4-0
+  provider: Anthropic
+  visibility: Public
+  policies:
+    auth:
+      # No `location` override: agentgateway's Anthropic provider rewrites the
+      # default `Authorization: Bearer <v>` injection to the `x-api-key` header
+      # that the Anthropic API expects. Setting a custom location here would
+      # double-apply and break auth.
+      secretRef:
+        name: anthropic-api-key
+        key: key

@@ -51,3 +51,27 @@ spec:
           path:
             type: RegularExpression
             value: '^/(?:maas/user-[^/]+/)?[^/]+/[^/]+/v1/models/[^/]+:(?:streamG|g)enerateContent$'
+---
+# Anthropic native Messages surface.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: legacy-messages
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  rules:
+    - matches:
+        - method: POST
+          path:
+            type: RegularExpression
+            value: '^/(?:maas/user-[^/]+/)?[^/]+/[^/]+/v1/messages$'
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /v1/messages
