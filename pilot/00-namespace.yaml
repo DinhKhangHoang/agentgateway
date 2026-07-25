@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: user-11377-maas-v2-agw
+  labels:
+    app.kubernetes.io/part-of: maas-v2-agw-pilot
+    agentgateway-discovery: "enabled"
