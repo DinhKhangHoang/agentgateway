@@ -1,0 +1,31 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: maas-v2-agw
+  namespace: user-11377-maas-v2-agw
+spec:
+  gatewayClassName: agentgateway
+  infrastructure:
+    # VNG Cloud LB tuning, mirroring the Kong dataplane-ingress Service.
+    # idle-timeout-client is the important one: LLM generations routinely run
+    # for minutes, and the VNG default would sever long streaming responses.
+    # Kong additionally sets enable-proxy-protocol="*"; deliberately omitted
+    # here because PROXY protocol requires matching listener config on the
+    # proxy side, which this Gateway does not enable.
+    annotations:
+      vks.vngcloud.vn/idle-timeout-client: "1200"
+      vks.vngcloud.vn/idle-timeout-member: "1200"
+      vks.vngcloud.vn/idle-timeout-connection: "20"
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.nip.io"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: maas-v2-agw-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
