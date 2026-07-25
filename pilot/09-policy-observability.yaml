@@ -1,0 +1,47 @@
+# Observability for the pilot gateway.
+#
+# THE PLAN'S POLICY WAS UNNECESSARY AND UNSCHEMATIC.
+# The original plan called for an AgentgatewayPolicy with
+# `frontend.metrics.enabled: true`, `frontend.tracing.enabled: true` and
+# `frontend.accessLog.enabled: true`. No `enabled` field exists on any of them:
+# the real schema is `metrics.{attributes}`, `accessLog.{attributes,filter,otlp}`
+# and `tracing.{attributes,backendRef,clientSampling,filter,path,protocol,
+# randomSampling,resources}`. Those policies CUSTOMISE telemetry; they do not
+# switch it on.
+#
+# Verified on the live data plane with nothing applied:
+#   - /metrics on container port 15020 serves 68 metric families, including
+#     `agentgateway_gen_ai_client_token_usage` and
+#     `agentgateway_gen_ai_server_request_duration`, labelled with
+#     gen_ai_request_model / gen_ai_response_model / gen_ai_system /
+#     gen_ai_token_type (OpenTelemetry gen_ai semantic conventions).
+#   - Access logs are emitted per request on stdout, already carrying
+#     gateway, listener, route, method, host, path, status, and duration.
+# So metrics and access logs are ON BY DEFAULT and no policy is added for them.
+#
+# TRACING IS DELIBERATELY NOT ENABLED: `tracing` requires a `backendRef` to an
+# OTLP collector, and this cluster has none (no otel/jaeger/tempo/zipkin
+# Service exists). Enabling it would point at a non-existent endpoint. Add a
+# collector first, then a policy with `frontend.tracing.backendRef`.
+#
+# What IS needed is scrape configuration, below.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: maas-v2-agw
+  namespace: user-11377-maas-v2-agw
+  labels:
+    # MUST be `release: prometheus`. The plan said `release: monitoring`, which
+    # matches nothing: the cluster's Prometheus
+    # (monitoring/prometheus-kube-prometheus-prometheus) selects PodMonitors
+    # with `podMonitorSelector.matchLabels.release=prometheus`. Its
+    # podMonitorNamespaceSelector is {}, so any namespace is scraped.
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: maas-v2-agw
+  podMetricsEndpoints:
+    # The data plane container declares this port as `metrics` (15020).
+    - port: metrics
+      path: /metrics
