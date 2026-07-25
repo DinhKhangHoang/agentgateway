@@ -1,0 +1,132 @@
+# Gateway-wide resilience defaults: bounded retries and a request deadline.
+#
+# Attached to the Gateway, so it merges into every route beneath it. The
+# merge is `Default` (strategy.inheritance unset), i.e. any HTTPRoute or route
+# rule that sets its own retry/timeout wins over these. That is the right way
+# round for a gateway-level baseline.
+#
+# ============================================================================
+# HOW RETRIES ACTUALLY BEHAVE HERE — read before tuning `attempts`
+# ============================================================================
+#
+# 1. `attempts` IS OFF BY ONE relative to its own field documentation.
+#
+#    The Gateway API doc string on this field says "the maximum number of
+#    times an individual request ... should be RETRIED", which reads as
+#    "1 initial call + 1 retry = 2 calls" only if you also count the initial
+#    call. agentgateway computes:
+#
+#      crates/agentgateway/src/proxy/httpproxy.rs:984
+#        // attempts is the total number of attempts, not the retries
+#        let attempts = retries.as_ref().map(|r| r.attempts.get() + 1).unwrap_or(1);
+#
+#    and then loops `for n in 0..attempts` (httpproxy.rs:1021). So
+#    `attempts: 1` here produces TWO upstream calls: the initial one plus one
+#    retry. Confirmed against the source shipped with this cluster's version.
+#    Budget upstream cost accordingly — this is doubling, not +1 on a large
+#    number.
+#
+# 2. `codes` DOES cause status-based retries. This corrects a claim made
+#    during planning that only transport-level failures are retryable.
+#    Both paths exist and they are separate branches of the same function:
+#
+#      crates/agentgateway/src/proxy/httpproxy.rs:3072  fn should_retry(...)
+#        Ok(resp)  => pol.codes.contains(&resp.status())      <-- status codes
+#                     || CEL `condition` evaluates true
+#        Err(e)    => e.is_retryable()                        <-- transport
+#
+#    The transport branch is the narrow one: `ProxyError::is_retryable()`
+#    (crates/agentgateway/src/proxy/mod.rs:229) returns true for exactly
+#    `UpstreamCallFailed`, `UpstreamCallTimeout` and `DnsResolution`, and
+#    false for everything else. So a real HTTP 429/5xx FROM the provider is
+#    retried via `codes`; a connection refused / DNS failure / upstream
+#    timeout is retried via `is_retryable`; and e.g. a guardrail rejection
+#    (a DirectResponse) is never retried.
+#
+# 3. Retrying re-runs LLM model resolution, which is what makes this policy
+#    interact with the deepseek 99:1 canary. `attempt_upstream` calls
+#    `make_backend_call` (httpproxy.rs:1945), and the model router resolve
+#    happens INSIDE it at httpproxy.rs:1956. Each attempt therefore re-rolls
+#    `choose_weighted` in `resolve_virtual_model()`. A request that lands on
+#    the 1% arm and fails gets a fresh 99% chance of landing on the healthy
+#    arm on retry. This — not `policies.health` eviction — is the mechanism
+#    that keeps the virtual model available when one arm dies; see the long
+#    comment on `health` in 06-model-deepseek.yaml.
+#
+# 4. Retries require buffering the request body for replay, capped at
+#    MAX_BUFFERED_BYTES = 64 KiB (httpproxy.rs:973). A chat completion body
+#    larger than that silently loses its retries ("initial body is too large
+#    to retry, disabling retries"). Use `retry.precondition` if that needs to
+#    be made explicit.
+#
+# SCHEMA NOTE: `traffic.timeouts` only has `request` on this CRD (there is no
+# `backendRequest` sibling exposed), and the CRD floors it at 100ms.
+#
+# ============================================================================
+# MEASURED — dead-arm experiment against the deepseek 99:1 virtual model
+# ============================================================================
+# The `deepseek-v4-pro-dashscope` arm was pointed at an unresolvable host and
+# 600 requests were driven at the virtual model `deepseek-v4-pro`, three times.
+# Outcomes counted from the data-plane access log by `endpoint=`, which is more
+# trustworthy here than metrics.
+#
+#   run              retry policy   arm         client 200 / 503   log evidence
+#   ---------------- -------------- ----------- ------------------ -----------------------
+#   BASELINE (300)   on             healthy     300 / 0            300x endpoint=api.deepseek.com:443
+#   BROKEN   (600)   ON             DEAD        600 / 0            5x retry.attempt=1, all final
+#                                                                  endpoint=api.deepseek.com:443
+#   NORETRY  (600)   OFF (deleted)  DEAD        596 / 4            4x endpoint=agw-pilot-dead-arm.invalid:443
+#                                                                  error="backends required DNS
+#                                                                  resolution which failed"
+#                                                                  reason=NoHealthyBackend
+#   RESTORED (600)   on             healthy     600 / 0            594x api.deepseek.com : 6x
+#                                                                  dashscope-intl.aliyuncs.com
+#                                                                  = 99.0 / 1.0, no retries
+#
+# Reading of the numbers:
+#  * The 1% arm really is being selected — ~5-6 hits per 600 in every run.
+#  * With retries ON, every one of those hits was rescued: 5 requests logged
+#    `retry.attempt=1` and every single one ENDED on api.deepseek.com. That is
+#    only possible because the retry re-ran model resolution and re-rolled the
+#    weighted split (note 3 above); the dead arm can never recover on a retry.
+#  * With retries OFF the same failures went straight to the client as 503
+#    NoHealthyBackend. The retry policy is doing real work: 0.67-0.83% of
+#    requests, i.e. essentially the whole 1% canary slice, survive because of it.
+#  * DNS failure is a `ProxyError::DnsResolution`, which is in the narrow
+#    transport-retryable set — so this run exercised the `is_retryable()` path,
+#    not the `codes` path. Both are live; see note 2.
+#  * EVICTION never became observable, and cannot be, for this topology: each
+#    arm is a single-endpoint backend and the LB hands back evicted endpoints
+#    when all of them are evicted, while the 99:1 split is a health-blind
+#    weighted dice roll. See the long `health` comment in 06-model-deepseek.yaml.
+#
+# One more schema correction found while setting this up: the plan's suggested
+# probe baseURL `https://127.0.0.1:9` is REJECTED by the CRD —
+#   "baseURL cannot target localhost, loopback, or link-local addresses"
+# (four separate CEL rules cover localhost/127.0.0.0-8/169.254.0.0-16/::1+fe80::).
+# An unresolvable public-looking hostname was used instead.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: maas-v2-agw-resilience
+  namespace: user-11377-maas-v2-agw
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  traffic:
+    retry:
+      # => 2 total upstream calls. See note 1 above.
+      attempts: 1
+      backoff: 200ms
+      # See note 2: these really are honoured for provider responses.
+      # 429 is included on purpose — a provider-side rate limit on one arm of
+      # a multi-provider model is exactly the case worth re-rolling.
+      codes: [429, 500, 502, 503, 504]
+    timeouts:
+      # Long-running completions are normal for LLM traffic; this is a
+      # backstop against a wedged stream, not a latency SLO. It also bounds
+      # the retry backoff sleep, which is clamped to this deadline
+      # (httpproxy.rs:1075).
+      request: 600s

@@ -68,6 +68,25 @@ spec:
     transformations:
       - field: model
         expression: "'deepseek-v4-pro'"
+    # See the `health` block on the dashscope target below for the full
+    # schema-correction and semantics notes; both arms are configured
+    # identically so the canary behaves symmetrically.
+    health:
+      # SCHEMA CORRECTION: the plan document says `unhealthyExpression`.
+      # The installed CRD field is `unhealthyCondition`; `unhealthyExpression`
+      # is pruned silently by the API server, leaving the DEFAULT condition
+      # (any 5xx or connection failure) in place — a policy that looks applied
+      # but does not do what was written. Verified against
+      # `kubectl get crd agentgatewaymodels.agentgateway.dev`.
+      unhealthyCondition: 'response.code == 429 || response.code >= 500'
+      eviction:
+        # Base eviction window. Re-evictions back off multiplicatively
+        # (duration * times_evicted). Minimum permitted by the CRD is 1s.
+        duration: 30s
+        # Two unhealthy responses in a row before eviction. With neither
+        # consecutiveFailures nor healthThreshold set, a SINGLE unhealthy
+        # response evicts.
+        consecutiveFailures: 2
 ---
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayModel
@@ -92,6 +111,49 @@ spec:
     transformations:
       - field: model
         expression: "'deepseek-v4-pro'"
+    # ======================================================================
+    # PASSIVE HEALTH CHECKING / OUTLIER EJECTION (pilot Task 16)
+    #
+    # WHAT THIS DOES, AND — importantly — WHAT IT DOES NOT DO.
+    #
+    # `policies.health` drives ENDPOINT-level eviction inside the load
+    # balancer for THIS model's backend. Each of these two arms is a single
+    # hostname endpoint, and the CRD documents the fallback explicitly:
+    #   "If all endpoints are evicted, the load balancer falls back to
+    #    returning evicted endpoints rather than failing entirely."
+    # So evicting the only endpoint of a one-endpoint backend is a no-op for
+    # routing: the arm keeps being handed back.
+    #
+    # It also does NOT feed back into the 99:1 weighted split. That split is
+    # `targets.choose_weighted(&mut rand::rng(), ...)` in
+    # `resolve_virtual_model()` (crates/agentgateway/src/llm/model_router.rs)
+    # — a pure weighted dice roll over model routes with no health input.
+    # A sick arm therefore keeps receiving its 1% share.
+    #
+    # What actually rescues a request that lands on a dead arm is the RETRY
+    # policy in 13-policy-resilience.yaml, because model resolution is re-run
+    # per attempt — see that file.
+    #
+    # This block is still worth having: it is the correct primitive once an arm
+    # is backed by more than one endpoint, and the health score it maintains is
+    # what an eviction would be driven from.
+    #
+    # MEASURED: with this arm pointed at a dead host and 600 requests driven at
+    # the virtual model, no eviction was ever observable — the arm kept taking
+    # its ~1% share for the whole run. Every one of those requests still
+    # returned 200 to the client, because the retry policy re-rolled them onto
+    # the healthy arm. Deleting the retry policy and repeating the run turned
+    # the same 1% straight into client-visible 503s. Full numbers are tabulated
+    # in 13-policy-resilience.yaml.
+    # ======================================================================
+    #
+    # (Duplicated verbatim from the direct arm rather than shared with a YAML
+    # anchor: anchors do not survive a `---` document boundary.)
+    health:
+      unhealthyCondition: 'response.code == 429 || response.code >= 500'
+      eviction:
+        duration: 30s
+        consecutiveFailures: 2
 ---
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayModel
