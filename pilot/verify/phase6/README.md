@@ -61,6 +61,12 @@ limit right after compiling. A rolling restart is therefore not free, which is
 another reason `replicas: 2` matters. This would largely disappear with a
 prebuilt image instead of `go run`.
 
+> **Independent re-measurement corrected this verdict — read §1a below before
+> quoting "no steady-state regression".** A controlled same-session A/B found a
+> small but reproducible cost that the runs below did not separate from noise.
+> The realtime property the requirement was about does hold; the claim of *no*
+> regression does not.
+
 **Verdict: no steady-state regression.** The failure signature to watch for was
 `chunks` collapsing toward 1 and `ttft` rising toward `total`. Neither happened:
 
@@ -82,6 +88,42 @@ median of *three* samples. Across the n=9 run the per-run values were
 1.2, 1.4, 1.4, 5.1, 7.3, 28.3, 32.7, 32.8, 51.2 ms — a 40x spread on identical
 config. It is noise, not signal. The stable indicators on gemini (`chunks`,
 `ttft`, `gap_max`, `total`) are all flat or slightly better.
+
+## 1a. Controlled A/B — the corrected numbers
+
+The measurements above compared runs taken at different times against a control
+recorded separately. That leaves warm-up and provider drift folded into the
+result. This is a same-session A/B: policy applied, measured, **deleted**,
+measured, re-applied — all warm, all n=8, deepseek at 300 tokens.
+
+| Arm | ttft | chunks | gap_p50 | gap_max | total |
+|---|---:|---:|---:|---:|---:|
+| A — ext_proc active | 0.2244s | 128 | 0.02ms | 492ms | 2.083s |
+| B — policy deleted (control) | 0.2087s | 126.5 | 0.02ms | 457ms | 1.834s |
+| A2 — ext_proc re-applied | 0.2254s | 126.5 | 0.02ms | — | 2.019s |
+
+A2 reproduces A, so the difference is signal, not drift:
+
+* **TTFT +16ms (+7.7%)**
+* **Total stream duration +12%** — about 1.7ms per chunk over ~128 chunks,
+  which is the per-chunk gRPC round trip through the processor
+* **`gap_p50` identical at 0.02ms**, `chunks` unchanged
+
+So the honest statement is: **the stream is not buffered, coalesced, or stalled
+— chunk-to-chunk spacing is unchanged and tokens still arrive back-to-back —
+but the response as a whole finishes about 12% later.** That cost is structural,
+not an implementation defect: `observability_mode` is hardcoded `false` in
+agentgateway (`crates/agentgateway/src/http/ext_proc.rs`, 7 sites, no CRD
+field), so the gateway waits for a processor reply on *every* chunk. No
+pass-through implementation can avoid it.
+
+Ways to remove it, if 12% is too much:
+
+1. Have agentgateway honour `observability_mode` — a small upstream patch that
+   makes response-phase processing fire-and-forget.
+2. Move usage extraction off ext_proc onto `frontend.accessLog.otlp`, which runs
+   after the response completes and cannot touch the stream. Guardrails stay on
+   ext_proc, where being in-band is required anyway.
 
 ### Why it stays realtime
 
