@@ -29,6 +29,20 @@ spec:
       allowedRoutes:
         namespaces:
           from: Same
+        # AgentgatewayModel is opt-in per listener: GenerateSupportedKinds
+        # (translator/conditions.go:145) only adds it when the kind is listed
+        # here AND the controller's agentgatewayModels gate is on. Both halves
+        # are required — with only one, models are accepted by the API server
+        # but never reconcile, and requests fail `500 no valid backends`.
+        #
+        # Listing any kinds turns this into an intersection filter, so
+        # HTTPRoute must be relisted or the compatibility routes silently
+        # detach. GRPCRoute is deliberately dropped; the pilot does not use it.
+        kinds:
+          - group: gateway.networking.k8s.io
+            kind: HTTPRoute
+          - group: agentgateway.dev
+            kind: AgentgatewayModel
         # BLOCKED — uncomment together with enabling the controller feature
         # gate (see pilot/values-controller.yaml `agentgatewayModels.enabled`).
         #

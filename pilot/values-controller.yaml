@@ -20,8 +20,24 @@ image:
 agentgatewayModels:
   enabled: true
 
+# The AgentgatewayModel API is EXPERIMENTAL and gated off by default
+# (chart values.yaml `agentgatewayModels.enabled: false`, and
+# `EnableAgentgatewayModels` defaults to false in controller/api/settings).
+# With the gate off the controller silently does nothing useful: it never
+# starts the AgentgatewayModel informer, models never become xDS resources,
+# and every request fails `500 no valid backends`. The CRs are still accepted
+# by the API server and simply carry no status, so the failure is easy to
+# misdiagnose as a routing problem. The entire pilot depends on this gate.
+agentgatewayModels:
+  enabled: true
+
 # Restrict config discovery to the pilot namespace so the controller never
 # reads or reconciles anything in the Kong namespaces.
+#
+# NOTE: this filters the controller's INFORMER CACHE, not just Gateway
+# adoption. `agentgateway-system` must therefore carry the
+# `agentgateway-discovery=enabled` label too, or the controller cannot read
+# its own kgateway-xds-cert secret and every Gateway reconcile fails.
 discoveryNamespaceSelectors:
   - matchLabels:
       agentgateway-discovery: "enabled"

@@ -1,0 +1,142 @@
+# VNG IAM token refresher.
+#
+# The aiplatform vLLM backend authenticates with a bearer token obtained by
+# exchanging IAM credentials. The live endpoint returns `expires_in: 1800`
+# (30 min), so this refreshes every 10 minutes.
+#
+# WHY A SHELL SCRIPT AND NOT THE GO BINARY IN pilot/iam-refresher/:
+# the Go implementation is the intended production form and is committed with
+# tests, but publishing it needs push rights to
+# vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/, and the available
+# registry account (81-aigateway) is pull-only there — `docker push` returns
+# 401 while `docker login` succeeds. Rather than repurpose another account's
+# pull credential for a write, this CronJob runs the identical exchange with
+# curl on a public image. Swap `image:` and drop `command:` once push rights
+# exist; pilot/iam-refresher/ needs no changes.
+#
+# The IAM contract is HTTP Basic auth + form-encoded client_credentials,
+# mirroring kong/llm/iam/accesstoken.lua:32-36. The JSON {clientId,
+# clientSecret} body assumed by the original plan returns 400.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: iam-refresher
+  namespace: user-11377-maas-v2-agw
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: iam-refresher
+  namespace: user-11377-maas-v2-agw
+rules:
+  # Deliberately scoped to the single Secret this job owns.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["vng-iam-token"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: iam-refresher
+  namespace: user-11377-maas-v2-agw
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: iam-refresher
+subjects:
+  - kind: ServiceAccount
+    name: iam-refresher
+    namespace: user-11377-maas-v2-agw
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: iam-refresher-script
+  namespace: user-11377-maas-v2-agw
+data:
+  refresh.sh: |
+    #!/bin/sh
+    # Fail on any error and on unset variables; a partial run must not leave a
+    # stale or empty token in place.
+    set -eu
+
+    SA=/var/run/secrets/kubernetes.io/serviceaccount
+
+    # 1. Exchange IAM credentials for a bearer token.
+    #    -f makes curl fail on any non-2xx. Nothing here echoes the response
+    #    body or the credentials: this output goes to the pod log.
+    resp=$(curl -sS -f -m 20 -X POST "$IAM_AUTH_URL" \
+      -u "${IAM_ACCESS_KEY}:${IAM_SECRET_KEY}" \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      -d 'grant_type=client_credentials')
+
+    token=$(printf '%s' "$resp" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+    # Validate before writing. An empty or non-JWT value would otherwise
+    # silently replace a working token with garbage.
+    case "$token" in
+      eyJ*) ;;
+      *) echo "iam auth did not return a JWT access_token" >&2; exit 1 ;;
+    esac
+
+    # 2. Patch the token into the Secret via the Kubernetes API.
+    b64=$(printf '%s' "$token" | base64 | tr -d '\n')
+    code=$(curl -sS -o /tmp/patch.out -w '%{http_code}' -m 20 \
+      --cacert "$SA/ca.crt" \
+      -H "Authorization: Bearer $(cat "$SA/token")" \
+      -H 'Content-Type: application/strategic-merge-patch+json' \
+      -X PATCH \
+      "https://kubernetes.default.svc/api/v1/namespaces/${TARGET_NAMESPACE}/secrets/${TARGET_SECRET}" \
+      -d "{\"data\":{\"key\":\"${b64}\"}}")
+
+    if [ "$code" != "200" ]; then
+      echo "secret patch failed with HTTP $code" >&2
+      # Safe to print: this is an API error object, not the token.
+      cat /tmp/patch.out >&2
+      exit 1
+    fi
+
+    echo "refreshed ${TARGET_NAMESPACE}/${TARGET_SECRET} (token length ${#token})"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: iam-refresher
+  namespace: user-11377-maas-v2-agw
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: iam-refresher
+          restartPolicy: OnFailure
+          containers:
+            - name: refresher
+              image: curlimages/curl:8.11.1
+              command: ["/bin/sh", "/script/refresh.sh"]
+              env:
+                - name: IAM_AUTH_URL
+                  value: https://iamapis.vngcloud.vn/accounts-api/v2/auth/token
+                - name: TARGET_NAMESPACE
+                  value: user-11377-maas-v2-agw
+                - name: TARGET_SECRET
+                  value: vng-iam-token
+                - name: IAM_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef: { name: vng-iam-credentials, key: access_key }
+                - name: IAM_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef: { name: vng-iam-credentials, key: secret_key }
+              volumeMounts:
+                - name: script
+                  mountPath: /script
+          volumes:
+            - name: script
+              configMap:
+                name: iam-refresher-script
