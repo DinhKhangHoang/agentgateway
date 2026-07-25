@@ -148,6 +148,37 @@ spec:
             # pass the test for the wrong reason.
             - name: ALLOWED_MODELS
               value: "gemini-2.5-flash,gpt-4o,claude-sonnet-4-0,deepseek-v4-pro,deepseek-v4-pro-direct,deepseek-v4-pro-dashscope"
+            # === PER-TENANT GUARDRAILS (Phase 6) ===
+            # The raw contract::KeyConfig.guardrails map: model -> ordered
+            # directive list, keyed by the EXACT body.model string. This is the
+            # only way to get a guardrail directive in front of the pilot: the
+            # plugin server slices this by the requested model and returns it on
+            # a /v1/check allow, and pilot-extproc (17-extproc.yaml) enforces
+            # it. That is the whole point — the directive is fetched per key,
+            # per model, at request time, which is what the STATIC promptGuard
+            # in 04-model-gemini.yaml cannot do.
+            #
+            # deepseek-v4-pro is chosen deliberately: it has NO static
+            # promptGuard, so a 403 here can only have come from this directive.
+            # gemini-2.5-flash keeps its static SSN regex, so the two mechanisms
+            # stay independently attributable.
+            #
+            # NOT A CREDENTIAL: a keyword blocklist is operator policy, not a
+            # secret, so it is legible here on purpose. A directive `config`
+            # that DID carry a secret would have to come from a secretKeyRef —
+            # and the stub never logs config values either way (GUARD-09).
+            #
+            # `type` is validated at startup against the plugin server's strict
+            # GuardrailKind enum (keyword|prompt|presidio|llama); an unknown
+            # value would otherwise fail KeyConfig deserialisation on the Rust
+            # side and turn every request into an opaque 503.
+            #
+            # NOTE: the plugin server caches KeyConfig in-process for 600s
+            # (APP_CACHE_TTL_SECS), so a change here does not take effect until
+            # that TTL expires or the plugin server pod is restarted.
+            - name: GUARDRAILS_JSON
+              value: |
+                {"deepseek-v4-pro":[{"type":"keyword","plugin":"keyword-guard-request","config":{"keywords":["vng-secret-project"],"match":"substring","message":"Blocked by gateway guardrail: this API key is not permitted to reference that project.","code":"guardrail_keyword_tenant_policy"}}]}
             - name: PORT
               value: "8080"
             # Generous synthetic budgets: this pilot is verifying that the

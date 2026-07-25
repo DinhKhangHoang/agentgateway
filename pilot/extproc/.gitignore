@@ -1,0 +1,2 @@
+# `go build ./...` on a main package drops a binary named after the directory.
+/extproc

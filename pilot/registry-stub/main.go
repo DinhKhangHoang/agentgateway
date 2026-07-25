@@ -53,6 +53,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -91,6 +92,33 @@ type keyConfig struct {
 	TenantID      string      `json:"tenant_id"`
 	AllowedModels []string    `json:"allowed_models"`
 	Limits        limitConfig `json:"limits"`
+
+	// Guardrails mirrors contract::KeyConfig.guardrails: a map from the EXACT
+	// body.model string to that model's ordered directive list. It is what
+	// makes per-tenant guardrails testable at all — the plugin server surfaces
+	// the requested model's slice on a /v1/check allow, and pilot-extproc
+	// (pilot/17-extproc.yaml) enforces it.
+	//
+	// `omitempty` is load bearing. Upstream the field is
+	// `skip_serializing_if = "HashMap::is_empty"`, so with no GUARDRAILS_JSON
+	// configured this response must be BYTE-IDENTICAL to the pre-Phase-6 one.
+	Guardrails map[string][]guardrailDirective `json:"guardrails,omitempty"`
+}
+
+// guardrailDirective mirrors contract::GuardrailDirective. `config` is opaque
+// here: it is passed through verbatim and never inspected, never logged.
+type guardrailDirective struct {
+	Kind   string          `json:"type"`
+	Plugin string          `json:"plugin"`
+	Config json.RawMessage `json:"config"`
+}
+
+// guardrailKinds is the plugin server's STRICT GuardrailKind enum. An
+// unrecognised wire value fails deserialisation of the whole KeyConfig on the
+// Rust side, which turns every request into a 503 with no useful message.
+// Validating here converts that silent runtime outage into a startup refusal.
+var guardrailKinds = map[string]bool{
+	"keyword": true, "prompt": true, "presidio": true, "llama": true,
 }
 
 // config is the validated runtime configuration. Constructing one is the only
@@ -102,6 +130,7 @@ type config struct {
 	rpmMinute     uint64
 	tpmMinute     uint64
 	port          string
+	guardrails    map[string][]guardrailDirective
 }
 
 // matches reports whether requested is THE accepted key hash.
@@ -169,7 +198,13 @@ func loadConfig(getenv func(string) string) (*config, error) {
 		return nil, errors.New("ALLOWED_MODELS is required (comma-separated, at least one model)")
 	}
 
+	guardrails, err := parseGuardrails(getenv("GUARDRAILS_JSON"))
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &config{
+		guardrails:    guardrails,
 		acceptedSHA:   sha,
 		tenantID:      tenant,
 		allowedModels: models,
@@ -181,6 +216,54 @@ func loadConfig(getenv func(string) string) (*config, error) {
 		cfg.port = "8080"
 	}
 	return cfg, nil
+}
+
+// parseGuardrails decodes and VALIDATES the optional GUARDRAILS_JSON blob: the
+// raw contract::KeyConfig.guardrails map, e.g.
+//
+//	{"deepseek-v4-pro":[{"type":"keyword","plugin":"keyword-guard-request",
+//	                     "config":{"keywords":["vng-secret-project"]}}]}
+//
+// Empty/unset returns nil, which serialises the field away entirely.
+//
+// It deliberately does NOT inspect `config` — that blob is opaque passthrough
+// (R2-03) and may carry plaintext secrets. Only the structure and the strict
+// `type` enum are checked.
+func parseGuardrails(raw string) (map[string][]guardrailDirective, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var m map[string][]guardrailDirective
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		// The error is echoed because GUARDRAILS_JSON is operator
+		// configuration, not a credential. `config` values are not reachable
+		// here: a decode failure never got far enough to hold one.
+		return nil, fmt.Errorf("GUARDRAILS_JSON is not a JSON object of model -> directive array: %v", err)
+	}
+	if len(m) == 0 {
+		return nil, nil
+	}
+	for model, directives := range m {
+		if strings.TrimSpace(model) == "" {
+			return nil, errors.New("GUARDRAILS_JSON: a model key is empty; the key must be the exact body.model string")
+		}
+		if len(directives) == 0 {
+			return nil, fmt.Errorf("GUARDRAILS_JSON: model %q has an empty directive list; omit the key instead", model)
+		}
+		for i, d := range directives {
+			if !guardrailKinds[d.Kind] {
+				return nil, fmt.Errorf(
+					"GUARDRAILS_JSON: model %q directive %d has type %q; the plugin server's GuardrailKind enum is strict "+
+						"(keyword|prompt|presidio|llama) and an unknown value makes every /v1/check fail closed with a 503",
+					model, i, d.Kind)
+			}
+			if strings.TrimSpace(d.Plugin) == "" {
+				return nil, fmt.Errorf("GUARDRAILS_JSON: model %q directive %d has no plugin name", model, i)
+			}
+		}
+	}
+	return m, nil
 }
 
 func uintEnv(getenv func(string) string, name string, def uint64) uint64 {
@@ -258,6 +341,8 @@ func newHandler(cfg *config, lg *log.Logger) http.Handler {
 				RPM: map[string]uint64{"minute": cfg.rpmMinute},
 				TPM: map[string]uint64{"minute": cfg.tpmMinute},
 			}},
+			// nil when unconfigured, which omitempty drops entirely.
+			Guardrails: cfg.guardrails,
 		})
 		if err != nil {
 			// Unreachable for this fixed shape, but a 500 here would become a
@@ -280,8 +365,20 @@ func main() {
 		lg.Fatalf("registry-stub refusing to start: %v", err)
 	}
 
-	lg.Printf("registry-stub (TEST DOUBLE) listening on :%s — accepting exactly ONE key hash %s..., tenant=%s, models=%v",
-		cfg.port, shaPrefix(cfg.acceptedSHA), cfg.tenantID, cfg.allowedModels)
+	// Log which models carry guardrails and each directive's (kind, plugin) —
+	// never the `config` blob, which may hold plaintext secrets (GUARD-09).
+	guarded := make([]string, 0, len(cfg.guardrails))
+	for model, ds := range cfg.guardrails {
+		kinds := make([]string, 0, len(ds))
+		for _, d := range ds {
+			kinds = append(kinds, d.Kind+"/"+d.Plugin)
+		}
+		guarded = append(guarded, model+"="+strings.Join(kinds, "+"))
+	}
+	sort.Strings(guarded)
+
+	lg.Printf("registry-stub (TEST DOUBLE) listening on :%s — accepting exactly ONE key hash %s..., tenant=%s, models=%v, guardrails=%v",
+		cfg.port, shaPrefix(cfg.acceptedSHA), cfg.tenantID, cfg.allowedModels, guarded)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.port,

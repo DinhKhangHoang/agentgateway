@@ -345,3 +345,113 @@ func TestEmptyRequestNeverMatches(t *testing.T) {
 }
 
 var _ io.Writer = (*bytes.Buffer)(nil)
+
+// ---------------------------------------------------------------------------
+// GUARDRAILS (Phase 6). The stub is what makes per-tenant guardrails testable:
+// it is the only way to put a KeyConfig.guardrails map in front of the plugin
+// server, which then surfaces the requested model's slice on /v1/check and
+// pilot-extproc enforces it.
+// ---------------------------------------------------------------------------
+
+const kwGuardrails = `{"deepseek-v4-pro":[{"type":"keyword","plugin":"keyword-guard-request","config":{"keywords":["vng-secret-project"]}}]}`
+
+func TestGuardrailsAbsentByDefault(t *testing.T) {
+	h, _ := newTestHandler(t, nil)
+	rec := do(t, h, http.MethodGet, prefix+"/v1/keys/"+goodSHA, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	// KeyConfig.guardrails is `skip_serializing_if = "HashMap::is_empty"`
+	// upstream, so the pre-Phase-6 body must stay byte-identical: the field is
+	// ABSENT, not an empty object.
+	if strings.Contains(rec.Body.String(), "guardrails") {
+		t.Fatalf("no GUARDRAILS_JSON must mean no guardrails field at all: %s", rec.Body.String())
+	}
+}
+
+func TestGuardrailsArePassedThroughVerbatim(t *testing.T) {
+	h, _ := newTestHandler(t, map[string]string{"GUARDRAILS_JSON": kwGuardrails})
+	rec := do(t, h, http.MethodGet, prefix+"/v1/keys/"+goodSHA, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var got struct {
+		Guardrails map[string][]struct {
+			Type   string          `json:"type"`
+			Plugin string          `json:"plugin"`
+			Config json.RawMessage `json:"config"`
+		} `json:"guardrails"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	ds := got.Guardrails["deepseek-v4-pro"]
+	if len(ds) != 1 {
+		t.Fatalf("guardrails[deepseek-v4-pro] = %v", ds)
+	}
+	if ds[0].Type != "keyword" || ds[0].Plugin != "keyword-guard-request" {
+		t.Fatalf("directive = %+v", ds[0])
+	}
+	if !strings.Contains(string(ds[0].Config), "vng-secret-project") {
+		t.Fatalf("config not passed through verbatim: %s", ds[0].Config)
+	}
+	// Model-slice semantics: a model with no entry must have none.
+	if _, ok := got.Guardrails["gemini-2.5-flash"]; ok {
+		t.Fatal("only the configured model may carry directives")
+	}
+}
+
+func TestGuardrailsJSONIsValidatedAtStartup(t *testing.T) {
+	cases := []struct {
+		name string
+		val  string
+	}{
+		{"not json", "this is not json"},
+		{"not an object", `["a"]`},
+		{"value is not an array", `{"m":{"type":"keyword"}}`},
+		{"unknown directive type", `{"m":[{"type":"telepathy","plugin":"p","config":{}}]}`},
+		{"missing type", `{"m":[{"plugin":"p","config":{}}]}`},
+		{"empty model key", `{"":[{"type":"keyword","plugin":"p","config":{}}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// The plugin server's GuardrailKind is a STRICT enum: an unknown
+			// wire value fails deserialisation of the whole KeyConfig and turns
+			// every request into a 503. Catching it at startup turns a silent
+			// runtime outage into a crash loop with a clear message.
+			if cfg, err := loadConfig(testEnv(map[string]string{"GUARDRAILS_JSON": tc.val})); err == nil {
+				t.Fatalf("expected refusal to start, got %+v", cfg)
+			}
+		})
+	}
+}
+
+func TestGuardrailsAcceptsAllFourValidKinds(t *testing.T) {
+	v := `{"m":[` +
+		`{"type":"keyword","plugin":"keyword-guard-request","config":{}},` +
+		`{"type":"prompt","plugin":"open-ai-guard-request","config":{}},` +
+		`{"type":"presidio","plugin":"presidio-ai-guard-request","config":{}},` +
+		`{"type":"llama","plugin":"llama-ai-guard-request","config":{}}]}`
+	if _, err := loadConfig(testEnv(map[string]string{"GUARDRAILS_JSON": v})); err != nil {
+		t.Fatalf("all four contract kinds must be accepted: %v", err)
+	}
+}
+
+func TestGuardrailConfigIsNeverLogged(t *testing.T) {
+	secret := `{"m":[{"type":"keyword","plugin":"p","config":{"api_key":"SUPERSECRETVALUE"}}]}`
+	h, buf := newTestHandler(t, map[string]string{"GUARDRAILS_JSON": secret})
+	do(t, h, http.MethodGet, prefix+"/v1/keys/"+goodSHA, nil)
+	// GUARD-09: the directive config carries the complete plugin config,
+	// including plaintext secrets. It must never reach a log line.
+	if strings.Contains(buf.String(), "SUPERSECRETVALUE") {
+		t.Fatalf("guardrail config leaked into the logs: %s", buf.String())
+	}
+}
+
+func TestGuardrailsOnAMissStillReturns404(t *testing.T) {
+	h, _ := newTestHandler(t, map[string]string{"GUARDRAILS_JSON": kwGuardrails})
+	rec := do(t, h, http.MethodGet, prefix+"/v1/keys/"+otherSHA, nil)
+	if rec.Code != http.StatusNotFound || rec.Body.Len() != 0 {
+		t.Fatalf("guardrails must not change the miss path: %d %q", rec.Code, rec.Body.String())
+	}
+}
