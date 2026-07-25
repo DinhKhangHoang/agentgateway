@@ -1,0 +1,33 @@
+# Legacy MaaS-v2 URL compatibility routes.
+#
+# Kong exposed per-tenant, per-provider, per-model paths of the form
+#   /maas/user-<id>/<provider>/<model>/v1/chat/completions
+# agentgateway instead selects the upstream from the `model` field in the
+# request body (or, for Gemini, from the `:generateContent` path segment).
+# These routes accept the legacy shape and rewrite to the canonical
+# provider-native path so existing clients keep working unchanged.
+#
+# The `maas/user-<id>/` prefix is optional in the regex so that both the
+# gateway-relative and the fully-qualified legacy forms match.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: legacy-chat-completions
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  rules:
+    - matches:
+        - method: POST
+          path:
+            type: RegularExpression
+            value: '^/(?:maas/user-[^/]+/)?[^/]+/[^/]+/v1/chat/completions$'
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /v1/chat/completions

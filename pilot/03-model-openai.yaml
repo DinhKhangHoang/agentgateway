@@ -1,0 +1,24 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: gpt-4o
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  match:
+    model: gpt-4o
+  provider: OpenAI
+  visibility: Public
+  policies:
+    auth:
+      # `key`, `secretRef`, `passthrough`, `aws`, `azure`, `gcp` and
+      # `oauthTokenExchange` are mutually exclusive siblings under `auth`.
+      # `secretRef.key` names the key WITHIN the Secret (not an inline value).
+      # Default injection is `Authorization: Bearer <value>`, which is what
+      # the OpenAI provider expects, so no `location` override is needed.
+      secretRef:
+        name: openai-byok-11374
+        key: key
