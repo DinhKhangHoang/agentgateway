@@ -26,8 +26,33 @@ export AGW_REPO=/home/stackops/agentgateway
 Two more are set partway through and needed by every task after them:
 
 - `GW_HOST` — the Gateway's assigned address, exported in Task 4 Step 4.
+  **Actual value from the executed run: `116.118.88.175.nip.io`**
 - `PILOT_API_KEY` — an API key seeded into the pilot database, exported in Task 13 Step 2b.
   Tasks 14 onward assume it is set.
+
+## Corrections Found During Execution
+
+Three issues surfaced while running Phase 1. All are fixed in the task text below;
+recorded here so a re-run from scratch does not rediscover them.
+
+1. **The controller image tag must be pinned.** The chart's default renders
+   `cr.agentgateway.dev/controller:v0.0.0-dev`, which does not exist in the registry and
+   yields `ImagePullBackOff`. Use `v1.4.0-beta.1` — the earliest release containing the
+   `AgentgatewayModel` API (commit `a1d420a3`, 2026-07-24) and the release matching the CRDs
+   in this checkout. See Task 3.
+
+2. **`agentgateway-system` must carry the discovery label.** `discoveryNamespaceSelectors`
+   filters the controller's *informer cache*, not just which Gateways it adopts. Without the
+   label on its own namespace, the controller cannot read its own `kgateway-xds-cert` secret
+   and every Gateway reconcile fails with `xDS TLS secret ... not found` while the secret is
+   plainly present. Symptom is `Accepted=False / InvalidParameters` retrying forever.
+   See Task 3 Step 2b.
+
+3. **The VNG LoadBalancer needs idle-timeout annotations.** Without
+   `vks.vngcloud.vn/idle-timeout-client: "1200"`, long streaming generations are severed at
+   the platform default. Mirrors the Kong dataplane ingress. Kong's
+   `enable-proxy-protocol: "*"` is deliberately NOT mirrored — PROXY protocol requires
+   matching listener configuration that this Gateway does not enable. See Task 4 Step 2.
 
 **Never modify anything in `$SRC_NS`.** It is read-only for this plan — we only copy credential values out of it.
 
@@ -184,12 +209,28 @@ cd $AGW_REPO && git commit --allow-empty \
 `pilot/values-controller.yaml`:
 
 ```yaml
+# Pin to the release matching the CRDs installed from this checkout.
+# The chart default is a v0.0.0-dev placeholder that does NOT exist in the
+# registry; without this the controller lands in ImagePullBackOff.
+image:
+  registry: cr.agentgateway.dev
+  tag: v1.4.0-beta.1
+
 # Restrict config discovery to the pilot namespace so the controller never
 # reads or reconciles anything in the Kong namespace.
 discoveryNamespaceSelectors:
   - matchLabels:
       agentgateway-discovery: "enabled"
 ```
+
+- [ ] **Step 1b: Verify the pinned image actually exists before installing**
+
+```bash
+docker manifest inspect cr.agentgateway.dev/controller:v1.4.0-beta.1 >/dev/null \
+  && echo EXISTS || echo "NOT FOUND — pick another tag"
+```
+
+Expected: `EXISTS`
 
 - [ ] **Step 2: Install the controller**
 
@@ -200,6 +241,18 @@ helm upgrade --install agentgateway \
   --values $AGW_REPO/pilot/values-controller.yaml \
   --wait --timeout 5m
 ```
+
+- [ ] **Step 2b: Label the controller's own namespace so it can read its xDS cert**
+
+`discoveryNamespaceSelectors` filters the controller's informer cache. Without this label the
+controller cannot see `agentgateway-system/kgateway-xds-cert` — its own certificate — and every
+Gateway reconcile fails with `xDS TLS secret ... not found` even though the secret exists.
+
+```bash
+kubectl label ns agentgateway-system agentgateway-discovery=enabled --overwrite
+```
+
+Expected: `namespace/agentgateway-system labeled`
 
 - [ ] **Step 3: Verify the controller is running**
 
@@ -268,6 +321,15 @@ metadata:
   namespace: user-11377-maas-v2-agw
 spec:
   gatewayClassName: agentgateway
+  infrastructure:
+    # Mirrors the Kong dataplane-ingress Service. idle-timeout-client is the
+    # important one: LLM generations run for minutes and the VNG platform
+    # default severs long streaming responses. Kong's enable-proxy-protocol
+    # is deliberately NOT mirrored — it needs matching listener config.
+    annotations:
+      vks.vngcloud.vn/idle-timeout-client: "1200"
+      vks.vngcloud.vn/idle-timeout-member: "1200"
+      vks.vngcloud.vn/idle-timeout-connection: "20"
   listeners:
     - name: https
       protocol: HTTPS
