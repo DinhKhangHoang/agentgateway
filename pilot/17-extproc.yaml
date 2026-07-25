@@ -166,6 +166,18 @@ spec:
             # same under a slow plugin server. Never blocks the response.
             - name: USAGE_TIMEOUT_MS
               value: "2000"
+            # MUST be kept in step with maxBufferSize in 18-policy-buffer.yaml
+            # (50000000, matching Kong's max_request_body_size). The code
+            # default here is 2 MiB — the same assumption agentgateway's own
+            # default encodes — so leaving it unset silently reimposes the 2 MiB
+            # ceiling one hop later, and the gateway-level fix appears not to
+            # work. Verified: with the gateway raised and this left at default,
+            # a 3.2 MB body returns 413 request_too_large from THIS service.
+            # Lower than the gateway value is a safe direction (a clear 413
+            # rather than a truncated guardrail scan); higher is not, because
+            # the gateway would reject first with a misleading 403.
+            - name: MAX_REQUEST_BODY_BYTES
+              value: "50000000"
             - name: CHECK_TIMEOUT_MS
               value: "3000"
             # `go run` writes a build cache; the default HOME is not writable

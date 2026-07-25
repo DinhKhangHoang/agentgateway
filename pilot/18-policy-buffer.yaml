@@ -1,0 +1,57 @@
+# Request buffer size, raised to match Kong.
+#
+# WHY THIS EXISTS
+# agentgateway buffers a request body only when some policy needs it, and caps
+# that buffer at `max_buffer_size`, which defaults to 2 MiB
+# (crates/agentgateway/src/lib.rs:323). Kong's ai-proxy routes are configured
+# with `max_request_body_size: 50000000` (50 MB; 10 MB on the selfhost routes),
+# so migrating without this policy silently narrows the accepted prompt size by
+# about 24x.
+#
+# This is not theoretical here. The pilot's extAuth policy builds its check
+# payload with CEL over `request.body` (see 08-policy-extauth.yaml), which
+# forces buffering on EVERY request. The ext_proc policy reads the request body
+# too. So the cap applies to all traffic, not just to unusual routes.
+#
+# THE FAILURE MODE IS MISLEADING — this is the real reason to set it explicitly.
+# Measured on this gateway with a 3.2 MB body and the 2 MiB default:
+#
+#   HTTP 403, empty body
+#   access log: http.status=403 reason=DirectResponse duration=91ms
+#
+# Not 413. The body never finishes buffering, so `jsonField(request.body,
+# "model")` yields nothing, the extAuth check payload is built with an empty
+# model and api_key, and the policy server correctly denies it. A client
+# sending an over-large prompt is told "Forbidden", which points every
+# investigation at credentials instead of at payload size. ext_proc never even
+# sees the request.
+#
+# SIZING
+# `50M` is decimal (50,000,000 bytes) and matches Kong's configured value
+# exactly; `50Mi` would be 52,428,800 and would not. The controller clamps to
+# uint32 (~4.29 GB), so this is comfortably in range.
+#
+# This is memory per concurrently-buffered request. 50 MB x N in-flight large
+# requests is real RSS on the gateway pod, which currently has no memory limit
+# headroom analysis behind it. Kong accepts the same exposure today, so this is
+# parity rather than a new risk -- but if the gateway is ever OOM-killed under
+# load, this is the first knob to revisit.
+#
+# TARGETING
+# `frontend` policies may only target a Gateway. The CRD enforces this:
+#   "frontend tcp, networkAuthorization, tls, http, proxyProtocol, and connect
+#    policies may only target a Gateway or port, not a listener (sectionName)"
+# so there is deliberately no sectionName here.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: maas-v2-agw-buffer
+  namespace: user-11377-maas-v2-agw
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  frontend:
+    http:
+      maxBufferSize: 50M
