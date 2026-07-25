@@ -31,3 +31,23 @@ spec:
             path:
               type: ReplaceFullPath
               replaceFullPath: /v1/chat/completions
+---
+# Gemini native surface. Deliberately has NO URLRewrite filter: agentgateway
+# parses the model out of the `:generateContent` path segment itself, so
+# rewriting to a fixed path would erase the model selector.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: legacy-generate-content
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  rules:
+    - matches:
+        - method: POST
+          path:
+            type: RegularExpression
+            value: '^/(?:maas/user-[^/]+/)?[^/]+/[^/]+/v1/models/[^/]+:(?:streamG|g)enerateContent$'

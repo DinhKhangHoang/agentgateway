@@ -1,0 +1,23 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: gemini-2-5-flash
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  match:
+    # The CR name cannot contain dots, so metadata.name is `gemini-2-5-flash`
+    # while the wire-format model id clients send is `gemini-2.5-flash`.
+    # match.model is what is compared against the request, so it must carry
+    # the dotted form; without it the match would default to metadata.name.
+    model: gemini-2.5-flash
+  provider: Gemini
+  visibility: Public
+  policies:
+    auth:
+      secretRef:
+        name: gemini-api-key
+        key: key
