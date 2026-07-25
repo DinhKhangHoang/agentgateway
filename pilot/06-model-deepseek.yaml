@@ -1,0 +1,85 @@
+# DeepSeek dual-provider canary.
+#
+# Two concrete Internal models wrap the same logical model at two different
+# providers, and a Public virtual model splits traffic 99:1 between them.
+# Internal visibility means clients cannot address the concrete models by name;
+# they are reachable only through the virtual model.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: deepseek-v4-pro-direct
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  match:
+    model: deepseek-v4-pro-direct
+  # api.deepseek.com speaks the OpenAI-compatible dialect. There is also a
+  # native `Deepseek` provider enum; `OpenAI` + baseURL is used here to keep
+  # the two targets configured identically, since the DashScope target below
+  # has no dedicated enum value.
+  provider: OpenAI
+  baseURL: https://api.deepseek.com
+  visibility: Internal
+  policies:
+    auth:
+      secretRef:
+        name: deepseek-direct-key
+        key: key
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: deepseek-v4-pro-dashscope
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  match:
+    model: deepseek-v4-pro-dashscope
+  provider: OpenAI
+  baseURL: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+  visibility: Internal
+  policies:
+    auth:
+      secretRef:
+        name: deepseek-dashscope-key
+        key: key
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: deepseek-v4-pro
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  match:
+    model: deepseek-v4-pro
+  # A virtual model must not set `provider` or `policies` (CEL rules
+  # "exactly one of the fields in [provider virtualModel] must be set" and
+  # "policies cannot be used with virtualModel"); auth lives on the concrete
+  # targets instead. Virtual models also may not be Internal.
+  visibility: Public
+  virtualModel:
+    weighted:
+      targets:
+        - modelRef:
+            name: deepseek-v4-pro-direct
+          # `model` pins the name sent upstream. Without it the target would
+          # inherit the referenced CR's match.model (`deepseek-v4-pro-direct`),
+          # which is a routing alias, not a real model at either provider —
+          # both would 404. `deepseek-v4-pro` is the real upstream model name
+          # at api.deepseek.com and at DashScope, per the Kong config.
+          model: deepseek-v4-pro
+          weight: 99
+        - modelRef:
+            name: deepseek-v4-pro-dashscope
+          model: deepseek-v4-pro
+          weight: 1
