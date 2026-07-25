@@ -21,3 +21,81 @@ spec:
       secretRef:
         name: gemini-api-key
         key: key
+
+    # ========================================================================
+    # STATIC GUARDRAIL (pilot Task 15)
+    #
+    # Blocks prompts that carry a US Social Security number before they ever
+    # leave the gateway. `regex` is the only guardrail rule that needs no
+    # external service (the siblings — webhook, openAIModeration,
+    # bedrockGuardrails, googleModelArmor — all call out to something).
+    #
+    # Applied to gemini-2.5-flash deliberately: it is the one model in this
+    # pilot with a live, funded key, so a "clean prompt still returns 200"
+    # control is actually observable. The plan document named gpt-4o, whose
+    # key is a dummy that can only ever return 401 from OpenAI — a guardrail
+    # that blocks everything and a backend that fails everything are
+    # indistinguishable there.
+    #
+    # SCHEMA CORRECTIONS vs the plan document (verified against the installed
+    # CRD, `kubectl get crd agentgatewaymodels.agentgateway.dev`):
+    #
+    #  1. `promptGuard.request` is an ARRAY of rules, not an object. Each item
+    #     carries exactly one rule kind — the CRD enforces
+    #     "exactly one of the fields in [regex webhook openAIModeration
+    #      bedrockGuardrails googleModelArmor] must be set".
+    #  2. The rejection is a SIBLING of `regex`, named `response`, and its
+    #     fields are `statusCode` + `message` (not `status`/`body`).
+    #  3. `regex.action` defaults to `Mask`, NOT reject. Without an explicit
+    #     `action: Reject` the SSN would be silently rewritten to `<SSN>` and
+    #     the request would sail through with a 200 — a masking policy, not a
+    #     blocking one. This single field is the difference between the two.
+    #  4. `promptGuard.streaming` is a string enum whose only value is
+    #     `Enabled` (absent = disabled); it is NOT a boolean.
+    #
+    # MEASURED (four probes through the live gateway):
+    #   "my SSN is 123-45-6789"          -> 403, body exactly the `message`
+    #                                       below, verbatim and unwrapped.
+    #                                       Access log: reason=Guardrail
+    #                                       error="request rejected by regex
+    #                                       guardrail" duration=0ms — the
+    #                                       provider is never called.
+    #   same prompt, "stream": true      -> 403 (request-side guard fires
+    #                                       before streaming is negotiated).
+    #   "What is the capital of France?" -> 200
+    #   "Order 4521 shipped on
+    #    2026-07-25, version 1.2.3"      -> 200 (no false positive on
+    #                                       unrelated digit groups)
+    #   the SSN prompt at deepseek-v4-pro,
+    #    which has no promptGuard        -> 200 — the control proving it is
+    #                                       this policy blocking, not the
+    #                                       prompt being intrinsically refused.
+    # ========================================================================
+    promptGuard:
+      # Also inspect streamed responses / realtime websocket frames. Off by
+      # default to protect streaming throughput; enabled here because a
+      # guardrail that only covers non-streaming requests is trivially
+      # bypassed by asking for `"stream": true`.
+      streaming: Enabled
+      request:
+        - regex:
+            # See correction 3 above. Mask is the default and is wrong here.
+            action: Reject
+            # Purpose-built US SSN recognizer
+            # (crates/agentgateway/src/llm/policy/pii/us_ssn_recognizer.rs).
+            # It is a scored, Presidio-style recognizer: the NNN-NN-NNNN shape
+            # scores 0.5 on its own and nearby context words (social,
+            # security, ssn, ssns, ssid) raise the score further.
+            builtins:
+              - Ssn
+            # `matches` and `builtins` are additive. The literal pattern is
+            # kept alongside the builtin so the rule still fires on a bare,
+            # context-free SSN even if the scored recognizer is tuned later.
+            matches:
+              - '\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b'
+          # Returned verbatim as the response body — agentgateway does not
+          # wrap it or set a content-type, so the OpenAI error envelope is
+          # spelled out in full here to keep SDK clients happy.
+          response:
+            statusCode: 403
+            message: '{"error":{"message":"Blocked by gateway guardrail: the prompt appears to contain a US Social Security number.","type":"invalid_request_error","param":null,"code":"guardrail_pii_ssn"}}'
