@@ -1,0 +1,165 @@
+# Legacy-URL compatibility: AI backends addressable from HTTPRoute backendRefs.
+#
+# WHY THIS EXISTS
+# ---------------
+# agentgateway has two mutually exclusive ways to reach an LLM upstream:
+#
+#   1. AgentgatewayModel  - routes by the `model` field in the request body,
+#      but ONLY on a hardcoded set of canonical paths. That list lives in
+#      `model_router_matches()` (crates/agentgateway/src/store/binds.rs) and is
+#      NOT configurable: /v1/chat/completions, /v1/messages, /v1/responses,
+#      /v1/embeddings, /v1/models, /v1/rerank, /v2/rerank, the /v1/images/*
+#      family, and one regex for Vertex :rawPredict. Legacy Kong URLs are not
+#      in that list, so AgentgatewayModel cannot serve them.
+#
+#   2. AgentgatewayBackend (spec.ai) - can be named in an HTTPRoute
+#      `backendRefs`, so it works on ARBITRARY paths, including legacy Kong
+#      URLs. This is the only mechanism available for the legacy surface.
+#
+# A URLRewrite filter does NOT re-run route matching, so a legacy route that
+# only rewrites the path (and has no backendRefs) dead-ends with
+# `500 no valid backends`. Every legacy rule must therefore carry a backendRef
+# to one of the backends below.
+#
+# ONE LOGICAL MODEL PER GROUP
+# ---------------------------
+# `spec.ai.groups[].providers[]` is a random power-of-two-choices load-balancing
+# pool (`AIBackend::select_provider`, crates/agentgateway/src/llm/mod.rs). It
+# picks a provider at random and COMPLETELY IGNORES the requested model name.
+# Verified empirically: with gemini+anthropic in a single group, 7 of 10
+# requests for `gemini-2.5-flash` were answered by Anthropic and failed.
+# Therefore each backend below holds exactly ONE logical model, and the
+# HTTPRoute picks the backend from the model segment of the legacy path.
+#
+# AUTH SHAPE
+# ----------
+# Under `policies.auth`, the fields `key` / `secretRef` / `passthrough` / `aws`
+# / `azure` / `gcp` / `oauthTokenExchange` / `crossAppAccess` are MUTUALLY
+# EXCLUSIVE SIBLINGS (CEL-enforced by the CRD). `secretRef.key` names the key
+# WITHIN the Secret, never an inline value. Default injection is
+# `Authorization: Bearer <value>`; the Anthropic provider auto-rewrites that to
+# the `x-api-key` header it expects. Auth is attached per provider so that the
+# two DeepSeek targets can carry different credentials.
+#
+# Leaving the provider-type block (`openai: {}` etc.) empty means "no model
+# override" - the model name is taken from the request body, which is what the
+# legacy clients already send.
+---
+# openai/gpt-4o -> api.openai.com
+# NOTE: `openai-byok-11374` is a dead dummy key in this pilot namespace, so
+# this backend is EXPECTED to return 401 from api.openai.com. That 401 proves
+# the routing and credential injection path works end to end.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: legacy-gpt-4o
+  namespace: user-11377-maas-v2-agw
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: openai
+            openai: {}
+            policies:
+              auth:
+                secretRef:
+                  name: openai-byok-11374
+                  key: key
+---
+# gemini/gemini-2.5-flash -> generativelanguage.googleapis.com
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: legacy-gemini-2-5-flash
+  namespace: user-11377-maas-v2-agw
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: gemini
+            gemini: {}
+            policies:
+              auth:
+                secretRef:
+                  name: gemini-api-key
+                  key: key
+---
+# anthropic/claude-sonnet-4-0 -> api.anthropic.com
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: legacy-claude-sonnet-4-0
+  namespace: user-11377-maas-v2-agw
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: anthropic
+            anthropic: {}
+            policies:
+              auth:
+                secretRef:
+                  name: anthropic-api-key
+                  key: key
+---
+# deepseek/deepseek-v4-pro -> api.deepseek.com and DashScope.
+#
+# Both targets serve the SAME logical model (`deepseek-v4-pro`), so they may
+# legitimately share one group. FIDELITY LOSS, ACCEPTED AND RECORDED: this
+# group is power-of-two-choices load balanced, i.e. roughly 50/50, NOT Kong's
+# 99:1 canary weighting. AgentgatewayBackend has no weight field. The true 99:1
+# weighted split lives on the CANONICAL surface as the `deepseek-v4-pro`
+# virtual AgentgatewayModel (pilot/06-model-deepseek.yaml); the legacy surface
+# only guarantees that the request reaches a working DeepSeek upstream.
+#
+# `host` sets a host override. SCHEMA NOTE: although the controller defaults
+# Port to 443 in Go, the CRD has a CEL rule "both host and port must be set
+# together", so `port: 443` must be written explicitly or apply is rejected.
+# `pathPrefix` overrides the default `/v1` base path - DashScope serves the
+# OpenAI-compatible dialect under `/compatible-mode/v1`, so the upstream URL
+# becomes https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: legacy-deepseek-v4-pro
+  namespace: user-11377-maas-v2-agw
+spec:
+  ai:
+    groups:
+      - providers:
+          - name: direct
+            openai: {}
+            host: api.deepseek.com
+            port: 443
+            # `/v1` is already the OpenAI default base path, but it must be
+            # stated explicitly: `set_default_path()`
+            # (crates/agentgateway/src/llm/mod.rs) short-circuits and leaves the
+            # inbound path untouched when a host override is present and no
+            # pathPrefix is set. Without it the /v1/messages surface would be
+            # forwarded to api.deepseek.com verbatim and 404, instead of being
+            # translated to /v1/chat/completions.
+            pathPrefix: /v1
+            policies:
+              # A host override BYPASSES the provider's built-in connector
+              # defaults (see the `host_override` branch in
+              # `crates/agentgateway/src/proxy/httpproxy.rs`), and those
+              # defaults are where TLS origination normally comes from.
+              # Without an explicit `tls: {}` the gateway speaks plaintext to
+              # port 443 and the upstream resets the connection
+              # (`503 upstream call failed: ... Connection reset by peer`).
+              tls: {}
+              auth:
+                secretRef:
+                  name: deepseek-direct-key
+                  key: key
+          - name: dashscope
+            openai: {}
+            host: dashscope-intl.aliyuncs.com
+            port: 443
+            pathPrefix: /compatible-mode/v1
+            policies:
+              tls: {}
+              auth:
+                secretRef:
+                  name: deepseek-dashscope-key
+                  key: key

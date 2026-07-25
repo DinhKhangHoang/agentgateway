@@ -1,14 +1,41 @@
-# Legacy MaaS-v2 URL compatibility routes.
+# Legacy MaaS-v2 (Kong) URL compatibility routes.
 #
-# Kong exposed per-tenant, per-provider, per-model paths of the form
-#   /maas/user-<id>/<provider>/<model>/v1/chat/completions
-# agentgateway instead selects the upstream from the `model` field in the
-# request body (or, for Gemini, from the `:generateContent` path segment).
-# These routes accept the legacy shape and rewrite to the canonical
-# provider-native path so existing clients keep working unchanged.
+# Kong exposed per-tenant, per-provider, per-model paths. The exact shapes were
+# read off the live production HTTPRoutes in namespace `user-11377-maas-v2`:
 #
-# The `maas/user-<id>/` prefix is optional in the regex so that both the
-# gateway-relative and the fully-qualified legacy forms match.
+#   /(?:maas/user-[^/]+/)?openai/gpt-4o/v1/chat/completions
+#   /(?:maas/user-[^/]+/)?gemini/gemini-2\.5-flash/v1/chat/completions
+#   /(?:maas/user-[^/]+/)?anthropic/claude-sonnet-4-0/v1/chat/completions
+#   /(?:maas/user-[^/]+/)?deepseek/deepseek-v4-pro/v1/chat/completions
+#   /(?:maas/user-[^/]+/)?deepseek/deepseek-v4-pro/v1/messages
+#
+# HOW THESE ROUTES WORK (and why the previous shape did not)
+# ----------------------------------------------------------
+# agentgateway's AgentgatewayModel router only fires on a hardcoded list of
+# canonical paths (`model_router_matches()`), which legacy Kong URLs are not on.
+# The earlier version of this file therefore tried to URLRewrite the legacy path
+# down to `/v1/chat/completions` and let the model router take over. That does
+# not work: a URLRewrite filter rewrites the outbound path but does NOT re-run
+# route matching, so a rule with no `backendRefs` dead-ends with
+# `500 no valid backends` (confirmed in the data-plane log as
+# `route=.../legacy-chat-completions error="no valid backends"`).
+#
+# The working mechanism is an explicit `backendRefs` entry pointing at an
+# AgentgatewayBackend (pilot/14-legacy-backends.yaml), which is reachable from
+# ANY path. Because `spec.ai.groups[].providers[]` load-balances at random and
+# ignores the requested model, there is one backend per logical model and the
+# route regex pins the MODEL SEGMENT of the legacy path so the correct backend
+# is chosen. The URLRewrite is still needed so the upstream sees a valid
+# provider-native path.
+#
+# The `maas/user-<id>/` prefix is optional in each regex so that both the
+# gateway-relative and the fully-qualified legacy forms match, matching Kong.
+# The provider segment is left as `[^/]+` rather than pinned, because the same
+# model was reachable under several provider segments in Kong (e.g. both
+# `gemini/` and `openai-compatible/` served gemini-2.5-flash).
+#
+# NOT SUPPORTED: the legacy Gemini `/v1/generateContent` surface. See the
+# comment at the bottom of this file.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -20,39 +47,81 @@ spec:
       kind: Gateway
       name: maas-v2-agw
   rules:
+    # --- openai/gpt-4o -------------------------------------------------------
     - matches:
         - method: POST
           path:
             type: RegularExpression
-            value: '^/(?:maas/user-[^/]+/)?[^/]+/[^/]+/v1/chat/completions$'
+            value: '^/(?:maas/user-[^/]+/)?[^/]+/gpt-4o/v1/chat/completions$'
       filters:
         - type: URLRewrite
           urlRewrite:
             path:
               type: ReplaceFullPath
               replaceFullPath: /v1/chat/completions
----
-# Gemini native surface. Deliberately has NO URLRewrite filter: agentgateway
-# parses the model out of the `:generateContent` path segment itself, so
-# rewriting to a fixed path would erase the model selector.
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: legacy-generate-content
-  namespace: user-11377-maas-v2-agw
-spec:
-  parentRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: maas-v2-agw
-  rules:
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: legacy-gpt-4o
+    # --- gemini/gemini-2.5-flash --------------------------------------------
+    # The dot in the model id is escaped; an unescaped `.` would also match
+    # e.g. `gemini-2x5-flash` and silently widen the route.
     - matches:
         - method: POST
           path:
             type: RegularExpression
-            value: '^/(?:maas/user-[^/]+/)?[^/]+/[^/]+/v1/models/[^/]+:(?:streamG|g)enerateContent$'
+            value: '^/(?:maas/user-[^/]+/)?[^/]+/gemini-2\.5-flash/v1/chat/completions$'
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /v1/chat/completions
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: legacy-gemini-2-5-flash
+    # --- anthropic/claude-sonnet-4-0 ----------------------------------------
+    - matches:
+        - method: POST
+          path:
+            type: RegularExpression
+            value: '^/(?:maas/user-[^/]+/)?[^/]+/claude-sonnet-4-0/v1/chat/completions$'
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /v1/chat/completions
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: legacy-claude-sonnet-4-0
+    # --- deepseek/deepseek-v4-pro -------------------------------------------
+    # Reaches a DeepSeek upstream, but P2C balanced rather than Kong's 99:1.
+    # See pilot/14-legacy-backends.yaml for the recorded fidelity loss.
+    - matches:
+        - method: POST
+          path:
+            type: RegularExpression
+            value: '^/(?:maas/user-[^/]+/)?[^/]+/deepseek-v4-pro/v1/chat/completions$'
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /v1/chat/completions
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: legacy-deepseek-v4-pro
 ---
-# Anthropic native Messages surface.
+# Legacy Anthropic-native Messages surface.
+#
+# Kept as a separate HTTPRoute purely for readability: every rule here rewrites
+# to /v1/messages rather than /v1/chat/completions. agentgateway performs the
+# cross-format translation, so an OpenAI-dialect upstream can be fronted here
+# too; only the surfaces Kong actually exposed are reproduced.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -64,14 +133,63 @@ spec:
       kind: Gateway
       name: maas-v2-agw
   rules:
+    # --- anthropic/claude-sonnet-4-0 /v1/messages ---------------------------
     - matches:
         - method: POST
           path:
             type: RegularExpression
-            value: '^/(?:maas/user-[^/]+/)?[^/]+/[^/]+/v1/messages$'
+            value: '^/(?:maas/user-[^/]+/)?[^/]+/claude-sonnet-4-0/v1/messages$'
       filters:
         - type: URLRewrite
           urlRewrite:
             path:
               type: ReplaceFullPath
               replaceFullPath: /v1/messages
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: legacy-claude-sonnet-4-0
+    # --- deepseek/deepseek-v4-pro /v1/messages ------------------------------
+    - matches:
+        - method: POST
+          path:
+            type: RegularExpression
+            value: '^/(?:maas/user-[^/]+/)?[^/]+/deepseek-v4-pro/v1/messages$'
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /v1/messages
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: legacy-deepseek-v4-pro
+#
+# UNSUPPORTED: legacy Gemini `:generateContent` / `/v1/generateContent`
+# ---------------------------------------------------------------------
+# Kong exposed  /(?:maas/user-[^/]+/)?gemini/gemini-2\.5-flash/v1/generateContent
+# The `legacy-generate-content` HTTPRoute that used to live here has been
+# DELETED because neither routing mechanism can serve that surface:
+#
+#   * AgentgatewayModel cannot: neither `/v1/generateContent` nor the
+#     Google-native `/v1/models/<model>:generateContent` form appears in the
+#     hardcoded `model_router_matches()` list, so the model router never fires.
+#   * AgentgatewayBackend cannot either: the AI backend derives the request
+#     format from the path via `resolve_route()`, which knows only the
+#     canonical LLM route types. `generateContent` is not one of them, so a
+#     Google-native `{"contents":[...]}` body is fed to the OpenAI
+#     chat-completions parser and rejected.
+#
+# Verified empirically with a throwaway HTTPRoute before deletion:
+#
+#   POST /gcprobe-a/gemini-2.5-flash/v1/generateContent  (backendRef, no rewrite)
+#     -> 503 processing failed: failed to parse request: missing field `messages`
+#   POST /gcprobe-b/... rewritten to /v1/models/gemini-2.5-flash:generateContent
+#     -> 503 processing failed: failed to parse request: missing field `messages`
+#   POST /v1/models/gemini-2.5-flash:generateContent  (model router, no route)
+#     -> 404 route not found
+#
+# Clients using generateContent must migrate to /v1/chat/completions with
+# `{"model": "gemini-2.5-flash", ...}`, which works today both on the
+# canonical surface and on the legacy path above.
