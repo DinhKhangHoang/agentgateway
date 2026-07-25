@@ -1,0 +1,118 @@
+# Fail-closed external authorization for the whole pilot Gateway.
+#
+# Before this policy exists, POST /v1/chat/completions with NO credentials
+# returns 200 — the pilot Gateway is wide open. This is the manifest that
+# closes it. Every request routed by maas-v2-agw is first sent to
+# extauthz-adapter (10-adapter.yaml), which consults ai-gateway-plugin-server
+# (11-plugin-server.yaml) and turns its body-encoded decision into a status
+# code. Anything that is not an explicit allow is a deny.
+#
+# ============================================================================
+# CRD SCHEMA CORRECTIONS
+# The field shapes below were verified against the INSTALLED CRD
+# (`kubectl get crd agentgatewaypolicies.agentgateway.dev`). The shape in the
+# plan document did not match the real schema in five places; each is noted
+# inline with `PLAN SAID:` so the next reader does not re-derive it.
+# ============================================================================
+#
+# WHY `traffic` AND NOT `frontend`: extAuth lives under `spec.traffic`. The CRD
+# permits a traffic policy to target a Gateway, which merges it into every
+# route under that Gateway (`Gateway < Listener < Route < Route Rule`
+# precedence). Phase is left unset, i.e. `PostRouting`: authorization runs for
+# every routed request. Requests that match no route never reach a backend at
+# all, so leaving them un-authorized costs nothing. `PreRouting` is available
+# if the routing decision ever needs to depend on identity.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: maas-v2-agw-extauth
+  namespace: user-11377-maas-v2-agw
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  traffic:
+    extAuth:
+      # PLAN SAID: `failureMode: deny`. The real enum is
+      # [FailClosed, FailOpen] and `deny` is rejected by the API server.
+      # FailClosed is also the documented default, but it is stated
+      # explicitly here because this is the property the pilot exists to
+      # demonstrate — never let it be silently inherited.
+      failureMode: FailClosed
+
+      backendRef:
+        name: extauthz-adapter
+        port: 8080
+
+      # PLAN SAID: `includeRequestBody: {maxBytes: 8192}`.
+      # The real field is `forwardBody: {maxSize: ...}` (int-or-string) — but
+      # forwarding the raw body VERBATIM does not work here, see `http.body`
+      # below. The CRD forbids setting both, so forwardBody is deliberately
+      # absent. Buffering still happens: referencing `request.body` in a CEL
+      # expression makes agentgateway buffer the body automatically (up to the
+      # listener's maxBufferSize, default 2Mi).
+
+      # PLAN SAID: `protocol: {http: {...}}`.
+      # There is no `protocol` wrapper — `http` (or `grpc`) sits directly
+      # under extAuth, and the CRD enforces that exactly one of them is set.
+      http:
+        # A CEL expression, not a literal path, hence the nested quoting: the
+        # YAML string is `"/check"`, which CEL evaluates to the string
+        # /check. Without the inner quotes CEL would treat it as division.
+        # Unset would forward the original request path (/v1/chat/completions),
+        # which the adapter does not serve.
+        path: '"/check"'
+
+        # === THE PAYLOAD CONTRACT ===
+        # Forwarding the client's raw OpenAI body to /v1/check does NOT work.
+        # The plugin server has its own request schema; anything else comes
+        # back as {"allowed":false,"status_code":400,"reason":"malformed
+        # request body"}. That still denies (fail-closed holds), but it denies
+        # every request for the wrong reason and makes an allow impossible.
+        #
+        # The real schema, established empirically against the running server
+        # and cross-checked against the production KongPlugin
+        # `11377-maas-v2-ai-gateway` (config: pipeline_stages, estimated_tokens
+        # 100, model_header X-Model, tenant_header X-Tenant-ID):
+        #
+        #   {"stages":["authn","acl","ratelimit"],
+        #    "estimated_tokens":100,
+        #    "model":"<model>",
+        #    "api_key":"<key>"}
+        #
+        # Verified responses from the pilot server:
+        #   api_key "bogus…" -> {"allowed":false,"status_code":401,
+        #                        "stage":"authn","reason":"unknown api key"}
+        #   api_key ""       -> {…,"reason":"missing api key"}
+        #
+        # So the gateway builds that payload here instead of forwarding the
+        # client body. The adapter stays a pure decision translator: it passes
+        # this body through to /v1/check untouched and turns the body-encoded
+        # verdict into a status code.
+        #
+        # `stages` mirrors Kong's `pipeline_stages` minus `guardrails`, which
+        # needs prompt content this payload does not carry.
+        # `estimated_tokens` is the same static 100 Kong uses; the true-up
+        # normally happens at /v1/usage in Kong's log phase, which agentgateway
+        # has no equivalent for (a known, accepted pilot gap).
+        # `default(...)` keeps a missing header or unparseable body from
+        # erroring the expression — an empty api_key yields a clean 401 rather
+        # than an opaque evaluation failure.
+        body: |-
+          {"stages": ["authn", "acl", "ratelimit"], "estimated_tokens": 100, "model": default(jsonField(request.body, "model"), ""), "api_key": default(request.headers["authorization"], "").stripPrefix("Bearer ")}
+
+        # Default is Authorization only. Listed explicitly because the adapter
+        # also forwards these onward (see forwardedHeaders in
+        # pilot/adapter/main.go), so they must survive this hop too.
+        allowedRequestHeaders:
+          - Authorization
+          - X-Model
+          - X-Estimated-Tokens
+          - X-Request-Id
+
+        # PLAN SAID: `includeResponseHeaders: [X-Tenant-ID]`.
+        # The real field is `http.allowedResponseHeaders`; it copies headers
+        # from the AUTH response into the request sent to the backend.
+        allowedResponseHeaders:
+          - X-Tenant-ID
