@@ -1,0 +1,173 @@
+# Pilot copy of the Rust authorization server (ai-gateway-plugin-server).
+#
+# This is a deliberately ISOLATED copy of the deployment that runs in the live
+# Kong namespace user-11377-maas-v2. That namespace is read-only for the pilot;
+# nothing here touches it. The env below mirrors production EXCEPT for the
+# isolation changes called out inline. Every deviation is annotated with WHY.
+#
+# The image is pulled with a copy of production's `vcr-registry-secret`
+# (copied namespace-to-namespace by pipe; the credential is never written to
+# this repo).
+#
+# Contract reminder: this server ALWAYS answers HTTP 200 on /v1/check and
+# encodes the real allow/deny decision in the JSON body. That is precisely why
+# extauthz-adapter (10-adapter.yaml) exists — see its header comment.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-gateway-plugin-server
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app: ai-gateway-plugin-server
+spec:
+  selector:
+    app: ai-gateway-plugin-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-gateway-plugin-server
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app: ai-gateway-plugin-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-gateway-plugin-server
+  template:
+    metadata:
+      labels:
+        app: ai-gateway-plugin-server
+    spec:
+      imagePullSecrets:
+        - name: vcr-registry-secret
+      initContainers:
+        # Mirrors production's wait-for-dragonfly gate, retargeted at the
+        # pilot's own Redis.
+        - name: wait-for-dragonfly
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              until redis-cli -h pilot-dragonfly.user-11377-maas-v2-agw.svc.cluster.local -p 6379 ping | grep -q PONG; do
+                echo "waiting for pilot-dragonfly"
+                sleep 1
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      containers:
+        - name: server
+          image: vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/ai-gateway-plugin-server:maas-v2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: APP_BIND_ADDR
+              value: "0.0.0.0:8080"
+            - name: APP_LOG_LEVEL
+              value: "info"
+
+            # === ISOLATION CHANGE 1 (most important) ===
+            # Production: redis://ai-gw-dragonfly-v2.user-11377-maas-v2...
+            # Token budgets are PRE-DEBITED into Redis on every /v1/check.
+            # Sharing production's instance would corrupt real tenant budgets,
+            # so the pilot gets its own (see 15-pilot-redis.yaml).
+            - name: APP_REDIS_URL
+              value: "redis://pilot-dragonfly.user-11377-maas-v2-agw.svc.cluster.local:6379"
+            - name: APP_REDIS_POOL_SIZE
+              value: "25"
+            - name: APP_RATELIMIT_DECLARED_KEYS
+              value: "true"
+
+            # Same as production ON PURPOSE: this is the tenant / API-key
+            # registry and is a READ path used to validate keys. Pointing
+            # elsewhere would make every key invalid and the pilot untestable.
+            - name: APP_BACKEND_API_URL
+              value: "https://pub-iamapis.api-dev.vngcloud.tech/cloud-ai-platform-api"
+            - name: APP_BACKEND_TIMEOUT_MS
+              value: "3000"
+            - name: APP_HTTP_MAX_IDLE_PER_HOST
+              value: "200"
+            - name: APP_HTTP_IDLE_TIMEOUT_SECONDS
+              value: "90"
+
+            - name: APP_IAM_ENABLED
+              value: "true"
+            - name: APP_IAM_TOKEN_URL
+              value: "https://pub-iamapis.api-dev.vngcloud.tech/accounts-api/v2/auth/token"
+            - name: APP_IAM_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: ai-gateway-iam
+                  key: client-id
+            - name: APP_IAM_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ai-gateway-iam
+                  key: client-secret
+
+            - name: APP_CACHE_TTL_SECS
+              value: "600"
+            - name: APP_NEG_CACHE_TTL_SECS
+              value: "5"
+            - name: APP_CACHE_MAX_ENTRIES
+              value: "100000"
+
+            # === ISOLATION CHANGE 2 ===
+            # Production: APP_INVALIDATION_ENABLED=true, consuming/publishing on
+            # the real SQS queue
+            #   https://sqs.ap-southeast-1.amazonaws.com/770896284351/ai-gateway-plugin-server-dev
+            # The pilot emits usage events; delivering them to that queue would
+            # inflate real billing and real cache invalidations. Two belts:
+            #   (a) invalidation is disabled outright, and
+            #   (b) APP_SQS_QUEUE_URL names a queue that does not exist, and
+            #   (c) the SNS_* AWS credentials are NOT provided at all, so the
+            #       process has no way to authenticate to AWS even if (a)/(b)
+            #       were bypassed.
+            # Net: it is not possible for this pod to write to the production
+            # queue.
+            - name: APP_INVALIDATION_ENABLED
+              value: "false"
+            - name: APP_AWS_REGION
+              value: "ap-southeast-1"
+            - name: APP_SQS_QUEUE_URL
+              value: "https://sqs.ap-southeast-1.amazonaws.com/000000000000/agw-pilot-sink-does-not-exist"
+            # SNS_ACCESS_KEY_ID / SNS_SECRET_ACCESS_KEY intentionally OMITTED
+            # (production sets them from secret ai-gateway-sns).
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      terminationGracePeriodSeconds: 30

@@ -1,0 +1,85 @@
+# Dedicated Redis (Dragonfly) for the agentgateway pilot.
+#
+# WHY THIS EXISTS — THE SINGLE MOST IMPORTANT ISOLATION RULE OF THE PILOT:
+# ai-gateway-plugin-server pre-debits tenant token budgets into Redis on every
+# /v1/check. Production points at
+#   redis://ai-gw-dragonfly-v2.user-11377-maas-v2.svc.cluster.local:6379
+# If the pilot copy shared that instance, every pilot probe would burn real
+# tenant quota and corrupt live rate-limit counters. So the pilot runs its own
+# instance and APP_REDIS_URL in 11-plugin-server.yaml points HERE, never at the
+# Kong namespace.
+#
+# Image matches what the cluster already runs for ai-gw-dragonfly-v2, so it is
+# known-pullable and behaviourally identical.
+#
+# Storage is intentionally ephemeral (emptyDir): pilot budget state is
+# throwaway, and losing it on restart is a feature, not a bug.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pilot-dragonfly
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app: pilot-dragonfly
+spec:
+  selector:
+    app: pilot-dragonfly
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pilot-dragonfly
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app: pilot-dragonfly
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pilot-dragonfly
+  template:
+    metadata:
+      labels:
+        app: pilot-dragonfly
+    spec:
+      containers:
+        - name: dragonfly
+          # NOTE: dragonflydb.io is its own registry, NOT a docker.io namespace.
+          # Prefixing this with `docker.io/` gives ErrImagePull
+          # ("insufficient_scope"). This reference matches, byte for byte, what
+          # ai-gw-dragonfly-v2 runs in the Kong namespace.
+          image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.39.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--logtostderr"
+            - "--dir=/data"
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+      volumes:
+        - name: data
+          emptyDir: {}

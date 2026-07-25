@@ -1,0 +1,122 @@
+# ext_authz adapter — status-code translator in front of ai-gateway-plugin-server.
+#
+# WHY IT EXISTS
+# The Rust plugin server ALWAYS answers HTTP 200 on /v1/check and puts the real
+# allow/deny decision in the JSON body. agentgateway's HTTP ext_authz decides
+# allow/deny purely from the auth service's HTTP status code. Wired directly,
+# every denial would be read as an allow — a silent fail-OPEN. This adapter
+# reads the body and re-emits the decision as a status code, and denies (503)
+# on every error path. Source + tests: pilot/adapter/main.go, main_test.go.
+#
+# WHY IT RUNS FROM SOURCE INSTEAD OF A BUILT IMAGE
+# The registry vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/ is
+# pull-only for the account available here: `docker login` succeeds but
+# `docker push` returns 401. There is therefore no way to publish an adapter
+# image. Instead the committed source is mounted from a ConfigMap into a public
+# golang image and run with `go run`. The adapter has ZERO external
+# dependencies (pure stdlib), so this needs no network and no module download.
+#
+# TO SWITCH TO A BUILT IMAGE LATER: change `image:` to the published tag and
+# delete `command:`/`workingDir:` and the src volume/mount. Nothing else — the
+# same pilot/adapter/main.go is what runs either way, and pilot/adapter/Dockerfile
+# already builds it.
+#
+# The ConfigMap is generated FROM the real file so the two cannot drift:
+#   kubectl -n user-11377-maas-v2-agw create configmap extauthz-adapter-src \
+#     --from-file=main.go=pilot/adapter/main.go --dry-run=client -o yaml | kubectl apply -f -
+# (That command is the source of truth; the ConfigMap is not checked in here.)
+#
+# `go run` needs a writable build cache, hence GOCACHE/GOPATH under an emptyDir
+# at /tmp. Compilation takes ~15-30s, hence the patient readiness probe.
+apiVersion: v1
+kind: Service
+metadata:
+  name: extauthz-adapter
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app: extauthz-adapter
+spec:
+  selector:
+    app: extauthz-adapter
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: extauthz-adapter
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app: extauthz-adapter
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: extauthz-adapter
+  template:
+    metadata:
+      labels:
+        app: extauthz-adapter
+    spec:
+      containers:
+        - name: adapter
+          image: golang:1.26-alpine
+          imagePullPolicy: IfNotPresent
+          workingDir: /src
+          command: ["go", "run", "/src/main.go"]
+          env:
+            - name: RUST_SERVER_URL
+              value: "http://ai-gateway-plugin-server.user-11377-maas-v2-agw.svc.cluster.local:8080"
+            - name: PORT
+              value: "8080"
+            # `go run` writes a build cache; the default HOME is not writable
+            # for an arbitrary UID, so point both caches at the emptyDir.
+            - name: GOCACHE
+              value: /tmp/.cache
+            - name: GOPATH
+              value: /tmp/go
+            # Stdlib only: nothing to fetch. `go run <file>` runs outside a
+            # module, so no go.mod is mounted (the ConfigMap is read-only
+            # anyway). GOPROXY=off makes any accidental fetch fail fast
+            # instead of hanging on a network that has no egress.
+            - name: GOPROXY
+              value: "off"
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: src
+              mountPath: /src
+            - name: gocache
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: src
+          configMap:
+            name: extauthz-adapter-src
+        - name: gocache
+          emptyDir: {}
