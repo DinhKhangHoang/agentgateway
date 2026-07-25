@@ -1,0 +1,89 @@
+# VNG aiplatform (self-hosted vLLM) model - NOT APPLIED YET.
+#
+# ============================ PENDING ============================
+# DO NOT `kubectl apply` this file until the Secret `vng-iam-token`
+# exists in namespace user-11377-maas-v2-agw with key `key` holding a
+# current VNG IAM access token. That Secret is produced by a CronJob
+# that exchanges `vng-iam-credentials` (access_key/secret_key) for a
+# short-lived bearer token; it is being built separately. Applying
+# this manifest before then yields a model that resolves but fails
+# auth against the aiplatform endpoint.
+# =================================================================
+#
+# BASE URL DERIVATION
+# -------------------
+# Kong reaches this endpoint through the `aiplatform_vllm` driver. Two pieces
+# of the Kong source combine to build the upstream URL:
+#
+#   kong/kong/llm/drivers/shared.lua:111
+#     aiplatform_vllm = "https://inference-aiplatform-hcm.api.vngcloud.vn/v1"
+#
+#   kong/kong/llm/drivers/shared.lua:306-314  (operation_map.aiplatform_vllm)
+#     ["llm/v1/chat"] = { path = "/%s/%s/chat/completions", method = "POST" }
+#
+#   kong/kong/llm/drivers/aiplatform_vllm.lua:224-227
+#     f_url = upstream_url_format[DRIVER_NAME] ..
+#             fmt(operation_map[DRIVER_NAME][conf.route_type].path,
+#                 model.options.aiplatform.endpoint_id,
+#                 model.options.aiplatform.endpoint_version)
+#
+# With endpoint_id = me-8e5e98cf-622b-41ae-9c99-fc6b8a7b67e1 and
+# endpoint_version = v1, Kong's full chat URL is therefore
+#
+#   https://inference-aiplatform-hcm.api.vngcloud.vn/v1
+#     /me-8e5e98cf-622b-41ae-9c99-fc6b8a7b67e1/v1/chat/completions
+#
+# agentgateway's `baseURL` "overrides the provider address and base path
+# prefix" - i.e. it replaces everything up to but not including the
+# format-specific suffix (`/chat/completions`). So baseURL is everything above
+# minus that suffix. Note the doubled `/v1`: the first is the aiplatform API
+# version baked into upstream_url_format, the second is the per-endpoint
+# `endpoint_version`. Both are real; neither is a typo.
+#
+# AUTH
+# ----
+# kong/kong/llm/drivers/aiplatform_vllm.lua:262-264 sets
+# `Authorization: Bearer <iam access token>`. That is exactly
+# agentgateway's default injection for `policies.auth.secretRef`, so no
+# `location` override is needed.
+#
+# SCHEMA NOTES (vs. the original plan, which was wrong here)
+# ----------------------------------------------------------
+#  * `spec.custom` has only `backendRef` and `formats` - there is no
+#    `custom.format` scalar and no `custom.model`. `formats` is a list of
+#    objects with a required `type` drawn from {AnthropicTokenCount,
+#    Completions, Embeddings, Messages, Realtime, Rerank, Responses} plus an
+#    optional per-format `path` override.
+#  * `Completions` is agentgateway's name for the OpenAI chat-completions
+#    surface (`/chat/completions`), which is what this vLLM endpoint serves.
+#  * `backendRef` may only target a namespace-local Service or InferencePool,
+#    so it is unusable for an external host; `baseURL` carries the address
+#    instead. A CRD CEL rule enforces "custom must be set if and only if
+#    provider is Custom".
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: qwen2-0-5b
+  namespace: user-11377-maas-v2-agw
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  match:
+    # metadata.name cannot contain a dot, so the CR is `qwen2-0-5b` while the
+    # wire-format model id clients send is `qwen2-0.5b`.
+    model: qwen2-0.5b
+  provider: Custom
+  baseURL: https://inference-aiplatform-hcm.api.vngcloud.vn/v1/me-8e5e98cf-622b-41ae-9c99-fc6b8a7b67e1/v1
+  visibility: Public
+  custom:
+    formats:
+      - type: Completions
+  policies:
+    auth:
+      # PENDING: Secret does not exist yet. Created by the IAM-token refresh
+      # CronJob from vng-iam-credentials. Never inline the token here.
+      secretRef:
+        name: vng-iam-token
+        key: key
