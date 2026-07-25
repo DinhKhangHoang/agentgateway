@@ -32,8 +32,18 @@ Two more are set partway through and needed by every task after them:
 
 ## Corrections Found During Execution
 
-Three issues surfaced while running Phase 1. All are fixed in the task text below;
-recorded here so a re-run from scratch does not rediscover them.
+Recorded so a re-run from scratch does not rediscover them. Items 1–3 came from
+Phase 1; items 4–12 from Phases 2–4.
+
+**`AGW_REPO` is `/home/stackops/agw-pilot`**, not `/home/stackops/agentgateway`.
+The Conventions block above is stale; the work happens in the worktree.
+
+### The architectural correction (item 4) invalidates the plan's premise
+
+Approach B — "legacy HTTPRoute rewrites the path, then `AgentgatewayModel`
+resolves `body.model`" — **cannot work**, for a structural reason. See item 4.
+Tasks 6–9 as originally written are superseded by `pilot/14-legacy-backends.yaml`
+plus the rewritten `pilot/02-httproutes.yaml`.
 
 1. **The controller image tag must be pinned.** The chart's default renders
    `cr.agentgateway.dev/controller:v0.0.0-dev`, which does not exist in the registry and
@@ -53,6 +63,81 @@ recorded here so a re-run from scratch does not rediscover them.
    the platform default. Mirrors the Kong dataplane ingress. Kong's
    `enable-proxy-protocol: "*"` is deliberately NOT mirrored — PROXY protocol requires
    matching listener configuration that this Gateway does not enable. See Task 4 Step 2.
+
+4. **Approach B is structurally impossible; legacy URLs need `AgentgatewayBackend`.**
+   There are two mutually exclusive routing mechanisms:
+   - `AgentgatewayModel` routes on `body.model`, but only on a **hardcoded, non-configurable**
+     path list — `model_router_matches()`, `crates/agentgateway/src/store/binds.rs:743`.
+   - `AgentgatewayBackend` (`spec.ai`) is referenceable from an HTTPRoute `backendRefs`, so it
+     serves arbitrary paths, but `spec.ai.groups[].providers[]` is a random power-of-two-choices
+     pool (`AIBackend::select_provider`, `crates/agentgateway/src/llm/mod.rs:70`) that **ignores
+     the requested model name**. Measured: gemini+anthropic in one group answered 7 of 10
+     `gemini-2.5-flash` requests from Anthropic. So one group = one logical model.
+
+   A `URLRewrite` filter does **not** re-run route matching, so a legacy route that only rewrites
+   and carries no `backendRefs` dead-ends at `500 no valid backends`. Every legacy rule needs a
+   `backendRef`. See `pilot/14-legacy-backends.yaml`.
+
+5. **`AgentgatewayModel` is an experimental API, gated OFF by default, and needs TWO switches.**
+   Chart `agentgatewayModels.enabled: false` and `EnableAgentgatewayModels` default false
+   (`controller/api/settings/settings.go:227`), *plus* a per-listener opt-in listing kind
+   `AgentgatewayModel` in `allowedRoutes.kinds` (`translator/conditions.go:145`). With either
+   missing, CRs are accepted by the API server, carry no status, and every request fails
+   `500 no valid backends`. Listing any kinds makes it an intersection filter, so `HTTPRoute`
+   must be relisted or the compatibility routes silently detach.
+
+6. **`policies.auth` shape.** `key`(string) / `secretRef`(object) / `passthrough` / `aws` /
+   `azure` / `gcp` / `oauthTokenExchange` are mutually exclusive **siblings**. The plan's
+   `auth.key.secretRef` is invalid; use `auth.secretRef: {name, key}`.
+
+7. **A provider `host` override has two silent side effects.** `httpproxy.rs:2067` only applies
+   `default_connector_policies()` when there is no host override — and that is where TLS
+   origination lives, so the backend speaks plaintext to :443 and gets
+   `503 Connection reset by peer`. Fix with `policies.tls: {}`. Separately,
+   `set_default_path()` (`llm/mod.rs:1084`) short-circuits under a host override, so the request
+   path is forwarded verbatim; fix with an explicit `pathPrefix`. Also, CRD CEL requires `host`
+   and `port` together.
+
+8. **`virtualModel.weighted.targets[].model` is a lookup key, not an upstream-name override.**
+   Setting it to the virtual model's own name yields `404 virtual_model_target_not_found`.
+   `AgentgatewayModel` has **no** upstream model-name override field; use
+   `policies.transformations` on each concrete model instead. Concrete models behind a virtual
+   model must also have **distinct** `match.model` values — `resolve_concrete_model()` is a
+   first-match `find()`, so duplicates silently kill the weighting.
+
+9. **Gemini `:generateContent` is UNSUPPORTED.** Not in `model_router_matches()`, and an AI
+   backend feeds the `{"contents":[...]}` body to the OpenAI chat parser
+   (`503 missing field 'messages'`). Verified three ways. Task 7's `legacy-generate-content`
+   route is deleted.
+
+10. **Telemetry needs no policy.** `frontend.{metrics,tracing,accessLog}.enabled` does not exist
+    — the real schema is `metrics.{attributes}`, `accessLog.{attributes,filter,otlp}`,
+    `tracing.{attributes,backendRef,...}`, which *customise* rather than enable. Metrics are on
+    by default (68 families, including `agentgateway_gen_ai_client_token_usage` with OTel
+    `gen_ai_*` model labels), as are access logs. Prometheus selects
+    `release: prometheus`, not `release: monitoring`. Tracing is left off: it needs an OTLP
+    `backendRef` and this cluster has no collector.
+
+11. **The plugin server has no PostgreSQL.** Task 13's "provision a Postgres" step is wrong. Its
+    state lives in Redis (budget pre-debit), a backend API (tenant/key registry), and SQS (usage
+    events). Isolation therefore means a dedicated **Redis** and a non-production **SQS** target.
+
+12. **The IAM contract is Basic auth + form encoding**, per
+    `kong/llm/iam/accesstoken.lua:32-36`: `Authorization: Basic base64(ak:sk)` with body
+    `grant_type=client_credentials`. The plan's JSON `{clientId, clientSecret}` returns
+    `400 REQUEST_BODY_INVALID`. Tokens last 1800s, so the 10-minute CronJob cadence is sound.
+
+### Environment limitations encountered (not agentgateway's fault)
+
+- **The container registry is pull-only for us.** `docker push` to
+  `vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/` returns 401 while `docker login`
+  succeeds. Both Go services therefore run from source on public images
+  (`golang:1.26-alpine` + a ConfigMap-mounted `main.go`, zero external deps). Swapping to built
+  images later is an `image:`/`command:` change only.
+- **The OpenAI BYOK key in this dev cluster is a dummy** (20 chars, no `sk-` prefix); OpenAI
+  returns 401. Routing for it is still proven — the 401 body comes verbatim from api.openai.com.
+- **The Anthropic account has no credit balance** (`400 credit balance is too low`) on both the
+  canonical and legacy surfaces. Pre-existing; routing and the `x-api-key` rewrite are proven.
 
 **Never modify anything in `$SRC_NS`.** It is read-only for this plan — we only copy credential values out of it.
 
