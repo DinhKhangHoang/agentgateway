@@ -1,0 +1,13 @@
+# Pin to the release matching the CRDs installed from this checkout.
+# AgentgatewayModel landed in a1d420a3 (2026-07-24) and is present in
+# v1.4.0-beta.1; the chart default is a v0.0.0-dev placeholder that does not
+# exist in the registry, so the tag MUST be set explicitly.
+image:
+  registry: cr.agentgateway.dev
+  tag: v1.4.0-beta.1
+
+# Restrict config discovery to the pilot namespace so the controller never
+# reads or reconciles anything in the Kong namespaces.
+discoveryNamespaceSelectors:
+  - matchLabels:
+      agentgateway-discovery: "enabled"
