@@ -1,0 +1,5266 @@
+{
+  "source": "derived from live Kong config; no traffic capture exists",
+  "kong_routes_seen": 128,
+  "requests": [
+    {
+      "id": "11377-maas-v2-bge-m3-model-route::/maas/user-11374/baai/bge-m3/v1/embeddings",
+      "kong_route": "11377-maas-v2-bge-m3-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/baai/bge-m3/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "bge-m3",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "bge-m3",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-bge-m3-model-route::/baai/bge-m3/v1/embeddings",
+      "kong_route": "11377-maas-v2-bge-m3-model-route",
+      "method": "POST",
+      "legacy_path": "/baai/bge-m3/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "bge-m3",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "bge-m3",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gemini-2-5-flash-model-route::/maas/user-11374/openai-compatible/gemini-2.5-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-gemini-2-5-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai-compatible/gemini-2.5-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gemini-2-5-flash-model-route::/user-11374/openai-compatible/gemini-2.5-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-gemini-2-5-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/openai-compatible/gemini-2.5-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gemini-2-5-pro-generate-content-model-route::/maas/user-11374/openai-compatible/gemini-2.5-pro/v1/generateContent",
+      "kong_route": "11377-maas-v2-byok-11374-gemini-2-5-pro-generate-content-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai-compatible/gemini-2.5-pro/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gemini-2-5-pro-generate-content-model-route::/user-11374/openai-compatible/gemini-2.5-pro/v1/generateContent",
+      "kong_route": "11377-maas-v2-byok-11374-gemini-2-5-pro-generate-content-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/openai-compatible/gemini-2.5-pro/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gemini-2-5-pro-messages-model-route::/maas/user-11374/openai-compatible/gemini-2.5-pro/v1/messages",
+      "kong_route": "11377-maas-v2-byok-11374-gemini-2-5-pro-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai-compatible/gemini-2.5-pro/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-pro",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gemini-2-5-pro-messages-model-route::/user-11374/openai-compatible/gemini-2.5-pro/v1/messages",
+      "kong_route": "11377-maas-v2-byok-11374-gemini-2-5-pro-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/openai-compatible/gemini-2.5-pro/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-pro",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gemini-2-5-pro-model-route::/maas/user-11374/openai-compatible/gemini-2.5-pro/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-gemini-2-5-pro-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai-compatible/gemini-2.5-pro/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-pro",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gemini-2-5-pro-model-route::/user-11374/openai-compatible/gemini-2.5-pro/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-gemini-2-5-pro-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/openai-compatible/gemini-2.5-pro/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-pro",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gpt-5-model-route::/maas/user-11374/openai-compatible/gpt-5/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-gpt-5-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai-compatible/gpt-5/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gpt-5-model-route::/user-11374/openai-compatible/gpt-5/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-gpt-5-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/openai-compatible/gpt-5/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gpt-5-responses-model-route::/maas/user-11374/openai-compatible/gpt-5/v1/responses",
+      "kong_route": "11377-maas-v2-byok-11374-gpt-5-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai-compatible/gpt-5/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "gpt-5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-gpt-5-responses-model-route::/user-11374/openai-compatible/gpt-5/v1/responses",
+      "kong_route": "11377-maas-v2-byok-11374-gpt-5-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/openai-compatible/gpt-5/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "gpt-5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-openai-embedding-model-route::/maas/user-11374/byok-openai/user-11374/v1/embeddings",
+      "kong_route": "11377-maas-v2-byok-11374-openai-embedding-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/byok-openai/user-11374/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-openai-embedding-model-route::/user-11374/byok-openai/user-11374/v1/embeddings",
+      "kong_route": "11377-maas-v2-byok-11374-openai-embedding-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/byok-openai/user-11374/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-openai-generative-model-route::/maas/user-11374/byok-openai/user-11374/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-openai-generative-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/byok-openai/user-11374/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-openai-generative-model-route::/user-11374/byok-openai/user-11374/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-openai-generative-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/byok-openai/user-11374/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-openai-image-model-route::/maas/user-11374/byok-openai/user-11374/v1/images/generations",
+      "kong_route": "11377-maas-v2-byok-11374-openai-image-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/byok-openai/user-11374/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-openai-image-model-route::/user-11374/byok-openai/user-11374/v1/images/generations",
+      "kong_route": "11377-maas-v2-byok-11374-openai-image-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/byok-openai/user-11374/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-openai-rerank-model-route::/maas/user-11374/byok-openai/user-11374/v1/rerank",
+      "kong_route": "11377-maas-v2-byok-11374-openai-rerank-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/byok-openai/user-11374/v1/rerank",
+      "canonical_path": "/v1/rerank",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/rerank",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "query": "hello",
+        "documents": [
+          "a",
+          "b"
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-openai-rerank-model-route::/user-11374/byok-openai/user-11374/v1/rerank",
+      "kong_route": "11377-maas-v2-byok-11374-openai-rerank-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/byok-openai/user-11374/v1/rerank",
+      "canonical_path": "/v1/rerank",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/rerank",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "query": "hello",
+        "documents": [
+          "a",
+          "b"
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-refactor-smoke-test-model-route::/maas/user-11374/openai-compatible/refactor-smoke-test/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-refactor-smoke-test-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai-compatible/refactor-smoke-test/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "refactor-smoke-test",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "refactor-smoke-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11374-refactor-smoke-test-model-route::/user-11374/openai-compatible/refactor-smoke-test/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11374-refactor-smoke-test-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11374/openai-compatible/refactor-smoke-test/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "refactor-smoke-test",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "refactor-smoke-test",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11690-deepseek-generative-model-route::/maas/user-11690/byok-deepseek/user-11374/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11690-deepseek-generative-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11690/byok-deepseek/user-11374/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11690-deepseek-generative-model-route::/user-11690/byok-deepseek/user-11374/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11690-deepseek-generative-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11690/byok-deepseek/user-11374/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11690-my-model-responses-model-route::/maas/user-11690/custom/my-model/v1/responses",
+      "kong_route": "11377-maas-v2-byok-11690-my-model-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11690/custom/my-model/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "my-model",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "my-model",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11690-my-model-responses-model-route::/user-11690/custom/my-model/v1/responses",
+      "kong_route": "11377-maas-v2-byok-11690-my-model-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11690/custom/my-model/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "my-model",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "my-model",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11690-openai-generative-model-route::/maas/user-11690/byok-openai/user-11374/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11690-openai-generative-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11690/byok-openai/user-11374/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-11690-openai-generative-model-route::/user-11690/byok-openai/user-11374/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-11690-openai-generative-model-route",
+      "method": "POST",
+      "legacy_path": "/user-11690/byok-openai/user-11374/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-12493-openai-embedding-model-route::/maas/user-12493/byok-openai/user-11374/v1/embeddings",
+      "kong_route": "11377-maas-v2-byok-12493-openai-embedding-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-12493/byok-openai/user-11374/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-12493-openai-embedding-model-route::/user-12493/byok-openai/user-11374/v1/embeddings",
+      "kong_route": "11377-maas-v2-byok-12493-openai-embedding-model-route",
+      "method": "POST",
+      "legacy_path": "/user-12493/byok-openai/user-11374/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-12493-openai-generative-model-route::/maas/user-12493/byok-openai/user-11374/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-12493-openai-generative-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-12493/byok-openai/user-11374/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-12493-openai-generative-model-route::/user-12493/byok-openai/user-11374/v1/chat/completions",
+      "kong_route": "11377-maas-v2-byok-12493-openai-generative-model-route",
+      "method": "POST",
+      "legacy_path": "/user-12493/byok-openai/user-11374/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-12493-openai-image-model-route::/maas/user-12493/byok-openai/user-11374/v1/images/generations",
+      "kong_route": "11377-maas-v2-byok-12493-openai-image-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-12493/byok-openai/user-11374/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-12493-openai-image-model-route::/user-12493/byok-openai/user-11374/v1/images/generations",
+      "kong_route": "11377-maas-v2-byok-12493-openai-image-model-route",
+      "method": "POST",
+      "legacy_path": "/user-12493/byok-openai/user-11374/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-12493-openai-rerank-model-route::/maas/user-12493/byok-openai/user-11374/v1/rerank",
+      "kong_route": "11377-maas-v2-byok-12493-openai-rerank-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-12493/byok-openai/user-11374/v1/rerank",
+      "canonical_path": "/v1/rerank",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/rerank",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "query": "hello",
+        "documents": [
+          "a",
+          "b"
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-byok-12493-openai-rerank-model-route::/user-12493/byok-openai/user-11374/v1/rerank",
+      "kong_route": "11377-maas-v2-byok-12493-openai-rerank-model-route",
+      "method": "POST",
+      "legacy_path": "/user-12493/byok-openai/user-11374/v1/rerank",
+      "canonical_path": "/v1/rerank",
+      "model": "user-11374",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/rerank",
+      "streaming": "allow",
+      "body": {
+        "model": "user-11374",
+        "query": "hello",
+        "documents": [
+          "a",
+          "b"
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-bytedance-seed-1-6-250915-model-route::/maas/user-11374/bytedance/seed-1-6-250915/v1/chat/completions",
+      "kong_route": "11377-maas-v2-bytedance-seed-1-6-250915-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/bytedance/seed-1-6-250915/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "seed-1-6-250915",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "seed-1-6-250915",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-bytedance-seed-1-6-250915-model-route::/bytedance/seed-1-6-250915/v1/chat/completions",
+      "kong_route": "11377-maas-v2-bytedance-seed-1-6-250915-model-route",
+      "method": "POST",
+      "legacy_path": "/bytedance/seed-1-6-250915/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "seed-1-6-250915",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "seed-1-6-250915",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-bytedance-seed-1-6-flash-250715-model-route::/maas/user-11374/bytedance/seed-1-6-flash-250715/v1/chat/completions",
+      "kong_route": "11377-maas-v2-bytedance-seed-1-6-flash-250715-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/bytedance/seed-1-6-flash-250715/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "seed-1-6-flash-250715",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "seed-1-6-flash-250715",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-bytedance-seed-1-6-flash-250715-model-route::/bytedance/seed-1-6-flash-250715/v1/chat/completions",
+      "kong_route": "11377-maas-v2-bytedance-seed-1-6-flash-250715-model-route",
+      "method": "POST",
+      "legacy_path": "/bytedance/seed-1-6-flash-250715/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "seed-1-6-flash-250715",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "seed-1-6-flash-250715",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-bytedance-skylark-pro-250415-model-route::/maas/user-11374/bytedance/skylark-pro-250415/v1/chat/completions",
+      "kong_route": "11377-maas-v2-bytedance-skylark-pro-250415-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/bytedance/skylark-pro-250415/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "skylark-pro-250415",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "skylark-pro-250415",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-bytedance-skylark-pro-250415-model-route::/bytedance/skylark-pro-250415/v1/chat/completions",
+      "kong_route": "11377-maas-v2-bytedance-skylark-pro-250415-model-route",
+      "method": "POST",
+      "legacy_path": "/bytedance/skylark-pro-250415/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "skylark-pro-250415",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "skylark-pro-250415",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-bytedance-skylark-vision-250515-model-route::/maas/user-11374/bytedance/skylark-vision-250515/v1/chat/completions",
+      "kong_route": "11377-maas-v2-bytedance-skylark-vision-250515-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/bytedance/skylark-vision-250515/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "skylark-vision-250515",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "skylark-vision-250515",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-bytedance-skylark-vision-250515-model-route::/bytedance/skylark-vision-250515/v1/chat/completions",
+      "kong_route": "11377-maas-v2-bytedance-skylark-vision-250515-model-route",
+      "method": "POST",
+      "legacy_path": "/bytedance/skylark-vision-250515/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "skylark-vision-250515",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "skylark-vision-250515",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-claude-3-5-haiku-latest-model-route::/maas/user-11374/anthropic/claude-3-5-haiku-latest/v1/chat/completions",
+      "kong_route": "11377-maas-v2-claude-3-5-haiku-latest-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/anthropic/claude-3-5-haiku-latest/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "claude-3-5-haiku-latest",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "claude-3-5-haiku-latest",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-claude-3-5-haiku-latest-model-route::/anthropic/claude-3-5-haiku-latest/v1/chat/completions",
+      "kong_route": "11377-maas-v2-claude-3-5-haiku-latest-model-route",
+      "method": "POST",
+      "legacy_path": "/anthropic/claude-3-5-haiku-latest/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "claude-3-5-haiku-latest",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "claude-3-5-haiku-latest",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-claude-3-7-sonnet-latest-model-route::/maas/user-11374/anthropic/claude-3-7-sonnet-latest/v1/chat/completions",
+      "kong_route": "11377-maas-v2-claude-3-7-sonnet-latest-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/anthropic/claude-3-7-sonnet-latest/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "claude-3-7-sonnet-latest",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "claude-3-7-sonnet-latest",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-claude-3-7-sonnet-latest-model-route::/anthropic/claude-3-7-sonnet-latest/v1/chat/completions",
+      "kong_route": "11377-maas-v2-claude-3-7-sonnet-latest-model-route",
+      "method": "POST",
+      "legacy_path": "/anthropic/claude-3-7-sonnet-latest/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "claude-3-7-sonnet-latest",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "claude-3-7-sonnet-latest",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-claude-3-opus-latest-model-route::/maas/user-11374/anthropic/claude-3-opus-latest/v1/chat/completions",
+      "kong_route": "11377-maas-v2-claude-3-opus-latest-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/anthropic/claude-3-opus-latest/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "claude-3-opus-latest",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "claude-3-opus-latest",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-claude-3-opus-latest-model-route::/anthropic/claude-3-opus-latest/v1/chat/completions",
+      "kong_route": "11377-maas-v2-claude-3-opus-latest-model-route",
+      "method": "POST",
+      "legacy_path": "/anthropic/claude-3-opus-latest/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "claude-3-opus-latest",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "claude-3-opus-latest",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-claude-sonnet-4-0-model-route::/maas/user-11374/anthropic/claude-sonnet-4-0/v1/chat/completions",
+      "kong_route": "11377-maas-v2-claude-sonnet-4-0-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/anthropic/claude-sonnet-4-0/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "claude-sonnet-4-0",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "claude-sonnet-4-0",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-claude-sonnet-4-0-model-route::/anthropic/claude-sonnet-4-0/v1/chat/completions",
+      "kong_route": "11377-maas-v2-claude-sonnet-4-0-model-route",
+      "method": "POST",
+      "legacy_path": "/anthropic/claude-sonnet-4-0/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "claude-sonnet-4-0",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "claude-sonnet-4-0",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-aiplatform-model-route::/maas/user-11374/deepseek/qwen2-0.5b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-aiplatform-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/qwen2-0.5b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen2-0.5b",
+      "model_source": "plugin",
+      "provider": "aiplatform_vllm",
+      "route_type": "llm/v1/chat",
+      "streaming": null,
+      "body": {
+        "model": "qwen2-0.5b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-aiplatform-model-route::/deepseek/qwen2-0.5b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-aiplatform-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/qwen2-0.5b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen2-0.5b",
+      "model_source": "plugin",
+      "provider": "aiplatform_vllm",
+      "route_type": "llm/v1/chat",
+      "streaming": null,
+      "body": {
+        "model": "qwen2-0.5b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-chat-model-route::/maas/user-11374/deepseek/deepseek-chat/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-chat-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-chat/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-chat",
+      "model_source": "plugin",
+      "provider": "deepseek",
+      "route_type": "llm/v1/chat",
+      "streaming": null,
+      "body": {
+        "model": "deepseek-chat",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-chat-model-route::/deepseek/deepseek-chat/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-chat-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-chat/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-chat",
+      "model_source": "plugin",
+      "provider": "deepseek",
+      "route_type": "llm/v1/chat",
+      "streaming": null,
+      "body": {
+        "model": "deepseek-chat",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-realmodel-route::/maas/user-11374/deepseek/deepseek-v4-flash/v1/messages",
+      "kong_route": "11377-maas-v2-deepseek-realmodel-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-v4-flash/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "deepseek-v4-flash",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-realmodel-route::/deepseek/deepseek-v4-flash/v1/messages",
+      "kong_route": "11377-maas-v2-deepseek-realmodel-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-v4-flash/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "deepseek-v4-flash",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-reasoner-messages-model-route::/maas/user-11374/deepseek/deepseek-reasoner/v1/messages",
+      "kong_route": "11377-maas-v2-deepseek-reasoner-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-reasoner/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "deepseek-reasoner",
+      "model_source": "plugin",
+      "provider": "deepseek",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-reasoner",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-reasoner-messages-model-route::/deepseek/deepseek-reasoner/v1/messages",
+      "kong_route": "11377-maas-v2-deepseek-reasoner-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-reasoner/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "deepseek-reasoner",
+      "model_source": "plugin",
+      "provider": "deepseek",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-reasoner",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-reasoner-model-route::/maas/user-11374/deepseek/deepseek-reasoner/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-reasoner-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-reasoner/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-reasoner",
+      "model_source": "plugin",
+      "provider": "deepseek",
+      "route_type": "llm/v1/chat",
+      "streaming": null,
+      "body": {
+        "model": "deepseek-reasoner",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-reasoner-model-route::/deepseek/deepseek-reasoner/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-reasoner-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-reasoner/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-reasoner",
+      "model_source": "plugin",
+      "provider": "deepseek",
+      "route_type": "llm/v1/chat",
+      "streaming": null,
+      "body": {
+        "model": "deepseek-reasoner",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-v4-flash-model-route::/maas/user-11374/deepseek/deepseek-v4-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-v4-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-v4-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-v4-flash",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-v4-flash-model-route::/deepseek/deepseek-v4-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-v4-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-v4-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-v4-flash",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-v4-pro-messages-model-route::/maas/user-11374/deepseek/deepseek-v4-pro/v1/messages",
+      "kong_route": "11377-maas-v2-deepseek-v4-pro-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-v4-pro/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "deepseek-v4-pro",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v4-pro",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-v4-pro-messages-model-route::/deepseek/deepseek-v4-pro/v1/messages",
+      "kong_route": "11377-maas-v2-deepseek-v4-pro-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-v4-pro/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "deepseek-v4-pro",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v4-pro",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-v4-pro-model-route::/maas/user-11374/deepseek/deepseek-v4-pro/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-v4-pro-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-v4-pro/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-v4-pro",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v4-pro",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-deepseek-v4-pro-model-route::/deepseek/deepseek-v4-pro/v1/chat/completions",
+      "kong_route": "11377-maas-v2-deepseek-v4-pro-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-v4-pro/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-v4-pro",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v4-pro",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-1.5-flash-model-route::/maas/user-11374/gemini/gemini-1.5-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-1.5-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-1.5-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-1.5-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-1.5-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-1.5-flash-model-route::/gemini/gemini-1.5-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-1.5-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-1.5-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-1.5-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-1.5-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-1.5-pro-model-route::/maas/user-11374/gemini/gemini-1.5-pro/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-1.5-pro-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-1.5-pro/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-1.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-1.5-pro",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-1.5-pro-model-route::/gemini/gemini-1.5-pro/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-1.5-pro-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-1.5-pro/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-1.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-1.5-pro",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.0-flash-lite-model-route::/maas/user-11374/gemini/gemini-2.0-flash-lite/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.0-flash-lite-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.0-flash-lite/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.0-flash-lite",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.0-flash-lite",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.0-flash-lite-model-route::/gemini/gemini-2.0-flash-lite/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.0-flash-lite-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.0-flash-lite/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.0-flash-lite",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.0-flash-lite",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.0-flash-model-route::/maas/user-11374/gemini/gemini-2.0-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.0-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.0-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.0-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.0-flash-model-route::/gemini/gemini-2.0-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.0-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.0-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.0-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.0-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-generate-content-model-route::/maas/user-11374/gemini/gemini-2.5-flash/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-generate-content-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-flash/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-generate-content-model-route::/gemini/gemini-2.5-flash/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-generate-content-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-flash/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-image-model-route::/maas/user-11374/gemini/gemini-2.5-flash-image/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-image-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-flash-image/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-flash-image",
+      "model_source": "path",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-image-model-route::/gemini/gemini-2.5-flash-image/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-image-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-flash-image/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-flash-image",
+      "model_source": "path",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-lite-generate-content-model-route::/maas/user-11374/gemini/gemini-2.5-flash-lite/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-lite-generate-content-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-flash-lite/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-flash-lite",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-lite-generate-content-model-route::/gemini/gemini-2.5-flash-lite/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-lite-generate-content-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-flash-lite/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-flash-lite",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-lite-model-route::/maas/user-11374/gemini/gemini-2.5-flash-lite/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-lite-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-flash-lite/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-flash-lite",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-flash-lite",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-lite-model-route::/gemini/gemini-2.5-flash-lite/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-lite-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-flash-lite/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-flash-lite",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-flash-lite",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-model-route::/maas/user-11374/gemini/gemini-2.5-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-model-route::/gemini/gemini-2.5-flash/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-flash/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-flash",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-preview-tts-model-route::/maas/user-11374/gemini/gemini-2.5-flash-preview-tts/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-preview-tts-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-flash-preview-tts/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-flash-preview-tts",
+      "model_source": "path",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-flash-preview-tts-model-route::/gemini/gemini-2.5-flash-preview-tts/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-flash-preview-tts-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-flash-preview-tts/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-flash-preview-tts",
+      "model_source": "path",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-pro-generate-content-model-route::/maas/user-11374/gemini/gemini-2.5-pro/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-pro-generate-content-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-pro/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-pro-generate-content-model-route::/gemini/gemini-2.5-pro/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-pro-generate-content-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-pro/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-pro-messages-model-route::/maas/user-11374/gemini/gemini-2.5-pro/v1/messages",
+      "kong_route": "11377-maas-v2-gemini-2.5-pro-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-pro/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-pro",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-pro-messages-model-route::/gemini/gemini-2.5-pro/v1/messages",
+      "kong_route": "11377-maas-v2-gemini-2.5-pro-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-pro/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-pro",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-pro-model-route::/maas/user-11374/gemini/gemini-2.5-pro/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.5-pro-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-pro/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-pro",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-pro-model-route::/gemini/gemini-2.5-pro/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-2.5-pro-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-pro/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-2.5-pro",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-2.5-pro",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-pro-preview-tts-model-route::/maas/user-11374/gemini/gemini-2.5-pro-preview-tts/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-pro-preview-tts-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-2.5-pro-preview-tts/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-pro-preview-tts",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-2.5-pro-preview-tts-model-route::/gemini/gemini-2.5-pro-preview-tts/v1/generateContent",
+      "kong_route": "11377-maas-v2-gemini-2.5-pro-preview-tts-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-2.5-pro-preview-tts/v1/generateContent",
+      "canonical_path": null,
+      "model": "gemini-2.5-pro-preview-tts",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-3-flash-preview-model-route::/maas/user-11374/gemini/gemini-3-flash-preview/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-3-flash-preview-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-3-flash-preview/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-3-flash-preview",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-3-flash-preview",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-3-flash-preview-model-route::/gemini/gemini-3-flash-preview/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-3-flash-preview-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-3-flash-preview/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-3-flash-preview",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-3-flash-preview",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-3.1-flash-lite-model-route::/maas/user-11374/gemini/gemini-3.1-flash-lite/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-3.1-flash-lite-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-3.1-flash-lite/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-3.1-flash-lite",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-3.1-flash-lite",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-3.1-flash-lite-model-route::/gemini/gemini-3.1-flash-lite/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-3.1-flash-lite-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-3.1-flash-lite/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-3.1-flash-lite",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-3.1-flash-lite",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-3.1-pro-preview-model-route::/maas/user-11374/gemini/gemini-3.1-pro-preview/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-3.1-pro-preview-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-3.1-pro-preview/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-3.1-pro-preview",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-3.1-pro-preview",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-3.1-pro-preview-model-route::/gemini/gemini-3.1-pro-preview/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemini-3.1-pro-preview-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-3.1-pro-preview/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemini-3.1-pro-preview",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-3.1-pro-preview",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-embedding-001-model-route::/maas/user-11374/gemini/gemini-embedding-001/v1/embeddings",
+      "kong_route": "11377-maas-v2-gemini-embedding-001-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/gemini/gemini-embedding-001/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "gemini-embedding-001",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-embedding-001",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemini-embedding-001-model-route::/gemini/gemini-embedding-001/v1/embeddings",
+      "kong_route": "11377-maas-v2-gemini-embedding-001-model-route",
+      "method": "POST",
+      "legacy_path": "/gemini/gemini-embedding-001/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "gemini-embedding-001",
+      "model_source": "plugin",
+      "provider": "gemini",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "gemini-embedding-001",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemma-4-31b-it-messages-model-route::/maas/user-11374/google/gemma-4-31b-it/v1/messages",
+      "kong_route": "11377-maas-v2-gemma-4-31b-it-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/google/gemma-4-31b-it/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "google/gemma-4-31b-it",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "google/gemma-4-31b-it",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemma-4-31b-it-messages-model-route::/google/gemma-4-31b-it/v1/messages",
+      "kong_route": "11377-maas-v2-gemma-4-31b-it-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/google/gemma-4-31b-it/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "google/gemma-4-31b-it",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "google/gemma-4-31b-it",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemma-4-31b-it-model-route::/maas/user-11374/google/gemma-4-31b-it/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemma-4-31b-it-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/google/gemma-4-31b-it/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "google/gemma-4-31b-it",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "google/gemma-4-31b-it",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemma-4-31b-it-model-route::/google/gemma-4-31b-it/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gemma-4-31b-it-model-route",
+      "method": "POST",
+      "legacy_path": "/google/gemma-4-31b-it/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "google/gemma-4-31b-it",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "google/gemma-4-31b-it",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemma-4-31b-it-responses-model-route::/maas/user-11374/google/gemma-4-31b-it/v1/responses",
+      "kong_route": "11377-maas-v2-gemma-4-31b-it-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/google/gemma-4-31b-it/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "google/gemma-4-31b-it",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "google/gemma-4-31b-it",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-gemma-4-31b-it-responses-model-route::/google/gemma-4-31b-it/v1/responses",
+      "kong_route": "11377-maas-v2-gemma-4-31b-it-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/google/gemma-4-31b-it/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "google/gemma-4-31b-it",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "google/gemma-4-31b-it",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-5.1-messages-model-route::/maas/user-11374/z-ai/glm-5.1/v1/messages",
+      "kong_route": "11377-maas-v2-glm-5.1-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/z-ai/glm-5.1/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "glm-5.1",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.1",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-5.1-messages-model-route::/z-ai/glm-5.1/v1/messages",
+      "kong_route": "11377-maas-v2-glm-5.1-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/z-ai/glm-5.1/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "glm-5.1",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.1",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-5.2-messages-model-route::/maas/user-11374/z-ai/glm-5.2/v1/messages",
+      "kong_route": "11377-maas-v2-glm-5.2-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/z-ai/glm-5.2/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "zai-org/GLM-5.2-FP8",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "zai-org/GLM-5.2-FP8",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-5.2-messages-model-route::/z-ai/glm-5.2/v1/messages",
+      "kong_route": "11377-maas-v2-glm-5.2-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/z-ai/glm-5.2/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "zai-org/GLM-5.2-FP8",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "zai-org/GLM-5.2-FP8",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-5.2-model-route::/maas/user-11374/z-ai/zai-org/GLM-5.2-FP8/v1/chat/completions",
+      "kong_route": "11377-maas-v2-glm-5.2-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/z-ai/zai-org/GLM-5.2-FP8/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "zai-org/GLM-5.2-FP8",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "zai-org/GLM-5.2-FP8",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-5.2-model-route::/z-ai/zai-org/GLM-5.2-FP8/v1/chat/completions",
+      "kong_route": "11377-maas-v2-glm-5.2-model-route",
+      "method": "POST",
+      "legacy_path": "/z-ai/zai-org/GLM-5.2-FP8/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "zai-org/GLM-5.2-FP8",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "zai-org/GLM-5.2-FP8",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-5.2-responses-model-route::/maas/user-11374/z-ai/glm-5.2/v1/responses",
+      "kong_route": "11377-maas-v2-glm-5.2-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/z-ai/glm-5.2/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "zai-org/GLM-5.2-FP8",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "zai-org/GLM-5.2-FP8",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-5.2-responses-model-route::/z-ai/glm-5.2/v1/responses",
+      "kong_route": "11377-maas-v2-glm-5.2-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/z-ai/glm-5.2/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "zai-org/GLM-5.2-FP8",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "zai-org/GLM-5.2-FP8",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-realmodel-route::/maas/user-11374/z-ai/glm-5.1/v1/chat/completions",
+      "kong_route": "11377-maas-v2-glm-realmodel-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/z-ai/glm-5.1/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "glm-5.1",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-glm-realmodel-route::/z-ai/glm-5.1/v1/chat/completions",
+      "kong_route": "11377-maas-v2-glm-realmodel-route",
+      "method": "POST",
+      "legacy_path": "/z-ai/glm-5.1/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "glm-5.1",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-3.5-turbo-instruct-model-route::/maas/user-11374/openai/gpt-3.5-turbo-instruct/v1/completions",
+      "kong_route": "11377-maas-v2-gpt-3.5-turbo-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-3.5-turbo-instruct/v1/completions",
+      "canonical_path": null,
+      "model": "gpt-3.5-turbo-instruct",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-3.5-turbo-instruct",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-3.5-turbo-instruct-model-route::/openai/gpt-3.5-turbo-instruct/v1/completions",
+      "kong_route": "11377-maas-v2-gpt-3.5-turbo-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-3.5-turbo-instruct/v1/completions",
+      "canonical_path": null,
+      "model": "gpt-3.5-turbo-instruct",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-3.5-turbo-instruct",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-3.5-turbo-model-route::/maas/user-11374/openai/gpt-3.5-turbo/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-3.5-turbo-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-3.5-turbo/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-3.5-turbo",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-3.5-turbo-model-route::/openai/gpt-3.5-turbo/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-3.5-turbo-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-3.5-turbo/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-3.5-turbo",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-4o-mini-model-route::/maas/user-11374/openai/gpt-4o-mini/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-4o-mini-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-4o-mini/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-4o-mini",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-4o-mini-model-route::/openai/gpt-4o-mini/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-4o-mini-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-4o-mini/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-4o-mini",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-4o-mini",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-4o-model-route::/maas/user-11374/openai/gpt-4o/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-4o-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-4o/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-4o",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-4o-model-route::/openai/gpt-4o/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-4o-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-4o/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-4o",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-messages-model-route::/maas/user-11374/openai/gpt-5/v1/messages",
+      "kong_route": "11377-maas-v2-gpt-5-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-5/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "gpt-5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-messages-model-route::/openai/gpt-5/v1/messages",
+      "kong_route": "11377-maas-v2-gpt-5-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-5/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "gpt-5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-mini-model-route::/maas/user-11374/openai/gpt-5-mini/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-5-mini-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-5-mini/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-5-mini",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5-mini",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-mini-model-route::/openai/gpt-5-mini/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-5-mini-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-5-mini/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-5-mini",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5-mini",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-mini-responses-model-route::/maas/user-11374/openai/gpt-5-mini/v1/responses",
+      "kong_route": "11377-maas-v2-gpt-5-mini-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-5-mini/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "gpt-5-mini",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5-mini",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-mini-responses-model-route::/openai/gpt-5-mini/v1/responses",
+      "kong_route": "11377-maas-v2-gpt-5-mini-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-5-mini/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "gpt-5-mini",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5-mini",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-model-route::/maas/user-11374/openai/gpt-5/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-5-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-5/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-5",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-model-route::/openai/gpt-5/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-5-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-5/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-5",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-nano-model-route::/maas/user-11374/openai/gpt-5-nano/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-5-nano-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-5-nano/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-5-nano",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5-nano",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-nano-model-route::/openai/gpt-5-nano/v1/chat/completions",
+      "kong_route": "11377-maas-v2-gpt-5-nano-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-5-nano/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-5-nano",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5-nano",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-nano-responses-model-route::/maas/user-11374/openai/gpt-5-nano/v1/responses",
+      "kong_route": "11377-maas-v2-gpt-5-nano-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-5-nano/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "gpt-5-nano",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5-nano",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-nano-responses-model-route::/openai/gpt-5-nano/v1/responses",
+      "kong_route": "11377-maas-v2-gpt-5-nano-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-5-nano/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "gpt-5-nano",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5-nano",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-responses-model-route::/maas/user-11374/openai/gpt-5/v1/responses",
+      "kong_route": "11377-maas-v2-gpt-5-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-5/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "gpt-5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-5-responses-model-route::/openai/gpt-5/v1/responses",
+      "kong_route": "11377-maas-v2-gpt-5-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-5/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "gpt-5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-5",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-image-1-mini-model-route::/maas/user-11374/openai/gpt-image-1-mini/v1/images/generations",
+      "kong_route": "11377-maas-v2-gpt-image-1-mini-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-image-1-mini/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "gpt-image-1-mini",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-image-1-mini",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-image-1-mini-model-route::/openai/gpt-image-1-mini/v1/images/generations",
+      "kong_route": "11377-maas-v2-gpt-image-1-mini-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-image-1-mini/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "gpt-image-1-mini",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-image-1-mini",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-image-2-model-route::/maas/user-11374/openai/gpt-image-2/v1/images/generations",
+      "kong_route": "11377-maas-v2-gpt-image-2-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-image-2/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "gpt-image-2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-image-2",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-gpt-image-2-model-route::/openai/gpt-image-2/v1/images/generations",
+      "kong_route": "11377-maas-v2-gpt-image-2-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-image-2/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "gpt-image-2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-image-2",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-khoand12-admin-chat-model-route::/maas/user-11374/GreenNode/GreenNode-mini-7B-1106/v1/chat/completions",
+      "kong_route": "11377-maas-v2-khoand12-admin-chat-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/GreenNode/GreenNode-mini-7B-1106/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "GreenNode/GreenNode-mini-7B-1106",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "GreenNode/GreenNode-mini-7B-1106",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-khoand12-admin-chat-model-route::/GreenNode/GreenNode-mini-7B-1106/v1/chat/completions",
+      "kong_route": "11377-maas-v2-khoand12-admin-chat-model-route",
+      "method": "POST",
+      "legacy_path": "/GreenNode/GreenNode-mini-7B-1106/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "GreenNode/GreenNode-mini-7B-1106",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "GreenNode/GreenNode-mini-7B-1106",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-ksp-glm-5.2-messages-model-route::/maas/user-11374/ksp/glm-5.2/v1/messages",
+      "kong_route": "11377-maas-v2-ksp-glm-5.2-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/ksp/glm-5.2/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "glm-5.2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.2",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-ksp-glm-5.2-messages-model-route::/ksp/glm-5.2/v1/messages",
+      "kong_route": "11377-maas-v2-ksp-glm-5.2-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/ksp/glm-5.2/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "glm-5.2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.2",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-ksp-glm-5.2-model-route::/maas/user-11374/ksp/glm-5.2/v1/chat/completions",
+      "kong_route": "11377-maas-v2-ksp-glm-5.2-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/ksp/glm-5.2/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "glm-5.2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-ksp-glm-5.2-model-route::/ksp/glm-5.2/v1/chat/completions",
+      "kong_route": "11377-maas-v2-ksp-glm-5.2-model-route",
+      "method": "POST",
+      "legacy_path": "/ksp/glm-5.2/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "glm-5.2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-ksp-glm-5.2-response-model-route::/maas/user-11374/ksp/glm-5.2/v1/responses",
+      "kong_route": "11377-maas-v2-ksp-glm-5.2-response-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/ksp/glm-5.2/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "glm-5.2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.2",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-ksp-glm-5.2-response-model-route::/ksp/glm-5.2/v1/responses",
+      "kong_route": "11377-maas-v2-ksp-glm-5.2-response-model-route",
+      "method": "POST",
+      "legacy_path": "/ksp/glm-5.2/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "glm-5.2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "glm-5.2",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-meta-llama-3-2-1-completions-model-route::/maas/user-11374/meta-llama/Llama-3.2-1B/v1/completions",
+      "kong_route": "11377-maas-v2-meta-llama-3-2-1-completions-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/meta-llama/Llama-3.2-1B/v1/completions",
+      "canonical_path": null,
+      "model": "/models/meta-llama/Llama-3.2-1B",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "/models/meta-llama/Llama-3.2-1B",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-meta-llama-3-2-1-completions-model-route::/meta-llama/Llama-3.2-1B/v1/completions",
+      "kong_route": "11377-maas-v2-meta-llama-3-2-1-completions-model-route",
+      "method": "POST",
+      "legacy_path": "/meta-llama/Llama-3.2-1B/v1/completions",
+      "canonical_path": null,
+      "model": "/models/meta-llama/Llama-3.2-1B",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "/models/meta-llama/Llama-3.2-1B",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-minimax-m2.5-messages-model-route::/maas/user-11374/minimax/minimax-m2.5/v1/messages",
+      "kong_route": "11377-maas-v2-minimax-m2.5-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/minimax/minimax-m2.5/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "MiniMax-M2.5",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "MiniMax-M2.5",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-minimax-m2.5-messages-model-route::/minimax/minimax-m2.5/v1/messages",
+      "kong_route": "11377-maas-v2-minimax-m2.5-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/minimax/minimax-m2.5/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "MiniMax-M2.5",
+      "model_source": "plugin",
+      "provider": "anthropic",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "MiniMax-M2.5",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-minimax-m2.5-model-route::/maas/user-11374/minimax/minimax-m2.5/v1/chat/completions",
+      "kong_route": "11377-maas-v2-minimax-m2.5-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/minimax/minimax-m2.5/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "MiniMax-M2.5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "MiniMax-M2.5",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-minimax-m2.5-model-route::/minimax/minimax-m2.5/v1/chat/completions",
+      "kong_route": "11377-maas-v2-minimax-m2.5-model-route",
+      "method": "POST",
+      "legacy_path": "/minimax/minimax-m2.5/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "MiniMax-M2.5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "MiniMax-M2.5",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-minimax-m2.5-responses-model-route::/maas/user-11374/minimax/minimax-m2.5/v1/responses",
+      "kong_route": "11377-maas-v2-minimax-m2.5-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/minimax/minimax-m2.5/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "minimax-m2.5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "minimax-m2.5",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-minimax-m2.5-responses-model-route::/minimax/minimax-m2.5/v1/responses",
+      "kong_route": "11377-maas-v2-minimax-m2.5-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/minimax/minimax-m2.5/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "minimax-m2.5",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "minimax-m2.5",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-models-meta-llama-llama-3-2-1b-me-9eb017f1-c087-48d2-a437-5d3b0709566b-chat-model-route::/maas/user-11374/meta-llama/Llama-3.2-1B/v1/chat/completions",
+      "kong_route": "11377-maas-v2-models-meta-llama-llama-3-2-1b-me-9eb017f1-c087-48d2-a437-5d3b0709566b-chat-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/meta-llama/Llama-3.2-1B/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "/models/meta-llama/Llama-3.2-1B",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "/models/meta-llama/Llama-3.2-1B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-models-meta-llama-llama-3-2-1b-me-9eb017f1-c087-48d2-a437-5d3b0709566b-chat-model-route::/meta-llama/Llama-3.2-1B/v1/chat/completions",
+      "kong_route": "11377-maas-v2-models-meta-llama-llama-3-2-1b-me-9eb017f1-c087-48d2-a437-5d3b0709566b-chat-model-route",
+      "method": "POST",
+      "legacy_path": "/meta-llama/Llama-3.2-1B/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "/models/meta-llama/Llama-3.2-1B",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "/models/meta-llama/Llama-3.2-1B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-dall-e-2-model-route::/maas/user-11374/openai/dall-e-2/v1/images/generations",
+      "kong_route": "11377-maas-v2-openai-dall-e-2-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/dall-e-2/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "dall-e-2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "dall-e-2",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-dall-e-2-model-route::/openai/dall-e-2/v1/images/generations",
+      "kong_route": "11377-maas-v2-openai-dall-e-2-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/dall-e-2/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "dall-e-2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "dall-e-2",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-dall-e-3-model-route::/maas/user-11374/openai/dall-e-3/v1/images/generations",
+      "kong_route": "11377-maas-v2-openai-dall-e-3-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/dall-e-3/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "dall-e-3",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "dall-e-3",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-dall-e-3-model-route::/openai/dall-e-3/v1/images/generations",
+      "kong_route": "11377-maas-v2-openai-dall-e-3-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/dall-e-3/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "dall-e-3",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "dall-e-3",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-gpt-image-1-model-route::/maas/user-11374/openai/gpt-image-1/v1/images/generations",
+      "kong_route": "11377-maas-v2-openai-gpt-image-1-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-image-1/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "gpt-image-1",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-image-1",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-gpt-image-1-model-route::/openai/gpt-image-1/v1/images/generations",
+      "kong_route": "11377-maas-v2-openai-gpt-image-1-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-image-1/v1/images/generations",
+      "canonical_path": "/v1/images/generations",
+      "model": "gpt-image-1",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/images/generations",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-image-1",
+        "prompt": "a red square",
+        "n": 1,
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-text-embedding-3-large-model-route::/maas/user-11374/openai/text-embedding-3-large/v1/embeddings",
+      "kong_route": "11377-maas-v2-openai-text-embedding-3-large-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/text-embedding-3-large/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "text-embedding-3-large",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "text-embedding-3-large",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-text-embedding-3-large-model-route::/openai/text-embedding-3-large/v1/embeddings",
+      "kong_route": "11377-maas-v2-openai-text-embedding-3-large-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/text-embedding-3-large/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "text-embedding-3-large",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "text-embedding-3-large",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-text-embedding-3-small-model-route::/maas/user-11374/openai/text-embedding-3-small/v1/embeddings",
+      "kong_route": "11377-maas-v2-openai-text-embedding-3-small-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/text-embedding-3-small/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "text-embedding-3-small",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "text-embedding-3-small",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-text-embedding-3-small-model-route::/openai/text-embedding-3-small/v1/embeddings",
+      "kong_route": "11377-maas-v2-openai-text-embedding-3-small-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/text-embedding-3-small/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "text-embedding-3-small",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "text-embedding-3-small",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-text-embedding-ada-002-model-route::/maas/user-11374/openai/text-embedding-ada-002/v1/embeddings",
+      "kong_route": "11377-maas-v2-openai-text-embedding-ada-002-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/text-embedding-ada-002/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "text-embedding-ada-002",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "text-embedding-ada-002",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-text-embedding-ada-002-model-route::/openai/text-embedding-ada-002/v1/embeddings",
+      "kong_route": "11377-maas-v2-openai-text-embedding-ada-002-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/text-embedding-ada-002/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "text-embedding-ada-002",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "text-embedding-ada-002",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-whisper-large-v3-model-route::/maas/user-11374/openai/whisper-large-v3/v1/generateContent",
+      "kong_route": "11377-maas-v2-openai-whisper-large-v3-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/whisper-large-v3/v1/generateContent",
+      "canonical_path": null,
+      "model": "openai/whisper-large-v3",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-openai-whisper-large-v3-model-route::/openai/whisper-large-v3/v1/generateContent",
+      "kong_route": "11377-maas-v2-openai-whisper-large-v3-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/whisper-large-v3/v1/generateContent",
+      "canonical_path": null,
+      "model": "openai/whisper-large-v3",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/generateContent",
+      "streaming": "allow",
+      "body": {
+        "contents": [
+          {
+            "parts": [
+              {
+                "text": "Reply with the single word OK."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-235b-a22b-instruct-2507-model-route::/maas/user-11374/qwen/qwen3-235b-a22b-instruct-2507/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-235b-a22b-instruct-2507-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-235b-a22b-instruct-2507/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-235b-a22b-instruct-2507",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-235b-a22b-instruct-2507",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-235b-a22b-instruct-2507-model-route::/qwen/qwen3-235b-a22b-instruct-2507/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-235b-a22b-instruct-2507-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-235b-a22b-instruct-2507/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-235b-a22b-instruct-2507",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-235b-a22b-instruct-2507",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-235b-a22b-thinking-2507-model-route::/maas/user-11374/qwen/qwen3-235b-a22b-thinking-2507/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-235b-a22b-thinking-2507-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-235b-a22b-thinking-2507/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-235b-a22b-thinking-2507",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-235b-a22b-thinking-2507",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-235b-a22b-thinking-2507-model-route::/qwen/qwen3-235b-a22b-thinking-2507/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-235b-a22b-thinking-2507-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-235b-a22b-thinking-2507/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-235b-a22b-thinking-2507",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-235b-a22b-thinking-2507",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-30b-a3b-thinking-2507-model-route::/maas/user-11374/qwen/qwen3-30b-a3b-thinking-2507/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-30b-a3b-thinking-2507-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-30b-a3b-thinking-2507/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-30b-a3b-thinking-2507",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-30b-a3b-thinking-2507",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-30b-a3b-thinking-2507-model-route::/qwen/qwen3-30b-a3b-thinking-2507/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-30b-a3b-thinking-2507-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-30b-a3b-thinking-2507/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-30b-a3b-thinking-2507",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-30b-a3b-thinking-2507",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-5-27b-messages-model-route::/maas/user-11374/qwen/qwen3.5-27b/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3-5-27b-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3.5-27b/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3.5-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.5-27b",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-5-27b-messages-model-route::/qwen/qwen3.5-27b/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3-5-27b-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3.5-27b/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3.5-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.5-27b",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-5-27b-model-route::/maas/user-11374/qwen/qwen3.5-27b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-5-27b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3.5-27b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3.5-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.5-27b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-5-27b-model-route::/qwen/qwen3.5-27b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-5-27b-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3.5-27b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3.5-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.5-27b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-5-27b-responses-model-route::/maas/user-11374/qwen/qwen3.5-27b/v1/responses",
+      "kong_route": "11377-maas-v2-qwen3-5-27b-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3.5-27b/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "qwen3.5-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.5-27b",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-5-27b-responses-model-route::/qwen/qwen3.5-27b/v1/responses",
+      "kong_route": "11377-maas-v2-qwen3-5-27b-responses-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3.5-27b/v1/responses",
+      "canonical_path": "/v1/responses",
+      "model": "qwen3.5-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/responses",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.5-27b",
+        "input": "Reply with the single word OK.",
+        "max_output_tokens": 16
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-6-27b-messages-model-route::/maas/user-11374/qwen/qwen3.6-27b/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3-6-27b-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3.6-27b/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3.6-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.6-27b",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-6-27b-messages-model-route::/qwen/qwen3.6-27b/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3-6-27b-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3.6-27b/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3.6-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.6-27b",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-6-27b-model-route::/maas/user-11374/qwen/qwen3.6-27b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-6-27b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3.6-27b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3.6-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.6-27b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-6-27b-model-route::/qwen/qwen3.6-27b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-6-27b-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3.6-27b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3.6-27b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.6-27b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-480b-a35b-instruct-model-route::/maas/user-11374/qwen/qwen3-coder-480b-a35b-instruct/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-coder-480b-a35b-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-coder-480b-a35b-instruct/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-coder-480b-a35b-instruct",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-480b-a35b-instruct",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-480b-a35b-instruct-model-route::/qwen/qwen3-coder-480b-a35b-instruct/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-coder-480b-a35b-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-coder-480b-a35b-instruct/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-coder-480b-a35b-instruct",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-480b-a35b-instruct",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-plus-2025-07-22-messages-model-route::/maas/user-11374/qwen/qwen3-coder-plus-2025-07-22/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3-coder-plus-2025-07-22-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-coder-plus-2025-07-22/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3-coder-plus-2025-07-22",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-plus-2025-07-22",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-plus-2025-07-22-messages-model-route::/qwen/qwen3-coder-plus-2025-07-22/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3-coder-plus-2025-07-22-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-coder-plus-2025-07-22/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3-coder-plus-2025-07-22",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-plus-2025-07-22",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-plus-2025-07-22-model-route::/maas/user-11374/qwen/qwen3-coder-plus-2025-07-22/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-coder-plus-2025-07-22-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-coder-plus-2025-07-22/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-coder-plus-2025-07-22",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-plus-2025-07-22",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-plus-2025-07-22-model-route::/qwen/qwen3-coder-plus-2025-07-22/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-coder-plus-2025-07-22-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-coder-plus-2025-07-22/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-coder-plus-2025-07-22",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-plus-2025-07-22",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-plus-messages-model-route::/maas/user-11374/qwen/qwen3-coder-plus/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3-coder-plus-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-coder-plus/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3-coder-plus",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-plus",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-plus-messages-model-route::/qwen/qwen3-coder-plus/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3-coder-plus-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-coder-plus/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3-coder-plus",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-plus",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-plus-model-route::/maas/user-11374/qwen/qwen3-coder-plus/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-coder-plus-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-coder-plus/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-coder-plus",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-plus",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-coder-plus-model-route::/qwen/qwen3-coder-plus/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-coder-plus-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-coder-plus/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-coder-plus",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-plus",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-vl-235b-a22b-instruct-model-route::/maas/user-11374/qwen/qwen3-vl-235b-a22b-instruct/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-vl-235b-a22b-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-vl-235b-a22b-instruct/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-vl-235b-a22b-instruct",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-vl-235b-a22b-instruct",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3-vl-235b-a22b-instruct-model-route::/qwen/qwen3-vl-235b-a22b-instruct/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3-vl-235b-a22b-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-vl-235b-a22b-instruct/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-vl-235b-a22b-instruct",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-vl-235b-a22b-instruct",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3.7-plus-messages-model-route::/maas/user-11374/qwen/qwen3.7-plus/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3.7-plus-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3.7-plus/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3.7-plus",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.7-plus",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3.7-plus-messages-model-route::/qwen/qwen3.7-plus/v1/messages",
+      "kong_route": "11377-maas-v2-qwen3.7-plus-messages-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3.7-plus/v1/messages",
+      "canonical_path": "/v1/messages",
+      "model": "qwen3.7-plus",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/messages",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.7-plus",
+        "max_tokens": 8,
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3.7-plus-model-route::/maas/user-11374/qwen/qwen3.7-plus/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3.7-plus-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3.7-plus/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3.7-plus",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.7-plus",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-qwen3.7-plus-model-route::/qwen/qwen3.7-plus/v1/chat/completions",
+      "kong_route": "11377-maas-v2-qwen3.7-plus-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3.7-plus/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3.7-plus",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3.7-plus",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-deepseek-r1-distill-llama-8b-model-route::/maas/user-11374/deepseek/deepseek-r1-distill-llama-8b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-deepseek-r1-distill-llama-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-r1-distill-llama-8b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek/deepseek-r1-distill-llama-8b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek/deepseek-r1-distill-llama-8b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-deepseek-r1-distill-llama-8b-model-route::/deepseek/deepseek-r1-distill-llama-8b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-deepseek-r1-distill-llama-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-r1-distill-llama-8b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek/deepseek-r1-distill-llama-8b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek/deepseek-r1-distill-llama-8b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-deepseek-r1-qwen3-8b-model-route::/maas/user-11374/deepseek/deepseek-r1-qwen3-8b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-deepseek-r1-qwen3-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-r1-qwen3-8b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-r1-qwen3-8b",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-r1-qwen3-8b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-deepseek-r1-qwen3-8b-model-route::/deepseek/deepseek-r1-qwen3-8b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-deepseek-r1-qwen3-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-r1-qwen3-8b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-r1-qwen3-8b",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-r1-qwen3-8b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-deepseek-v2-lite-model-route::/maas/user-11374/deepseek/deepseek-v2-lite/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-deepseek-v2-lite-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/deepseek/deepseek-v2-lite/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-v2-lite",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v2-lite",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-deepseek-v2-lite-model-route::/deepseek/deepseek-v2-lite/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-deepseek-v2-lite-model-route",
+      "method": "POST",
+      "legacy_path": "/deepseek/deepseek-v2-lite/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "deepseek-v2-lite",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "deepseek-v2-lite",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-gemma-3-27b-it-model-route::/maas/user-11374/google/gemma-3-27b-it/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-gemma-3-27b-it-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/google/gemma-3-27b-it/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemma-3-27b-it",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemma-3-27b-it",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-gemma-3-27b-it-model-route::/google/gemma-3-27b-it/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-gemma-3-27b-it-model-route",
+      "method": "POST",
+      "legacy_path": "/google/gemma-3-27b-it/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gemma-3-27b-it",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gemma-3-27b-it",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greenmind-medium-14b-r1-chat-model-route::/maas/user-11374/greennode/greenmind-medium-14b-r1/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-greenmind-medium-14b-r1-chat-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/greennode/greenmind-medium-14b-r1/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "greenmind-medium-14b-r1",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "greenmind-medium-14b-r1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greenmind-medium-14b-r1-chat-model-route::/greennode/greenmind-medium-14b-r1/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-greenmind-medium-14b-r1-chat-model-route",
+      "method": "POST",
+      "legacy_path": "/greennode/greenmind-medium-14b-r1/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "greenmind-medium-14b-r1",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "greenmind-medium-14b-r1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greenmind-medium-14b-r1-completions-model-route::/maas/user-11374/GreenNode/GreenMind-Medium-14B-R1/v1/completions",
+      "kong_route": "11377-maas-v2-selfhost-greenmind-medium-14b-r1-completions-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/GreenNode/GreenMind-Medium-14B-R1/v1/completions",
+      "canonical_path": null,
+      "model": "GreenNode/GreenMind-Medium-14B-R1",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "GreenNode/GreenMind-Medium-14B-R1",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greenmind-medium-14b-r1-completions-model-route::/GreenNode/GreenMind-Medium-14B-R1/v1/completions",
+      "kong_route": "11377-maas-v2-selfhost-greenmind-medium-14b-r1-completions-model-route",
+      "method": "POST",
+      "legacy_path": "/GreenNode/GreenMind-Medium-14B-R1/v1/completions",
+      "canonical_path": null,
+      "model": "GreenNode/GreenMind-Medium-14B-R1",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "GreenNode/GreenMind-Medium-14B-R1",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greennode-embedding-1b5-instruct-1007-model-route::/maas/user-11374/GreenNode/GreenNode-Embedding-1B5-Instruct-1007/v1/embeddings",
+      "kong_route": "11377-maas-v2-selfhost-greennode-embedding-1b5-instruct-1007-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/GreenNode/GreenNode-Embedding-1B5-Instruct-1007/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "GreenNode/GreenNode-Embedding-1B5-Instruct-1007",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "GreenNode/GreenNode-Embedding-1B5-Instruct-1007",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greennode-embedding-1b5-instruct-1007-model-route::/GreenNode/GreenNode-Embedding-1B5-Instruct-1007/v1/embeddings",
+      "kong_route": "11377-maas-v2-selfhost-greennode-embedding-1b5-instruct-1007-model-route",
+      "method": "POST",
+      "legacy_path": "/GreenNode/GreenNode-Embedding-1B5-Instruct-1007/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "GreenNode/GreenNode-Embedding-1B5-Instruct-1007",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "GreenNode/GreenNode-Embedding-1B5-Instruct-1007",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greennode-embedding-large-1007-model-route::/maas/user-11374/greennode/greennode-embedding-large-1007/v1/embeddings",
+      "kong_route": "11377-maas-v2-selfhost-greennode-embedding-large-1007-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/greennode/greennode-embedding-large-1007/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "greennode-embedding-large-1007",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "greennode-embedding-large-1007",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greennode-embedding-large-1007-model-route::/greennode/greennode-embedding-large-1007/v1/embeddings",
+      "kong_route": "11377-maas-v2-selfhost-greennode-embedding-large-1007-model-route",
+      "method": "POST",
+      "legacy_path": "/greennode/greennode-embedding-large-1007/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "greennode-embedding-large-1007",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "greennode-embedding-large-1007",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greennode-mini-7b-1106-completions-model-route::/maas/user-11374/GreenNode/GreenNode-mini-7B-1106/v1/completions",
+      "kong_route": "11377-maas-v2-selfhost-greennode-mini-7b-1106-completions-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/GreenNode/GreenNode-mini-7B-1106/v1/completions",
+      "canonical_path": null,
+      "model": "GreenNode/GreenNode-mini-7B-1106",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "GreenNode/GreenNode-mini-7B-1106",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-greennode-mini-7b-1106-completions-model-route::/GreenNode/GreenNode-mini-7B-1106/v1/completions",
+      "kong_route": "11377-maas-v2-selfhost-greennode-mini-7b-1106-completions-model-route",
+      "method": "POST",
+      "legacy_path": "/GreenNode/GreenNode-mini-7B-1106/v1/completions",
+      "canonical_path": null,
+      "model": "GreenNode/GreenNode-mini-7B-1106",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "GreenNode/GreenNode-mini-7B-1106",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-llama-3.2-3b-instruct-model-route::/maas/user-11374/meta-llama/llama-3.2-3b-instruct/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-llama-3.2-3b-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/meta-llama/llama-3.2-3b-instruct/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "llama-3.2-3b-instruct",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "llama-3.2-3b-instruct",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-llama-3.2-3b-instruct-model-route::/meta-llama/llama-3.2-3b-instruct/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-llama-3.2-3b-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/meta-llama/llama-3.2-3b-instruct/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "llama-3.2-3b-instruct",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "llama-3.2-3b-instruct",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-meta-llama-3-8b-model-route::/maas/user-11374/meta-llama/meta-llama-3-8b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-meta-llama-3-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/meta-llama/meta-llama-3-8b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "meta-llama-3-8b",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "meta-llama-3-8b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-meta-llama-3-8b-model-route::/meta-llama/meta-llama-3-8b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-meta-llama-3-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/meta-llama/meta-llama-3-8b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "meta-llama-3-8b",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "meta-llama-3-8b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-meta-llama-4-maverick-model-route::/maas/user-11374/meta-llama/llama-4-maverick/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-meta-llama-4-maverick-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/meta-llama/llama-4-maverick/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "llama-4-maverick",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "llama-4-maverick",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-meta-llama-4-maverick-model-route::/meta-llama/llama-4-maverick/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-meta-llama-4-maverick-model-route",
+      "method": "POST",
+      "legacy_path": "/meta-llama/llama-4-maverick/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "llama-4-maverick",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "llama-4-maverick",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-meta-llama-4-scout-model-route::/maas/user-11374/meta-llama/llama-4-scout/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-meta-llama-4-scout-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/meta-llama/llama-4-scout/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "llama-4-scout",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "llama-4-scout",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-meta-llama-4-scout-model-route::/meta-llama/llama-4-scout/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-meta-llama-4-scout-model-route",
+      "method": "POST",
+      "legacy_path": "/meta-llama/llama-4-scout/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "llama-4-scout",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "llama-4-scout",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-nemotron-3-nano-30b-a3b-model-route::/maas/user-11374/nvidia/nemotron-3-nano-30b-a3b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-nemotron-3-nano-30b-a3b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/nvidia/nemotron-3-nano-30b-a3b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "nemotron-3-nano-30b-a3b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "nemotron-3-nano-30b-a3b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-nemotron-3-nano-30b-a3b-model-route::/nvidia/nemotron-3-nano-30b-a3b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-nemotron-3-nano-30b-a3b-model-route",
+      "method": "POST",
+      "legacy_path": "/nvidia/nemotron-3-nano-30b-a3b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "nemotron-3-nano-30b-a3b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "nemotron-3-nano-30b-a3b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-openai-gpt-oss-120b-model-route::/maas/user-11374/openai/gpt-oss-120b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-openai-gpt-oss-120b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-oss-120b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-oss-120b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-openai-gpt-oss-120b-model-route::/openai/gpt-oss-120b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-openai-gpt-oss-120b-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-oss-120b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-oss-120b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-oss-120b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-openai-gpt-oss-20b-model-route::/maas/user-11374/openai/gpt-oss-20b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-openai-gpt-oss-20b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/openai/gpt-oss-20b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-oss-20b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-oss-20b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-openai-gpt-oss-20b-model-route::/openai/gpt-oss-20b/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-openai-gpt-oss-20b-model-route",
+      "method": "POST",
+      "legacy_path": "/openai/gpt-oss-20b/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "gpt-oss-20b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "gpt-oss-20b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-qwen-qwen2-0-5b-model-route::/maas/user-11374/Qwen/Qwen2-0.5B/v1/completions",
+      "kong_route": "11377-maas-v2-selfhost-qwen-qwen2-0-5b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/Qwen/Qwen2-0.5B/v1/completions",
+      "canonical_path": null,
+      "model": "Qwen/Qwen2-0.5B",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "Qwen/Qwen2-0.5B",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-qwen-qwen2-0-5b-model-route::/Qwen/Qwen2-0.5B/v1/completions",
+      "kong_route": "11377-maas-v2-selfhost-qwen-qwen2-0-5b-model-route",
+      "method": "POST",
+      "legacy_path": "/Qwen/Qwen2-0.5B/v1/completions",
+      "canonical_path": null,
+      "model": "Qwen/Qwen2-0.5B",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/completions",
+      "streaming": "allow",
+      "body": {
+        "model": "Qwen/Qwen2-0.5B",
+        "prompt": "Reply with the single word OK.",
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-qwen3-coder-30b-a3b-instruct-model-route::/maas/user-11374/qwen/qwen3-coder-30b-a3b-instruct/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-qwen3-coder-30b-a3b-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-coder-30b-a3b-instruct/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-coder-30b-a3b-instruct",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-30b-a3b-instruct",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-qwen3-coder-30b-a3b-instruct-model-route::/qwen/qwen3-coder-30b-a3b-instruct/v1/chat/completions",
+      "kong_route": "11377-maas-v2-selfhost-qwen3-coder-30b-a3b-instruct-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-coder-30b-a3b-instruct/v1/chat/completions",
+      "canonical_path": "/v1/chat/completions",
+      "model": "qwen3-coder-30b-a3b-instruct",
+      "model_source": "path",
+      "provider": "openai",
+      "route_type": "llm/v1/chat",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-coder-30b-a3b-instruct",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with the single word OK."
+          }
+        ],
+        "max_tokens": 8
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-qwen3-embedding-8b-model-route::/maas/user-11374/qwen/qwen3-embedding-8b/v1/embeddings",
+      "kong_route": "11377-maas-v2-selfhost-qwen3-embedding-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-embedding-8b/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "qwen3-embedding-8b",
+      "model_source": "plugin",
+      "provider": "huggingface",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-embedding-8b",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-qwen3-embedding-8b-model-route::/qwen/qwen3-embedding-8b/v1/embeddings",
+      "kong_route": "11377-maas-v2-selfhost-qwen3-embedding-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-embedding-8b/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "qwen3-embedding-8b",
+      "model_source": "plugin",
+      "provider": "huggingface",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-embedding-8b",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-qwen3-reranker-8b-model-route::/maas/user-11374/qwen/qwen3-reranker-8b/v1/rerank",
+      "kong_route": "11377-maas-v2-selfhost-qwen3-reranker-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/qwen/qwen3-reranker-8b/v1/rerank",
+      "canonical_path": "/v1/rerank",
+      "model": "qwen3-reranker-8b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/rerank",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-reranker-8b",
+        "query": "hello",
+        "documents": [
+          "a",
+          "b"
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-qwen3-reranker-8b-model-route::/qwen/qwen3-reranker-8b/v1/rerank",
+      "kong_route": "11377-maas-v2-selfhost-qwen3-reranker-8b-model-route",
+      "method": "POST",
+      "legacy_path": "/qwen/qwen3-reranker-8b/v1/rerank",
+      "canonical_path": "/v1/rerank",
+      "model": "qwen3-reranker-8b",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/rerank",
+      "streaming": "allow",
+      "body": {
+        "model": "qwen3-reranker-8b",
+        "query": "hello",
+        "documents": [
+          "a",
+          "b"
+        ]
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-sentence-transformers-all-minilm-l6-v2-model-route::/maas/user-11374/sentence-transformers/all-MiniLM-L6-v2/v1/embeddings",
+      "kong_route": "11377-maas-v2-selfhost-sentence-transformers-all-minilm-l6-v2-model-route",
+      "method": "POST",
+      "legacy_path": "/maas/user-11374/sentence-transformers/all-MiniLM-L6-v2/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "sentence-transformers/all-MiniLM-L6-v2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "sentence-transformers/all-MiniLM-L6-v2",
+        "input": "hello"
+      }
+    },
+    {
+      "id": "11377-maas-v2-selfhost-sentence-transformers-all-minilm-l6-v2-model-route::/sentence-transformers/all-MiniLM-L6-v2/v1/embeddings",
+      "kong_route": "11377-maas-v2-selfhost-sentence-transformers-all-minilm-l6-v2-model-route",
+      "method": "POST",
+      "legacy_path": "/sentence-transformers/all-MiniLM-L6-v2/v1/embeddings",
+      "canonical_path": "/v1/embeddings",
+      "model": "sentence-transformers/all-MiniLM-L6-v2",
+      "model_source": "plugin",
+      "provider": "openai",
+      "route_type": "llm/v1/embeddings",
+      "streaming": "allow",
+      "body": {
+        "model": "sentence-transformers/all-MiniLM-L6-v2",
+        "input": "hello"
+      }
+    }
+  ],
+  "skipped": [
+    {
+      "route": "11377-maas-v2-short-routes",
+      "why": "no ai-proxy plugin attached"
+    }
+  ]
+}
