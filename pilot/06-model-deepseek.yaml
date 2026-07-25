@@ -4,6 +4,40 @@
 # providers, and a Public virtual model splits traffic 99:1 between them.
 # Internal visibility means clients cannot address the concrete models by name;
 # they are reachable only through the virtual model.
+#
+# HOW A WEIGHTED VIRTUAL MODEL ACTUALLY RESOLVES
+# ----------------------------------------------
+# `resolve_virtual_model()` (crates/agentgateway/src/llm/model_router.rs) picks
+# a weighted target, then uses that target's resolved NAME for two things at
+# once: it rewrites the `model` field of the request body to that name, AND it
+# looks the name up again with `resolve_concrete_model()`. The resolved target
+# name is `spec.virtualModel.weighted.targets[].model` when set, otherwise the
+# referenced CR's effective `match.model` (controller: `resolveModelTarget`).
+#
+# That has two consequences that shape everything below:
+#
+#  1. Setting `targets[].model: deepseek-v4-pro` (the real upstream name) makes
+#     the router look up a CONCRETE model called `deepseek-v4-pro`. The only
+#     resource with that name is this virtual model itself, and virtual models
+#     live in a separate list from concrete ones, so the lookup finds nothing:
+#         404 {"code":"virtual_model_target_not_found"}
+#     Verified empirically. `targets[].model` is only meant for the case where
+#     the referenced model uses a WILDCARD match.model, per the CRD docs.
+#
+#  2. Omitting `targets[].model` resolves to the alias
+#     (`deepseek-v4-pro-direct`), which routes correctly but would then be sent
+#     upstream as the model name - and no such model exists at DeepSeek or
+#     DashScope. AgentgatewayModel has no upstream model-name override field
+#     (`spec.custom` carries only `backendRef` and `formats`; the `model`
+#     override lives on AgentgatewayBackend providers, not here).
+#
+# The fix for (2) is `policies.transformations`, which sets fields on the
+# provider request body after routing: each concrete model rewrites `model`
+# back to the real upstream name `deepseek-v4-pro`. Both concrete models can
+# therefore keep DISTINCT routing aliases, which is what makes the 99:1 split
+# observable at all - `resolve_concrete_model()` is a first-match `find()`, so
+# two concrete models sharing one match.model would always select the same one
+# and the weighting would be silently dead.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayModel
 metadata:
@@ -28,6 +62,12 @@ spec:
       secretRef:
         name: deepseek-direct-key
         key: key
+    # Undo the routing-alias rewrite the virtual model performs, so the
+    # upstream sees the real model name. The expression is CEL, hence the
+    # inner quotes: it is a string literal, not a field reference.
+    transformations:
+      - field: model
+        expression: "'deepseek-v4-pro'"
 ---
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayModel
@@ -49,6 +89,9 @@ spec:
       secretRef:
         name: deepseek-dashscope-key
         key: key
+    transformations:
+      - field: model
+        expression: "'deepseek-v4-pro'"
 ---
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayModel
@@ -70,16 +113,13 @@ spec:
   virtualModel:
     weighted:
       targets:
+        # No `model:` override on either target - see the header comment.
+        # Each target resolves to the referenced CR's match.model, i.e. the
+        # distinct routing aliases, and each concrete model transforms the
+        # body back to `deepseek-v4-pro` before calling its provider.
         - modelRef:
             name: deepseek-v4-pro-direct
-          # `model` pins the name sent upstream. Without it the target would
-          # inherit the referenced CR's match.model (`deepseek-v4-pro-direct`),
-          # which is a routing alias, not a real model at either provider —
-          # both would 404. `deepseek-v4-pro` is the real upstream model name
-          # at api.deepseek.com and at DashScope, per the Kong config.
-          model: deepseek-v4-pro
           weight: 99
         - modelRef:
             name: deepseek-v4-pro-dashscope
-          model: deepseek-v4-pro
           weight: 1
