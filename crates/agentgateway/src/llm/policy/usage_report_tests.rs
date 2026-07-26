@@ -1,7 +1,7 @@
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{UsageReport, UsageReportPayload, send};
+use super::{InFlightLimiter, UsageReport, UsageReportPayload, send};
 use crate::cel::LLMContext;
 use crate::types::agent::{SimpleBackendReference, Target};
 
@@ -272,6 +272,28 @@ async fn configured_path_overrides_the_default() {
 
 	assert_eq!(mock.received_requests().await.unwrap().len(), 1);
 	assert_eq!(client.inputs.metrics.llm_usage_report_dropped.get(), 0);
+}
+
+// --- In-flight cap ----------------------------------------------------------
+
+/// A wedged receiver must not let in-flight reports grow without bound. Past
+/// the cap, reports are shed and counted rather than queued.
+#[tokio::test]
+async fn in_flight_reports_are_capped() {
+	let limiter = InFlightLimiter::new(2);
+
+	let a = limiter.try_acquire().expect("first permit");
+	let _b = limiter.try_acquire().expect("second permit");
+	assert!(
+		limiter.try_acquire().is_none(),
+		"third concurrent report must be shed, not queued"
+	);
+
+	drop(a);
+	assert!(
+		limiter.try_acquire().is_some(),
+		"permit must be reusable once released"
+	);
 }
 
 /// A dimension whose CEL expression fails must be omitted, and the report

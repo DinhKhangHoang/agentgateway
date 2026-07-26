@@ -187,6 +187,45 @@ impl UsageReportPayload {
 	}
 }
 
+/// Maximum concurrent in-flight usage reports per gateway.
+pub const DEFAULT_MAX_IN_FLIGHT: usize = 1024;
+
+/// Caps concurrent in-flight usage reports so a slow or wedged receiver
+/// cannot pile up unbounded tasks on the gateway.
+///
+/// The existing token amend spawns one unbounded task per request
+/// (`remoteratelimit.rs:145`); this cap exists so that adding a third sink to
+/// that fan-out does not inherit the same pile-up under a wedged receiver.
+#[derive(Clone)]
+pub struct InFlightLimiter(Arc<tokio::sync::Semaphore>);
+
+impl InFlightLimiter {
+	pub fn new(max: usize) -> Self {
+		Self(Arc::new(tokio::sync::Semaphore::new(max)))
+	}
+
+	/// Returns None when the cap is reached. Callers must shed and count,
+	/// never await a permit: blocking here would apply backpressure to
+	/// request completion, which is exactly what this must not do.
+	pub fn try_acquire(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+		self.0.clone().try_acquire_owned().ok()
+	}
+}
+
+impl Default for InFlightLimiter {
+	fn default() -> Self {
+		Self::new(DEFAULT_MAX_IN_FLIGHT)
+	}
+}
+
+impl std::fmt::Debug for InFlightLimiter {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("InFlightLimiter")
+			.field("available", &self.0.available_permits())
+			.finish()
+	}
+}
+
 /// Deliver one usage report, retrying on failure.
 ///
 /// Never returns an error: the response has already reached the client, so
