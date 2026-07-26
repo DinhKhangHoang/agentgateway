@@ -462,6 +462,13 @@ func (ex *exchange) reportUsage() {
 	ex.usaged = true
 	p := ex.p
 
+	// Native usageReport owns the true-up when this is off. Checked before the
+	// scan result is even read: with both enabled the tenant's TPM counter
+	// would be corrected twice for the same request. See UsageReportingEnabled.
+	if !p.cfg.UsageReportingEnabled {
+		return
+	}
+
 	if ex.apiKey == "" || ex.model == "" {
 		return
 	}

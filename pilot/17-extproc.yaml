@@ -162,6 +162,17 @@ spec:
             # deliberate, logged decision, never by accident.
             - name: UNSUPPORTED_GUARDRAIL_ACTION
               value: "deny"
+            # OFF: agentgateway's native usageReport policy
+            # (19-policy-usagereport.yaml) now owns the TPM true-up. With both
+            # enabled the same request debits the tenant's counter TWICE.
+            #
+            # This service stays in the response path even though it no longer
+            # reports. Taking it out with responseBodyMode: None was tried and
+            # BREAKS STREAMING on agentgateway 300d7906 — an SSE response
+            # reaches the client as `data: [DONE]` and nothing else. Only the
+            # POST is suppressed; guardrails are request-side and unaffected.
+            - name: USAGE_REPORTING_ENABLED
+              value: "false"
             # Kong uses usage_timeout_ms: 2000. Matched so the two behave the
             # same under a slow plugin server. Never blocks the response.
             - name: USAGE_TIMEOUT_MS

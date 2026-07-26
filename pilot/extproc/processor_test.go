@@ -889,3 +889,62 @@ func TestOversizedRequestBodyIsRejectedNotSilentlyUnguarded(t *testing.T) {
 	fs.closeIn()
 	<-done
 }
+
+// TestUsageReportingDisabledSuppressesThePost pins the switch that lets
+// agentgateway's NATIVE usageReport policy own the TPM true-up.
+//
+// This is the double-correction guard. With both this service and the native
+// policy reporting, the same request debits the tenant's TPM counter twice —
+// silently, and in a way no gateway-level test would catch. The body below is
+// the exact one TestUsageTrueUpFromNonStreamingResponse posts a -40 delta for,
+// so a regression that ignores the flag shows up here as "1 usage post" rather
+// than as a subtly wrong number somewhere else.
+func TestUsageReportingDisabledSuppressesThePost(t *testing.T) {
+	cfg := testConfig()
+	cfg.UsageReportingEnabled = false
+
+	client := &fakeClient{}
+	fs := newFakeStream()
+	p, waitUsage := newTestProcessor(t, cfg, client)
+	done := make(chan error, 1)
+	go func() { done <- p.process(fs) }()
+
+	fs.in <- headersMsg(map[string]string{"authorization": "Bearer sk-test"}, false, true)
+	fs.in <- reqBodyMsg(`{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}`, true)
+	fs.next(t, 2*time.Second)
+	fs.next(t, 2*time.Second)
+	fs.in <- respHeadersMsg("application/json")
+	fs.next(t, 2*time.Second)
+	fs.in <- respBodyMsg(`{"usage":{"prompt_tokens":9,"completion_tokens":51,"total_tokens":60}}`, true)
+	fs.next(t, 2*time.Second)
+
+	fs.closeIn()
+	<-done
+	waitUsage()
+
+	if n := len(client.usageCalls()); n != 0 {
+		t.Fatalf("usage reporting is disabled; expected 0 posts, got %d", n)
+	}
+	// The response still flowed: disabling the POST must not disable the echo.
+	if p.metrics.ResponseChunks.Load() != 1 {
+		t.Fatalf("response chunks = %d, want 1 — the response path must be untouched",
+			p.metrics.ResponseChunks.Load())
+	}
+}
+
+// TestUsageReportingDefaultsToEnabled guards the default. A config typo that
+// silently disabled reporting would stop the true-up with no error anywhere.
+func TestUsageReportingDefaultsToEnabled(t *testing.T) {
+	cfg, err := LoadConfig(func(k string) string {
+		if k == "POLICY_SERVER_URL" {
+			return "http://plugin:8080"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !cfg.UsageReportingEnabled {
+		t.Fatal("USAGE_REPORTING_ENABLED must default to true")
+	}
+}

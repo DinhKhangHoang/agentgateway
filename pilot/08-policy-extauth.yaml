@@ -116,3 +116,9 @@ spec:
         # from the AUTH response into the request sent to the backend.
         allowedResponseHeaders:
           - X-Tenant-ID
+        # Feeds the usageReport apiKeySha dimension (19-policy-usagereport.yaml).
+        # Must be the SHA, not the raw key: the gateway replaces Authorization
+        # with the upstream PROVIDER credential before the CEL snapshot that
+        # feeds dimensions, so reading it there would leak a provider secret
+        # and identify the wrong principal.
+        - X-Api-Key-Sha

@@ -1,0 +1,37 @@
+# Native usage reporting, replacing the pilot-extproc TPM true-up.
+#
+# apiKeySha is the sha256 of the tenant's key, minted by /v1/check/ext-authz and
+# copied into the upstream request by the extauth policy's allowedResponseHeaders.
+#
+# It is deliberately NOT read from request.headers["authorization"]: by the time
+# this CEL snapshot is taken the gateway has already replaced that header with
+# the upstream PROVIDER credential (httpproxy.rs:2224 apply_backend_policies ->
+# auth::apply_backend_auth, then httpproxy.rs:2253 take_and_snapshot). Reading it
+# would ship a provider secret to the accounting endpoint and identify the wrong
+# principal.
+#
+# estimatedTokens MUST match what the extauth policy pre-debits at /v1/check
+# (currently 100). The plugin server computes delta = totalTokens - estimated;
+# a mismatch silently skews every tenant's TPM counter.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: maas-v2-agw-usagereport
+  namespace: user-11377-maas-v2-agw
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  traffic:
+    usageReport:
+      backendRef:
+        kind: Service
+        name: ai-gateway-plugin-server
+        port: 8080
+      path: /v1/usage/native
+      timeout: 2s
+      maxRetries: 2
+      dimensions:
+        apiKeySha: 'default(request.headers["x-api-key-sha"], "")'
+        estimatedTokens: '"100"'

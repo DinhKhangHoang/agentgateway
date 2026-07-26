@@ -111,6 +111,24 @@ type Config struct {
 	// Escape hatch: set false to ack request_headers immediately if the
 	// deferral ever interacts badly with a future gateway version.
 	DeferHeadersAck bool
+
+	// UsageReportingEnabled controls whether this service posts the TPM
+	// true-up to /v1/usage. Default true.
+	//
+	// Set false once agentgateway's NATIVE usageReport policy owns the true-up
+	// (it posts absolute counts to /v1/usage/native and the plugin server
+	// derives the delta). Leaving both enabled DOUBLE-CORRECTS every request:
+	// each would apply its own delta to the same TPM counter.
+	//
+	// Why disable reporting here rather than take this service out of the
+	// response path with `responseBodyMode: None` — the obvious alternative:
+	// that combination BREAKS STREAMING. Measured on agentgateway
+	// 300d7906 — with requestBodyMode FullDuplexStreamed and responseBodyMode
+	// None, an SSE response arrives at the client as `data: [DONE]` and
+	// nothing else, and the access log carries no gen_ai.usage.* counters.
+	// So the response path stays wired exactly as it was and only the POST is
+	// suppressed. Guardrails (request-side) are unaffected either way.
+	UsageReportingEnabled bool
 }
 
 func envStr(get func(string) string, name, def string) string {
@@ -195,6 +213,10 @@ func LoadConfig(getenv func(string) string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	usageEnabled, err := envBool(getenv, "USAGE_REPORTING_ENABLED", true)
+	if err != nil {
+		return nil, err
+	}
 	if checkMS <= 0 || usageMS <= 0 || maxReq <= 0 || maxScan <= 0 || maxCarry <= 0 {
 		return nil, fmt.Errorf("timeout and size limits must be positive")
 	}
@@ -211,5 +233,6 @@ func LoadConfig(getenv func(string) string) (*Config, error) {
 		MaxUsageScanBytes:          maxScan,
 		MaxSSECarryBytes:           maxCarry,
 		DeferHeadersAck:            defer_,
+		UsageReportingEnabled:      usageEnabled,
 	}, nil
 }
