@@ -1663,6 +1663,89 @@ binds:
 	assert_eq!(buffer.response.as_ref().unwrap().max_bytes, Some(20));
 }
 
+/// The feature is only reachable if local YAML config produces the policy.
+/// Everything downstream is already covered; this is the front door.
+#[tokio::test]
+async fn test_usage_report_policy() {
+	let input = r#"
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - policies:
+        usageReport:
+          target:
+            host: 127.0.0.1:9100
+          path: /v1/usage
+          timeout: 5s
+          maxRetries: 4
+          dimensions:
+            tenant: 'request.headers["x-tenant"]'
+      backends:
+      - host: 127.0.0.1:8000
+"#;
+
+	let normalized = normalize_test_yaml(input).await.unwrap();
+	let route = &normalized.listener_routes[0].1[0];
+
+	let ur = route
+		.inline_policies
+		.iter()
+		.find_map(|p| match p {
+			TrafficPolicy::UsageReport(p) => {
+				Some(p.iter().next().expect("usage report entry").pol.clone())
+			},
+			_ => None,
+		})
+		.expect("expected usage report policy");
+
+	assert_eq!(ur.path.as_deref(), Some("/v1/usage"));
+	assert_eq!(ur.timeout, Some(std::time::Duration::from_secs(5)));
+	assert_eq!(ur.max_retries, Some(4));
+	assert_eq!(ur.dimensions.len(), 1);
+	assert_eq!(ur.dimensions[0].0.as_str(), "tenant");
+}
+
+/// Defaults must survive the round trip: a bare target is the whole minimal
+/// config, and the documented defaults apply.
+#[tokio::test]
+async fn test_usage_report_policy_defaults() {
+	let input = r#"
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - policies:
+        usageReport:
+          target:
+            host: 127.0.0.1:9100
+      backends:
+      - host: 127.0.0.1:8000
+"#;
+
+	let normalized = normalize_test_yaml(input).await.unwrap();
+	let route = &normalized.listener_routes[0].1[0];
+
+	let ur = route
+		.inline_policies
+		.iter()
+		.find_map(|p| match p {
+			TrafficPolicy::UsageReport(p) => {
+				Some(p.iter().next().expect("usage report entry").pol.clone())
+			},
+			_ => None,
+		})
+		.expect("expected usage report policy");
+
+	assert_eq!(ur.path, None, "path defaults are applied at send time");
+	assert_eq!(ur.timeout, None);
+	assert_eq!(
+		ur.max_retries, None,
+		"unset must stay unset so the documented default of 2 can apply"
+	);
+	assert!(ur.dimensions.is_empty());
+}
+
 #[tokio::test]
 async fn test_delay_policy() {
 	let input = r#"

@@ -364,6 +364,7 @@ pub struct RoutePolicies {
 	pub api_key: RequestPolicy<http::apikey::APIKeyAuthentication>,
 	pub ext_authz: RequestPolicy<ext_authz::ExtAuthz>,
 	pub ext_proc: RequestPolicy<ext_proc::ExtProc>,
+	pub usage_report: RequestPolicy<llm::policy::usage_report::UsageReport>,
 	pub transformation: RequestPolicy<http::transformation_cel::Transformation>,
 	pub csrf: RequestPolicy<http::csrf::Csrf>,
 	pub direct_response: RequestPolicy<filters::DirectResponse>,
@@ -993,6 +994,9 @@ impl Store {
 				},
 				TrafficPolicy::ExtProc(p) => {
 					pol.ext_proc.merge_with_inheritance(p, lock_inheritance);
+				},
+				TrafficPolicy::UsageReport(p) => {
+					pol.usage_report.merge_with_inheritance(p, lock_inheritance);
 				},
 				TrafficPolicy::RemoteRateLimit(p) => {
 					pol

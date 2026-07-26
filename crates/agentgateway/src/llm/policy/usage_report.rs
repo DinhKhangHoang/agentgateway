@@ -34,8 +34,12 @@ pub struct UsageReport {
 	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
 	pub timeout: Option<Duration>,
 	/// Retries after a failed delivery attempt. Defaults to 2.
-	#[serde(default, skip_serializing_if = "crate::serdes::is_default")]
-	pub max_retries: u32,
+	///
+	/// `Option` rather than a bare `u32` so that an explicit `0` (never retry)
+	/// stays distinguishable from "unset, use the default". With a plain u32
+	/// the two collapse and the documented default can never apply.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub max_retries: Option<u32>,
 	/// Extra report dimensions, computed from CEL expressions evaluated
 	/// against the original incoming request.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -187,6 +191,26 @@ impl UsageReportPayload {
 	}
 }
 
+impl crate::store::RequestPolicyTrait for UsageReport {
+	/// Nothing happens on the request side: the report is sent on completion,
+	/// once the final token counts exist. This exists so the policy can take
+	/// part in conditional selection and CEL registration like any other.
+	async fn apply(
+		&self,
+		_client: &PolicyClient,
+		_log: &mut crate::telemetry::log::RequestLog,
+		_req: &mut crate::http::Request,
+	) -> Result<crate::http::PolicyResponse, crate::proxy::ProxyResponse> {
+		Ok(Default::default())
+	}
+
+	/// Dimension expressions must be declared here or they are never
+	/// registered, and every dimension silently evaluates to nothing.
+	fn expressions(&self) -> impl Iterator<Item = &cel::Expression> {
+		self.dimensions.iter().map(|(_, e)| e.as_ref())
+	}
+}
+
 /// Maximum concurrent in-flight usage reports per gateway.
 pub const DEFAULT_MAX_IN_FLIGHT: usize = 1024;
 
@@ -235,7 +259,10 @@ impl std::fmt::Debug for InFlightLimiter {
 /// This is a plain `async fn` rather than something that spawns internally, so
 /// tests can await a delivery to completion. Spawning happens at the call site.
 pub async fn send(cfg: &UsageReport, payload: UsageReportPayload, client: PolicyClient) {
-	let attempts = cfg.max_retries.saturating_add(1);
+	let attempts = cfg
+		.max_retries
+		.unwrap_or(DEFAULT_MAX_RETRIES)
+		.saturating_add(1);
 	let mut backoff = Duration::from_millis(50);
 
 	for attempt in 0..attempts {

@@ -1862,6 +1862,17 @@
             }
           ]
         },
+        "usageReport": {
+          "description": "Report final LLM token usage to an HTTP endpoint, once per request, on\ncompletion.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalExplicitOrConditional_UsageReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "transformations": {
           "description": "Modify request and response headers, bodies, or metadata.",
           "anyOf": [
@@ -6971,6 +6982,129 @@
             "backend"
           ]
         }
+      ]
+    },
+    "LocalExplicitOrConditional_UsageReport": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LocalConditionalPolicies_UsageReport"
+        },
+        {
+          "$ref": "#/$defs/UsageReport"
+        }
+      ]
+    },
+    "LocalConditionalPolicies_UsageReport": {
+      "type": "object",
+      "properties": {
+        "conditional": {
+          "description": "conditional policy entries. An entry without a condition must be the final fallback.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LocalConditionalPolicy_UsageReport"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conditional"
+      ]
+    },
+    "LocalConditionalPolicy_UsageReport": {
+      "type": "object",
+      "properties": {
+        "condition": {
+          "description": "condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expression"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "target": {
+          "description": "Backend that receives usage reports.",
+          "$ref": "#/$defs/SimpleLocalBackendSerde"
+        },
+        "path": {
+          "description": "Request path. Defaults to `/usage`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "description": "Per-attempt timeout. Defaults to 2s.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maxRetries": {
+          "description": "Retries after a failed delivery attempt. Defaults to 2.\n\n`Option` rather than a bare `u32` so that an explicit `0` (never retry)\nstays distinguishable from \"unset, use the default\". With a plain u32\nthe two collapse and the documented default can never apply.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "dimensions": {
+          "description": "Extra report dimensions, computed from CEL expressions evaluated\nagainst the original incoming request.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "UsageReport": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "description": "Backend that receives usage reports.",
+          "$ref": "#/$defs/SimpleLocalBackendSerde"
+        },
+        "path": {
+          "description": "Request path. Defaults to `/usage`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "description": "Per-attempt timeout. Defaults to 2s.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maxRetries": {
+          "description": "Retries after a failed delivery attempt. Defaults to 2.\n\n`Option` rather than a bare `u32` so that an explicit `0` (never retry)\nstays distinguishable from \"unset, use the default\". With a plain u32\nthe two collapse and the documented default can never apply.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "dimensions": {
+          "description": "Extra report dimensions, computed from CEL expressions evaluated\nagainst the original incoming request.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target"
       ]
     },
     "LocalExplicitOrConditional_LocalTransformationConfig": {

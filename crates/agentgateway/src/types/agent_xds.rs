@@ -2527,6 +2527,31 @@ fn traffic_policy_from_proto(
 				},
 			))
 		},
+		Some(tps::Kind::UsageReport(ur)) => {
+			let dimensions = ur
+				.dimensions
+				.iter()
+				.map(|d| {
+					(
+						strng::new(&d.key),
+						permissive_cel_expression_arc(
+							diagnostics,
+							format!("traffic.usageReport.dimensions.{}", d.key),
+							d.value.clone(),
+						),
+					)
+				})
+				.collect();
+			TrafficPolicy::UsageReport(RequestPolicy::single(
+				llm::policy::usage_report::UsageReport {
+					target: resolve_simple_reference(ur.target.as_ref()),
+					path: ur.path.as_ref().map(|p| strng::new(p)),
+					timeout: ur.timeout.map(convert_duration),
+					max_retries: ur.max_retries,
+					dimensions,
+				},
+			))
+		},
 		Some(tps::Kind::Csrf(csrf_spec)) => {
 			let additional_origins: std::collections::HashSet<String> =
 				csrf_spec.additional_origins.iter().cloned().collect();
@@ -3633,6 +3658,7 @@ fn traffic_policy_kind_name(policy: &TrafficPolicy) -> &'static str {
 		TrafficPolicy::RemoteRateLimit(_) => "remoteRateLimit",
 		TrafficPolicy::ExtAuthz(_) => "extAuthz",
 		TrafficPolicy::ExtProc(_) => "extProc",
+		TrafficPolicy::UsageReport(_) => "usageReport",
 		TrafficPolicy::JwtAuth(_) => "jwt",
 		TrafficPolicy::Oidc(_) => "oidc",
 		TrafficPolicy::BasicAuth(_) => "basicAuth",

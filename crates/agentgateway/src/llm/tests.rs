@@ -98,7 +98,7 @@ fn unreachable_report() -> crate::llm::policy::usage_report::UsageReport {
 		target: crate::types::agent::SimpleBackendReference::Invalid,
 		path: None,
 		timeout: None,
-		max_retries: 0,
+		max_retries: Some(0),
 		dimensions: vec![],
 	}
 }
@@ -260,7 +260,7 @@ fn report_policy_targeting(mock: &wiremock::MockServer) -> LLMResponsePolicies {
 			),
 			path: None,
 			timeout: None,
-			max_retries: 0,
+			max_retries: Some(0),
 			dimensions: vec![],
 		})),
 		..Default::default()

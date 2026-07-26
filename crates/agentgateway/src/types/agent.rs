@@ -2667,6 +2667,7 @@ pub enum TrafficPolicy {
 	RemoteRateLimit(RequestPolicy<remoteratelimit::RemoteRateLimit>),
 	ExtAuthz(RequestPolicy<ext_authz::ExtAuthz>),
 	ExtProc(RequestPolicy<ext_proc::ExtProc>),
+	UsageReport(RequestPolicy<llm::policy::usage_report::UsageReport>),
 	JwtAuth(RequestPolicy<JwtAuthentication>),
 	Oidc(RequestPolicy<crate::http::oidc::OidcPolicy>),
 	BasicAuth(RequestPolicy<crate::http::basicauth::BasicAuthentication>),

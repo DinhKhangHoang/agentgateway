@@ -1165,6 +1165,26 @@ message TrafficPolicySpec {
     optional BufferBody response = 2;
   }
 
+  // Reports final LLM token usage to an HTTP endpoint once per request, on
+  // completion.
+  message UsageReport {
+    // Backend that receives the reports.
+    BackendReference target = 1;
+    // Request path. Defaults to /usage.
+    optional string path = 2;
+    // Per-attempt timeout. Defaults to 2s.
+    google.protobuf.Duration timeout = 3;
+    // Retries after a failed delivery attempt. Defaults to 2.
+    // Optional so an explicit 0 (never retry) is distinguishable from unset.
+    optional uint32 max_retries = 4;
+    message Dimension {
+      string key = 1;
+      string value = 2; // CEL expr
+    }
+    // Extra report dimensions, evaluated against the incoming request.
+    repeated Dimension dimensions = 5;
+  }
+
   oneof kind {
     Timeout timeout = 2;
     Retry retry = 3;
@@ -1188,6 +1208,7 @@ message TrafficPolicySpec {
     HostRewrite host_rewrite = 21;
     Buffer buffer = 22;
     Delay delay = 23;
+    UsageReport usage_report = 24;
   }
 }
 

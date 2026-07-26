@@ -149,7 +149,7 @@ fn report_to(mock: &MockServer, max_retries: u32) -> UsageReport {
 		target: SimpleBackendReference::InlineBackend(Target::Address(*mock.address())),
 		path: None,
 		timeout: None,
-		max_retries,
+		max_retries: Some(max_retries),
 		dimensions: vec![],
 	}
 }
@@ -161,7 +161,7 @@ fn unreachable_report() -> UsageReport {
 		target: SimpleBackendReference::Invalid,
 		path: None,
 		timeout: None,
-		max_retries: 0,
+		max_retries: Some(0),
 		dimensions: vec![],
 	}
 }
@@ -252,6 +252,25 @@ async fn accepted_report_is_sent_once_and_not_dropped() {
 	assert_eq!(
 		reqs[0].headers.get("content-type").unwrap(),
 		"application/json"
+	);
+}
+
+/// An unset max_retries must apply the documented default of 2, not collapse
+/// to "never retry". The field is `Option<u32>` precisely so that unset and an
+/// explicit 0 stay distinguishable.
+#[tokio::test]
+async fn unset_max_retries_applies_the_documented_default() {
+	let mock = receiver(500).await;
+	let client = crate::test_helpers::policy_client();
+
+	let mut cfg = report_to(&mock, 0);
+	cfg.max_retries = None;
+	send(&cfg, payload(), client.clone()).await;
+
+	assert_eq!(
+		mock.received_requests().await.unwrap().len(),
+		usize::try_from(super::DEFAULT_MAX_RETRIES).unwrap() + 1,
+		"unset max_retries must mean DEFAULT_MAX_RETRIES retries, not zero"
 	);
 }
 

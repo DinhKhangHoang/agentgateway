@@ -4273,6 +4273,29 @@
 |`binds[].listeners[].routes[].policies.extProc.processingOptions.requestTrailerMode`|enum|Whether request trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`binds[].listeners[].routes[].policies.extProc.processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`binds[].listeners[].routes[].policies.extProc.processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
+|`binds[].listeners[].routes[].policies.usageReport`|object|Report final LLM token usage to an HTTP endpoint, once per request, on<br>completion.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].target.service.port`|integer|Port on the target Service to route to.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].target.host`|string|Hostname or IP address|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].path`|string|Request path. Defaults to `/usage`.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`binds[].listeners[].routes[].policies.usageReport.conditional[].dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
+|`binds[].listeners[].routes[].policies.usageReport.target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`binds[].listeners[].routes[].policies.usageReport.target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`binds[].listeners[].routes[].policies.usageReport.target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`binds[].listeners[].routes[].policies.usageReport.target.service.port`|integer|Port on the target Service to route to.|
+|`binds[].listeners[].routes[].policies.usageReport.target.host`|string|Hostname or IP address|
+|`binds[].listeners[].routes[].policies.usageReport.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`binds[].listeners[].routes[].policies.usageReport.path`|string|Request path. Defaults to `/usage`.|
+|`binds[].listeners[].routes[].policies.usageReport.timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`binds[].listeners[].routes[].policies.usageReport.maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`binds[].listeners[].routes[].policies.usageReport.dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
 |`binds[].listeners[].routes[].policies.transformations`|object|Modify request and response headers, bodies, or metadata.|
 |`binds[].listeners[].routes[].policies.transformations.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`binds[].listeners[].routes[].policies.transformations.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|
@@ -19072,6 +19095,29 @@
 |`policies[].policy.extProc.processingOptions.requestTrailerMode`|enum|Whether request trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`policies[].policy.extProc.processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`policies[].policy.extProc.processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
+|`policies[].policy.usageReport`|object|Report final LLM token usage to an HTTP endpoint, once per request, on<br>completion.|
+|`policies[].policy.usageReport.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
+|`policies[].policy.usageReport.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|
+|`policies[].policy.usageReport.conditional[].target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`policies[].policy.usageReport.conditional[].target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`policies[].policy.usageReport.conditional[].target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`policies[].policy.usageReport.conditional[].target.service.port`|integer|Port on the target Service to route to.|
+|`policies[].policy.usageReport.conditional[].target.host`|string|Hostname or IP address|
+|`policies[].policy.usageReport.conditional[].target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`policies[].policy.usageReport.conditional[].path`|string|Request path. Defaults to `/usage`.|
+|`policies[].policy.usageReport.conditional[].timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`policies[].policy.usageReport.conditional[].maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`policies[].policy.usageReport.conditional[].dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
+|`policies[].policy.usageReport.target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`policies[].policy.usageReport.target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`policies[].policy.usageReport.target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`policies[].policy.usageReport.target.service.port`|integer|Port on the target Service to route to.|
+|`policies[].policy.usageReport.target.host`|string|Hostname or IP address|
+|`policies[].policy.usageReport.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`policies[].policy.usageReport.path`|string|Request path. Defaults to `/usage`.|
+|`policies[].policy.usageReport.timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`policies[].policy.usageReport.maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`policies[].policy.usageReport.dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
 |`policies[].policy.transformations`|object|Modify request and response headers, bodies, or metadata.|
 |`policies[].policy.transformations.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`policies[].policy.transformations.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|
@@ -31840,6 +31886,29 @@
 |`routeGroups[].routes[].policies.extProc.processingOptions.requestTrailerMode`|enum|Whether request trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`routeGroups[].routes[].policies.extProc.processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`routeGroups[].routes[].policies.extProc.processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
+|`routeGroups[].routes[].policies.usageReport`|object|Report final LLM token usage to an HTTP endpoint, once per request, on<br>completion.|
+|`routeGroups[].routes[].policies.usageReport.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
+|`routeGroups[].routes[].policies.usageReport.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|
+|`routeGroups[].routes[].policies.usageReport.conditional[].target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`routeGroups[].routes[].policies.usageReport.conditional[].target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`routeGroups[].routes[].policies.usageReport.conditional[].target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`routeGroups[].routes[].policies.usageReport.conditional[].target.service.port`|integer|Port on the target Service to route to.|
+|`routeGroups[].routes[].policies.usageReport.conditional[].target.host`|string|Hostname or IP address|
+|`routeGroups[].routes[].policies.usageReport.conditional[].target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`routeGroups[].routes[].policies.usageReport.conditional[].path`|string|Request path. Defaults to `/usage`.|
+|`routeGroups[].routes[].policies.usageReport.conditional[].timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`routeGroups[].routes[].policies.usageReport.conditional[].maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`routeGroups[].routes[].policies.usageReport.conditional[].dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
+|`routeGroups[].routes[].policies.usageReport.target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`routeGroups[].routes[].policies.usageReport.target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`routeGroups[].routes[].policies.usageReport.target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`routeGroups[].routes[].policies.usageReport.target.service.port`|integer|Port on the target Service to route to.|
+|`routeGroups[].routes[].policies.usageReport.target.host`|string|Hostname or IP address|
+|`routeGroups[].routes[].policies.usageReport.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`routeGroups[].routes[].policies.usageReport.path`|string|Request path. Defaults to `/usage`.|
+|`routeGroups[].routes[].policies.usageReport.timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`routeGroups[].routes[].policies.usageReport.maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`routeGroups[].routes[].policies.usageReport.dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
 |`routeGroups[].routes[].policies.transformations`|object|Modify request and response headers, bodies, or metadata.|
 |`routeGroups[].routes[].policies.transformations.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`routeGroups[].routes[].policies.transformations.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|
@@ -46975,6 +47044,29 @@
 |`routes[].policies.extProc.processingOptions.requestTrailerMode`|enum|Whether request trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`routes[].policies.extProc.processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`routes[].policies.extProc.processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
+|`routes[].policies.usageReport`|object|Report final LLM token usage to an HTTP endpoint, once per request, on<br>completion.|
+|`routes[].policies.usageReport.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
+|`routes[].policies.usageReport.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|
+|`routes[].policies.usageReport.conditional[].target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`routes[].policies.usageReport.conditional[].target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`routes[].policies.usageReport.conditional[].target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`routes[].policies.usageReport.conditional[].target.service.port`|integer|Port on the target Service to route to.|
+|`routes[].policies.usageReport.conditional[].target.host`|string|Hostname or IP address|
+|`routes[].policies.usageReport.conditional[].target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`routes[].policies.usageReport.conditional[].path`|string|Request path. Defaults to `/usage`.|
+|`routes[].policies.usageReport.conditional[].timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`routes[].policies.usageReport.conditional[].maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`routes[].policies.usageReport.conditional[].dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
+|`routes[].policies.usageReport.target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`routes[].policies.usageReport.target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`routes[].policies.usageReport.target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`routes[].policies.usageReport.target.service.port`|integer|Port on the target Service to route to.|
+|`routes[].policies.usageReport.target.host`|string|Hostname or IP address|
+|`routes[].policies.usageReport.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`routes[].policies.usageReport.path`|string|Request path. Defaults to `/usage`.|
+|`routes[].policies.usageReport.timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`routes[].policies.usageReport.maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`routes[].policies.usageReport.dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
 |`routes[].policies.transformations`|object|Modify request and response headers, bodies, or metadata.|
 |`routes[].policies.transformations.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`routes[].policies.transformations.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|
@@ -65882,6 +65974,29 @@
 |`mcp.policies.extProc.processingOptions.requestTrailerMode`|enum|Whether request trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`mcp.policies.extProc.processingOptions.responseTrailerMode`|enum|Whether response trailers are sent to the external processing service.<br>Possible values: `send`, `skip`.|
 |`mcp.policies.extProc.processingOptions.allowModeOverride`|boolean|Whether the external processing service can change processing modes during a request.|
+|`mcp.policies.usageReport`|object|Report final LLM token usage to an HTTP endpoint, once per request, on<br>completion.|
+|`mcp.policies.usageReport.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
+|`mcp.policies.usageReport.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|
+|`mcp.policies.usageReport.conditional[].target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`mcp.policies.usageReport.conditional[].target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`mcp.policies.usageReport.conditional[].target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`mcp.policies.usageReport.conditional[].target.service.port`|integer|Port on the target Service to route to.|
+|`mcp.policies.usageReport.conditional[].target.host`|string|Hostname or IP address|
+|`mcp.policies.usageReport.conditional[].target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`mcp.policies.usageReport.conditional[].path`|string|Request path. Defaults to `/usage`.|
+|`mcp.policies.usageReport.conditional[].timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`mcp.policies.usageReport.conditional[].maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`mcp.policies.usageReport.conditional[].dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
+|`mcp.policies.usageReport.target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`mcp.policies.usageReport.target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`mcp.policies.usageReport.target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`mcp.policies.usageReport.target.service.port`|integer|Port on the target Service to route to.|
+|`mcp.policies.usageReport.target.host`|string|Hostname or IP address|
+|`mcp.policies.usageReport.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`mcp.policies.usageReport.path`|string|Request path. Defaults to `/usage`.|
+|`mcp.policies.usageReport.timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`mcp.policies.usageReport.maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`mcp.policies.usageReport.dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
 |`mcp.policies.transformations`|object|Modify request and response headers, bodies, or metadata.|
 |`mcp.policies.transformations.conditional`|[]object|conditional policy entries. An entry without a condition must be the final fallback.|
 |`mcp.policies.transformations.conditional[].condition`|string|condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.|

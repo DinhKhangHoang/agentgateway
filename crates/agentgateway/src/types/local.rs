@@ -44,6 +44,8 @@ type LocalDirectResponsePolicy = LocalExplicitOrConditional<filters::DirectRespo
 type LocalExtProcPolicy = LocalExplicitOrConditional<crate::http::ext_proc::ExtProc>;
 type LocalRemoteRateLimitPolicy =
 	LocalExplicitOrConditional<crate::http::remoteratelimit::RemoteRateLimit>;
+type LocalUsageReportPolicy =
+	LocalExplicitOrConditional<crate::llm::policy::usage_report::UsageReport>;
 type LocalTransformationPolicy = LocalExplicitOrConditional<LocalTransformationConfig>;
 type LocalMcpGuardrails = crate::mcp::guardrails::McpGuardrails;
 const DEFAULT_LLM_PORT: u16 = 4000;
@@ -2679,6 +2681,10 @@ pub struct FilterOrPolicy {
 	/// Send request and response data to an external processing service.
 	#[serde(default)]
 	ext_proc: Option<LocalExtProcPolicy>,
+	/// Report final LLM token usage to an HTTP endpoint, once per request, on
+	/// completion.
+	#[serde(default)]
+	usage_report: Option<LocalUsageReportPolicy>,
 	/// Modify request and response headers, bodies, or metadata.
 	#[serde(default)]
 	#[cfg_attr(
@@ -4955,6 +4961,7 @@ pub(crate) async fn split_policies_for_target(
 		csrf,
 		ext_authz,
 		ext_proc,
+		usage_report,
 		buffer,
 		timeout,
 		retry,
@@ -5122,6 +5129,9 @@ pub(crate) async fn split_policies_for_target(
 	}
 	if let Some(p) = ext_proc {
 		route_policies.push(TrafficPolicy::ExtProc(p.into_policy()?))
+	}
+	if let Some(p) = usage_report {
+		route_policies.push(TrafficPolicy::UsageReport(p.into_policy()?))
 	}
 	if let Some(p) = local_rate_limit
 		&& !p.is_empty()

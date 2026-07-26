@@ -211,6 +211,11 @@ async fn apply_request_policies(
 		.apply_selected("remote rate limit", c, l, req, rp.headers())
 		.await?;
 
+	rp.llm_request_policies.usage_report = pol
+		.usage_report
+		.apply_selected("usage report", c, l, req, rp.headers())
+		.await?;
+
 	rp.buffer = pol.buffer.apply("buffer", c, l, req, rp.headers()).await?;
 
 	// ExtProc uses RequestPolicy for conditional selection and CEL registration only.
