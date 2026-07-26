@@ -774,6 +774,11 @@ pub struct ProxyInputs {
 	pub admin: Option<management::admin::AdminService>,
 	pub mcp_state: mcp::App,
 	pub ca: Option<Arc<CaClient>>,
+
+	/// Shared cap on concurrent in-flight LLM usage reports. It lives here
+	/// rather than on the per-request carrier because a per-request limiter
+	/// would be no cap at all.
+	pub llm_usage_report_in_flight: llm::policy::usage_report::InFlightLimiter,
 }
 
 impl ProxyInputs {
@@ -800,6 +805,7 @@ impl ProxyInputs {
 			admin: None,
 			mcp_state,
 			ca,
+			llm_usage_report_in_flight: Default::default(),
 		}
 	}
 }

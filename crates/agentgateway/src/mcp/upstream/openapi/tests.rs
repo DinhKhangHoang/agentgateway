@@ -54,6 +54,7 @@ async fn setup_with_prefix(prefix: &str) -> (MockServer, Handler) {
 		ca: None,
 
 		mcp_state: mcp::router::App::new(stores.clone(), encoder),
+		llm_usage_report_in_flight: Default::default(),
 	});
 
 	let client = PolicyClient::new(pi.clone());
@@ -1789,6 +1790,7 @@ async fn test_call_tool_with_binary_body() {
 		upstream: client.clone(),
 		ca: None,
 		mcp_state: mcp::router::App::new(stores.clone(), encoder),
+		llm_usage_report_in_flight: Default::default(),
 	});
 
 	let client = PolicyClient::new(pi.clone());

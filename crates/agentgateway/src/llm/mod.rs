@@ -1971,11 +1971,12 @@ impl AIProvider {
 			));
 		let resp = Response::from_parts(parts, body);
 
-		if !rate_limit.local_rate_limit.is_empty() || rate_limit.remote_rate_limit.is_some() {
+		if rate_limit.needs_completion_amend() {
 			let exec = cel::Executor::new_response(req_snapshot.as_deref(), &resp);
 			// In the initial request, we subtracted the approximate request tokens.
 			// Now we should have the real request tokens and the response tokens
-			amend_tokens(rate_limit, &llm_info, exec);
+			// Delivery is fire-and-forget; the response must not wait on it.
+			let _ = amend_tokens(rate_limit, &llm_info, exec, client);
 		}
 		log.store(Some(llm_info));
 		Ok(resp)
@@ -2301,7 +2302,14 @@ impl AIProvider {
 			vec![]
 		};
 
-		let logger = AmendOnDrop::new(log, response_policies, req_snapshot, model_catalog).into_llm();
+		let logger = AmendOnDrop::new(
+			log,
+			response_policies,
+			req_snapshot,
+			model_catalog,
+			client.clone(),
+		)
+		.into_llm();
 		let stream_format = match self {
 			AIProvider::Bedrock(_) => "awsEventStream",
 			_ => "sseJson",
@@ -2536,7 +2544,87 @@ fn response_prompt_guard_headers(
 	headers
 }
 
-fn amend_tokens(rate_limit: store::LLMResponsePolicies, llm_resp: &LLMInfo, exec: Executor) {
+/// Evaluate each dimension expression, skipping any that fail.
+///
+/// A broken dimension expression must omit that dimension, never drop the
+/// report: losing a billing record because an operator typo'd one label would
+/// be a wildly disproportionate failure. Mirrors how `remoteratelimit.rs:161`
+/// treats a failing cost expression, except that there a failure drops the
+/// descriptor, and here it drops only the label.
+fn eval_dimensions(
+	dimensions: &[(Strng, Arc<cel::Expression>)],
+	exec: &Executor,
+) -> std::collections::BTreeMap<String, String> {
+	dimensions
+		.iter()
+		.filter_map(|(k, expr)| {
+			let v = match exec.eval(expr) {
+				Ok(v) => v,
+				Err(e) => {
+					debug!("usage report dimension {k} failed to evaluate: {e}");
+					return None;
+				},
+			};
+			let v = v.always_materialize_owned();
+			if matches!(v, ::cel::Value::Null) {
+				return None;
+			}
+			// Strings pass through bare; other scalars render as JSON, so an
+			// int dimension reads as `42` rather than `"42"`.
+			match crate::cel::value_as_byte_or_json(v)
+				.ok()
+				.and_then(|b| String::from_utf8(b.to_vec()).ok())
+			{
+				Some(s) => Some((k.to_string(), s)),
+				None => {
+					debug!("usage report dimension {k} did not produce a usable value");
+					None
+				},
+			}
+		})
+		.collect()
+}
+
+/// Dispatch the configured usage report, if any.
+///
+/// Returns the delivery task so callers that need determinism (tests) can
+/// await it. Production callers drop it: the client response has already been
+/// sent and delivery must not delay anything.
+fn dispatch_usage_report(
+	rate_limit: &store::LLMResponsePolicies,
+	llm_resp: &LLMInfo,
+	exec: &Executor,
+	client: &PolicyClient,
+) -> Option<tokio::task::JoinHandle<()>> {
+	let ur = rate_limit.usage_report.as_ref()?;
+	let ctx = LLMContext::from_llm_info(llm_resp.clone(), None);
+	let payload = policy::usage_report::UsageReportPayload::project(
+		&ctx,
+		rate_limit.request_traceparent.as_ref(),
+		eval_dimensions(&ur.dimensions, exec),
+	);
+
+	let Some(permit) = client.inputs.llm_usage_report_in_flight.try_acquire() else {
+		// Shed rather than queue. Awaiting a permit here would apply
+		// backpressure to request completion.
+		client.inputs.metrics.llm_usage_report_dropped.inc();
+		warn!("usage report shed: in-flight cap reached; usage for this request is unbilled");
+		return None;
+	};
+
+	let (ur, client) = (ur.clone(), client.clone());
+	Some(tokio::task::spawn(async move {
+		let _permit = permit;
+		policy::usage_report::send(&ur, payload, client).await;
+	}))
+}
+
+fn amend_tokens(
+	rate_limit: store::LLMResponsePolicies,
+	llm_resp: &LLMInfo,
+	exec: Executor,
+	client: PolicyClient,
+) -> Option<tokio::task::JoinHandle<()>> {
 	let input_mismatch = match (
 		llm_resp.request.input_tokens,
 		llm_resp.response.input_tokens,
@@ -2554,9 +2642,11 @@ fn amend_tokens(rate_limit: store::LLMResponsePolicies, llm_resp: &LLMInfo, exec
 	for lrl in &rate_limit.local_rate_limit {
 		lrl.amend_tokens(tokens_to_remove)
 	}
+	let delivery = dispatch_usage_report(&rate_limit, llm_resp, &exec, &client);
 	if let Some(rrl) = rate_limit.remote_rate_limit {
 		rrl.amend_tokens(tokens_to_remove, &exec)
 	}
+	delivery
 }
 
 pub struct AmendOnDrop {
@@ -2564,6 +2654,7 @@ pub struct AmendOnDrop {
 	pol: Option<LLMResponsePolicies>,
 	req: Option<Arc<RequestSnapshot>>,
 	catalog: Option<Arc<cost::ModelCatalog>>,
+	client: PolicyClient,
 }
 
 impl AmendOnDrop {
@@ -2572,27 +2663,36 @@ impl AmendOnDrop {
 		pol: LLMResponsePolicies,
 		req: Option<Arc<RequestSnapshot>>,
 		catalog: Option<Arc<cost::ModelCatalog>>,
+		client: PolicyClient,
 	) -> Self {
 		Self {
 			log,
 			pol: Some(pol),
 			req,
 			catalog,
+			client,
 		}
 	}
 	pub fn non_atomic_mutate(&self, f: impl FnOnce(&mut llm::LLMInfo)) {
 		self.log.non_atomic_mutate(f);
 	}
-	pub fn report_usage(&mut self) {
-		if let Some(pol) = self.pol.take()
-			&& (!pol.local_rate_limit.is_empty() || pol.remote_rate_limit.is_some())
-		{
-			self.log.non_atomic_mutate(|r| {
-				let ctx = LLMContext::from_llm_info(r.clone(), self.catalog.as_deref());
-				let exec = cel::Executor::new_llm_rate_limit_streaming(self.req.as_deref(), &ctx);
-				amend_tokens(pol, r, exec)
-			});
+	/// Returns the usage-report delivery task, when one was dispatched, so a
+	/// test can await it instead of racing a spawned task. Production callers
+	/// (including `Drop`) discard it.
+	pub fn report_usage(&mut self) -> Option<tokio::task::JoinHandle<()>> {
+		let Some(pol) = self.pol.take() else {
+			return None;
+		};
+		if !pol.needs_completion_amend() {
+			return None;
 		}
+		let mut delivery = None;
+		self.log.non_atomic_mutate(|r| {
+			let ctx = LLMContext::from_llm_info(r.clone(), self.catalog.as_deref());
+			let exec = cel::Executor::new_llm_rate_limit_streaming(self.req.as_deref(), &ctx);
+			delivery = amend_tokens(pol, r, exec, self.client.clone());
+		});
+		delivery
 	}
 
 	pub fn into_llm(self) -> agent_llm::StreamingUsageGuard {
@@ -2606,12 +2706,13 @@ impl agent_llm::StreamingUsageReporter for AmendOnDrop {
 	}
 
 	fn report_usage(&mut self) {
-		AmendOnDrop::report_usage(self);
+		// Fire-and-forget: the delivery task outlives this call.
+		let _ = AmendOnDrop::report_usage(self);
 	}
 }
 
 impl Drop for AmendOnDrop {
 	fn drop(&mut self) {
-		self.report_usage();
+		let _ = self.report_usage();
 	}
 }

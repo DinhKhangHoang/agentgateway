@@ -936,6 +936,7 @@ mod tests {
 			upstream: client,
 			ca: None,
 			mcp_state: crate::mcp::App::new(stores, encoder),
+			llm_usage_report_in_flight: Default::default(),
 		})
 	}
 

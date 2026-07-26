@@ -459,6 +459,7 @@ pub struct LLMRequestPolicies {
 	pub local_rate_limit: Option<Arc<Vec<http::localratelimit::RateLimit>>>,
 	pub remote_rate_limit: Option<Arc<http::remoteratelimit::RemoteRateLimit>>,
 	pub llm: Option<Arc<llm::Policy>>,
+	pub usage_report: Option<Arc<llm::policy::usage_report::UsageReport>>,
 }
 
 impl LLMRequestPolicies {
@@ -537,6 +538,22 @@ pub struct LLMResponsePolicies {
 	pub request_traceparent: Option<HeaderValue>,
 	pub prompt_guard: Vec<ResponseGuard>,
 	pub streaming_prompt_guard_enabled: bool,
+	pub usage_report: Option<Arc<llm::policy::usage_report::UsageReport>>,
+}
+
+impl LLMResponsePolicies {
+	/// Whether anything needs to run once the final token counts are known.
+	///
+	/// There are two completion paths — buffered (llm/mod.rs:1974) and
+	/// streaming (`AmendOnDrop::report_usage`) — and both must gate on the
+	/// same condition. Keeping the condition here rather than spelled out at
+	/// each call site is what stops the two from drifting: a sink added to one
+	/// and forgotten in the other silently no-ops for half of all traffic.
+	pub fn needs_completion_amend(&self) -> bool {
+		!self.local_rate_limit.is_empty()
+			|| self.remote_rate_limit.is_some()
+			|| self.usage_report.is_some()
+	}
 }
 
 impl Default for Store {

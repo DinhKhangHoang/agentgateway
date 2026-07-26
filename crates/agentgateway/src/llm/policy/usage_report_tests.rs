@@ -299,18 +299,50 @@ async fn in_flight_reports_are_capped() {
 /// A dimension whose CEL expression fails must be omitted, and the report
 /// must still be sent. Dropping a billing record because an operator typo'd
 /// one label expression would be a wildly disproportionate failure.
-///
-/// Ignored until `eval_dimensions` exists (Task 4, Step 5). Remove the
-/// `#[ignore]` and fill in the body then — do not delete this test.
 #[test]
-#[ignore]
 fn failing_dimension_expression_omits_only_that_dimension() {
-	// Build two dimension expressions: one that evaluates, one that cannot
-	// (e.g. referencing an absent header with a strict accessor). Evaluate
-	// them through eval_dimensions and assert:
-	//   - the working dimension is present with its value
-	//   - the failing dimension is absent
-	//   - eval_dimensions returned a map rather than an error
-	// Construct the Executor the way llm/mod.rs:2592 does
-	// (cel::Executor::new_llm_rate_limit_streaming).
+	let ctx = ctx_with_sentinel();
+	// Constructed the way llm/mod.rs does for the streaming amend path.
+	let exec = crate::cel::Executor::new_llm_rate_limit_streaming(None, &ctx);
+
+	let dims = vec![
+		(
+			"model".into(),
+			std::sync::Arc::new(crate::cel::Expression::new_strict("llm.requestModel").unwrap()),
+		),
+		(
+			// No request snapshot is set, so this cannot resolve.
+			"tenant".into(),
+			std::sync::Arc::new(
+				crate::cel::Expression::new_strict(r#"request.headers["x-tenant"]"#).unwrap(),
+			),
+		),
+	];
+
+	let out = crate::llm::eval_dimensions(&dims, &exec);
+
+	assert_eq!(
+		out.get("model").map(String::as_str),
+		Some("gpt-4o"),
+		"the working dimension must survive its neighbour failing"
+	);
+	assert!(
+		!out.contains_key("tenant"),
+		"a dimension that cannot be evaluated must be omitted, not sent empty"
+	);
+}
+
+/// Non-string dimension values must still land as usable labels.
+#[test]
+fn non_string_dimension_values_are_rendered() {
+	let ctx = ctx_with_sentinel();
+	let exec = crate::cel::Executor::new_llm_rate_limit_streaming(None, &ctx);
+	let dims = vec![(
+		"input".into(),
+		std::sync::Arc::new(crate::cel::Expression::new_strict("llm.inputTokens").unwrap()),
+	)];
+
+	let out = crate::llm::eval_dimensions(&dims, &exec);
+
+	assert_eq!(out.get("input").map(String::as_str), Some("400004"));
 }

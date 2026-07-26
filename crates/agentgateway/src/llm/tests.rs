@@ -74,8 +74,9 @@ fn streaming_amend_on_drop_updates_local_rate_limit() {
 		},
 		None,
 		None,
+		crate::test_helpers::policy_client(),
 	);
-	amend.report_usage();
+	let _ = amend.report_usage();
 
 	assert!(
 		rate_limit
@@ -86,6 +87,114 @@ fn streaming_amend_on_drop_updates_local_rate_limit() {
 		rate_limit
 			.check_llm_request(&llm_request_with_tokens(Some(6)))
 			.is_ok()
+	);
+}
+
+/// Local to this module. `usage_report_tests.rs` defines a same-named helper;
+/// that one is not in scope here, so this is a deliberate duplicate rather
+/// than an import.
+fn unreachable_report() -> crate::llm::policy::usage_report::UsageReport {
+	crate::llm::policy::usage_report::UsageReport {
+		target: crate::types::agent::SimpleBackendReference::Invalid,
+		path: None,
+		timeout: None,
+		max_retries: 0,
+		dimensions: vec![],
+	}
+}
+
+/// A usage report must fire when it is the ONLY policy configured.
+///
+/// `report_usage()` is gated on rate limiting being present (llm/mod.rs:2588).
+/// Deployments whose limits live in an external policy server configure no
+/// native rate limit at all, so a gate that only checks rate limits makes the
+/// feature silently do nothing for precisely its intended users. This test
+/// fails if that gate regresses.
+#[tokio::test]
+async fn usage_report_fires_with_no_rate_limit_configured() {
+	let client = crate::test_helpers::policy_client();
+	let log = AsyncLog::default();
+	log.store(Some(LLMInfo {
+		request: llm_request_with_tokens(Some(2)),
+		response: LLMResponse {
+			input_tokens: Some(2),
+			output_tokens: Some(4),
+			..Default::default()
+		},
+	}));
+
+	let mut amend = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies {
+			usage_report: Some(Arc::new(unreachable_report())),
+			..Default::default()
+		},
+		None,
+		None,
+		client.clone(),
+	);
+	// report_usage hands back the delivery task so a test can await it. No
+	// sleep, no yield: the assertion runs after delivery has actually finished.
+	let delivery = amend.report_usage().expect("a report must be dispatched");
+	delivery.await.unwrap();
+
+	// Delivery fails (the target is Invalid); what matters is that it was
+	// ATTEMPTED. A gate regression shows up as this counter staying at zero.
+	assert_eq!(
+		client.inputs.metrics.llm_usage_report_dropped.get(),
+		1,
+		"usage report must be attempted even with no rate limit configured"
+	);
+}
+
+/// Both completion paths — buffered and streaming — gate on
+/// `needs_completion_amend`. This asserts the condition itself, because a
+/// test that calls `amend_tokens` directly bypasses the gate entirely and so
+/// cannot detect a gate regression: verified by reverting the gate and
+/// watching such a test still pass.
+#[test]
+fn a_usage_report_alone_requires_a_completion_amend() {
+	let pol = LLMResponsePolicies {
+		usage_report: Some(Arc::new(unreachable_report())),
+		..Default::default()
+	};
+	assert!(
+		pol.needs_completion_amend(),
+		"a usage report with no rate limit configured must still amend on completion"
+	);
+	assert!(
+		!LLMResponsePolicies::default().needs_completion_amend(),
+		"nothing configured must remain a no-op"
+	);
+}
+
+/// The buffered path reaches delivery once the gate lets it through.
+#[tokio::test]
+async fn usage_report_fires_on_the_non_streaming_path_with_no_rate_limit() {
+	let client = crate::test_helpers::policy_client();
+	let pol = LLMResponsePolicies {
+		usage_report: Some(Arc::new(unreachable_report())),
+		..Default::default()
+	};
+	let llm_info = LLMInfo {
+		request: llm_request_with_tokens(Some(2)),
+		response: LLMResponse {
+			input_tokens: Some(2),
+			output_tokens: Some(4),
+			..Default::default()
+		},
+	};
+	let resp = ::http::Response::new(crate::http::Body::empty());
+	let exec = cel::Executor::new_response(None, &resp);
+
+	let delivery =
+		amend_tokens(pol, &llm_info, exec, client.clone()).expect("a report must be dispatched");
+	delivery.await.unwrap();
+
+	assert_eq!(
+		client.inputs.metrics.llm_usage_report_dropped.get(),
+		1,
+		"the buffered-response path must report usage too"
 	);
 }
 
@@ -1279,7 +1388,14 @@ async fn bedrock_from_messages_stream_captures_completion() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None).into_llm();
+	let logger = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies::default(),
+		None,
+		None,
+		crate::test_helpers::policy_client(),
+	)
+	.into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::bedrock::from_messages::translate_stream(
 		body,
@@ -1329,7 +1445,14 @@ async fn bedrock_from_messages_stream_skips_completion_when_disabled() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None).into_llm();
+	let logger = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies::default(),
+		None,
+		None,
+		crate::test_helpers::policy_client(),
+	)
+	.into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::bedrock::from_messages::translate_stream(
 		body,
@@ -1376,7 +1499,14 @@ async fn bedrock_from_messages_stream_captures_tool_calls() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None).into_llm();
+	let logger = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies::default(),
+		None,
+		None,
+		crate::test_helpers::policy_client(),
+	)
+	.into_llm();
 	let body = conversion::bedrock::from_messages::translate_stream(
 		body,
 		1024 * 1024,
@@ -1435,7 +1565,14 @@ async fn messages_passthrough_stream_captures_completion() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None).into_llm();
+	let logger = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies::default(),
+		None,
+		None,
+		crate::test_helpers::policy_client(),
+	)
+	.into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::messages::passthrough_stream(
 		body,
@@ -1483,7 +1620,14 @@ async fn messages_passthrough_stream_skips_completion_when_disabled() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None).into_llm();
+	let logger = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies::default(),
+		None,
+		None,
+		crate::test_helpers::policy_client(),
+	)
+	.into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::messages::passthrough_stream(
 		body,
@@ -1527,7 +1671,14 @@ async fn messages_passthrough_stream_captures_tool_calls() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None).into_llm();
+	let logger = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies::default(),
+		None,
+		None,
+		crate::test_helpers::policy_client(),
+	)
+	.into_llm();
 	let body = conversion::messages::passthrough_stream(
 		body,
 		1024 * 1024,
@@ -1582,7 +1733,14 @@ async fn responses_passthrough_stream_captures_completion_and_tool_calls() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None).into_llm();
+	let logger = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies::default(),
+		None,
+		None,
+		crate::test_helpers::policy_client(),
+	)
+	.into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::responses::passthrough_stream(
 		body,
@@ -1642,7 +1800,14 @@ async fn responses_passthrough_stream_skips_completion_when_disabled() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None).into_llm();
+	let logger = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies::default(),
+		None,
+		None,
+		crate::test_helpers::policy_client(),
+	)
+	.into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::responses::passthrough_stream(
 		body,
