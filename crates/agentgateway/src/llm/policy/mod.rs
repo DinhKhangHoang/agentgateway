@@ -22,6 +22,7 @@ fn with_default_timeout(mut req: crate::http::Request) -> crate::http::Request {
 	req
 }
 
+pub mod usage_report;
 pub mod webhook;
 
 mod azure_content_safety;
