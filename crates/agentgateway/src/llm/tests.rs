@@ -198,6 +198,201 @@ async fn usage_report_fires_on_the_non_streaming_path_with_no_rate_limit() {
 	);
 }
 
+// --- One report per request -------------------------------------------------
+
+/// Accepts POSTs, counts them, keeps the last body, and signals arrivals so a
+/// test can await delivery instead of sleeping.
+#[derive(Clone)]
+struct CountingReceiver {
+	count: Arc<std::sync::atomic::AtomicUsize>,
+	last: Arc<std::sync::Mutex<Option<Value>>>,
+	tx: tokio::sync::mpsc::UnboundedSender<()>,
+}
+
+impl CountingReceiver {
+	fn request_count(&self) -> usize {
+		self.count.load(std::sync::atomic::Ordering::SeqCst)
+	}
+	fn last_payload(&self) -> Value {
+		self
+			.last
+			.lock()
+			.unwrap()
+			.clone()
+			.expect("no report received")
+	}
+}
+
+impl wiremock::Respond for CountingReceiver {
+	fn respond(&self, req: &wiremock::Request) -> wiremock::ResponseTemplate {
+		self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+		*self.last.lock().unwrap() = serde_json::from_slice(&req.body).ok();
+		let _ = self.tx.send(());
+		wiremock::ResponseTemplate::new(200)
+	}
+}
+
+async fn counting_receiver() -> (
+	wiremock::MockServer,
+	CountingReceiver,
+	tokio::sync::mpsc::UnboundedReceiver<()>,
+) {
+	let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+	let receiver = CountingReceiver {
+		count: Default::default(),
+		last: Default::default(),
+		tx,
+	};
+	let mock = wiremock::MockServer::start().await;
+	wiremock::Mock::given(wiremock::matchers::method("POST"))
+		.and(wiremock::matchers::path("/usage"))
+		.respond_with(receiver.clone())
+		.mount(&mock)
+		.await;
+	(mock, receiver, rx)
+}
+
+fn report_policy_targeting(mock: &wiremock::MockServer) -> LLMResponsePolicies {
+	LLMResponsePolicies {
+		usage_report: Some(Arc::new(crate::llm::policy::usage_report::UsageReport {
+			target: crate::types::agent::SimpleBackendReference::InlineBackend(
+				crate::types::agent::Target::Address(*mock.address()),
+			),
+			path: None,
+			timeout: None,
+			max_retries: 0,
+			dimensions: vec![],
+		})),
+		..Default::default()
+	}
+}
+
+/// Await the first report. A bounded wait on a signal, not a fixed sleep: it
+/// returns the moment delivery happens and fails loudly if it never does.
+async fn await_first_report(rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>) {
+	tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+		.await
+		.expect("no usage report arrived within 10s")
+		.expect("receiver channel closed before a report arrived");
+}
+
+/// The entire point of this feature: a streaming response must produce exactly
+/// ONE usage report, not one per SSE chunk. If this asserts a number greater
+/// than 1, the implementation is doing what the ext_proc service it replaces
+/// was doing, and has bought nothing.
+///
+/// The bedrock `basic.bin` fixture carries three contentBlockDelta events, so
+/// a per-chunk implementation would show at least three reports here. A
+/// single-chunk fixture would make this assertion vacuous.
+#[tokio::test]
+async fn streaming_response_produces_exactly_one_report() {
+	use crate::test_helpers::proxymock::setup_proxy_test;
+
+	let (mock, receiver, mut rx) = counting_receiver().await;
+	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
+
+	let provider = AIProvider::bedrock(bedrock::Provider {
+		model: Some(strng::new("us.anthropic.claude-haiku-4-5-20251001-v1:0")),
+		region: strng::new("us-west-2"),
+		guardrail_identifier: None,
+		guardrail_version: None,
+	});
+	let req = LLMRequest {
+		input_tokens: None,
+		input_format: InputFormat::Messages,
+		cache_convention: CacheTokenConvention::pending(),
+		request_model: "us.anthropic.claude-haiku-4-5-20251001-v1:0".into(),
+		provider: "bedrock".into(),
+		streaming: true,
+		params: Default::default(),
+		prompt: None,
+		provider_state: None,
+	};
+
+	let input_bytes = fs::read(fixture_path("response/bedrock/basic.bin")).expect("fixture");
+	let resp = Response::new(Body::from(input_bytes));
+
+	let out = provider
+		.process_response(
+			client,
+			req,
+			report_policy_targeting(&mock),
+			None,
+			AsyncLog::default(),
+			llm::LogContentFields::default(),
+			None,
+			resp,
+		)
+		.await
+		.expect("streaming response should process");
+
+	// Draining the body runs the stream to completion, which is what triggers
+	// the single end-of-request report.
+	let _ = out.collect().await.unwrap();
+	await_first_report(&mut rx).await;
+
+	assert_eq!(
+		receiver.request_count(),
+		1,
+		"one report per request, not per chunk"
+	);
+	let body = receiver.last_payload();
+	assert_eq!(body["streaming"], true);
+	assert_eq!(body["usage"]["outputTokens"], 142);
+	assert_eq!(body["usage"]["inputTokens"], 15);
+}
+
+#[tokio::test]
+async fn non_streaming_response_produces_exactly_one_report() {
+	use crate::test_helpers::proxymock::setup_proxy_test;
+
+	let (mock, receiver, mut rx) = counting_receiver().await;
+	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
+
+	let provider = AIProvider::OpenAI(openai::Provider { model: None });
+	let req = LLMRequest {
+		input_tokens: None,
+		input_format: InputFormat::Completions,
+		cache_convention: CacheTokenConvention::pending(),
+		request_model: "gpt-3.5-turbo".into(),
+		provider: "openai".into(),
+		streaming: false,
+		params: Default::default(),
+		prompt: None,
+		provider_state: None,
+	};
+
+	let input_bytes = fs::read(fixture_path("response/completions/basic.json")).expect("fixture");
+	let mut resp = Response::new(Body::from(input_bytes));
+	resp.headers_mut().insert(
+		::http::header::CONTENT_TYPE,
+		"application/json".parse().unwrap(),
+	);
+
+	let out = provider
+		.process_response(
+			client,
+			req,
+			report_policy_targeting(&mock),
+			None,
+			AsyncLog::default(),
+			llm::LogContentFields::default(),
+			None,
+			resp,
+		)
+		.await
+		.expect("buffered response should process");
+	let _ = out.collect().await.unwrap();
+
+	await_first_report(&mut rx).await;
+
+	assert_eq!(receiver.request_count(), 1);
+	let body = receiver.last_payload();
+	assert_eq!(body["streaming"], false);
+	assert_eq!(body["usage"]["outputTokens"], 23);
+	assert_eq!(body["usage"]["inputTokens"], 17);
+}
+
 fn test_root() -> &'static Path {
 	Path::new("../llm/src/tests")
 }
