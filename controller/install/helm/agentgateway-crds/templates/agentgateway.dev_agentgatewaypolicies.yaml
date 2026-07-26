@@ -9863,12 +9863,91 @@ spec:
                     - message: conditional cannot be set with any other field
                       rule: 'has(self.conditional) ? [has(self.request),has(self.response)].filter(x,x==true).size()
                         == 0 : true'
+                  usageReport:
+                    description: Reports final LLM token usage to an external endpoint
+                      on request completion.
+                    properties:
+                      backendRef:
+                        description: |-
+                          Endpoint that receives usage reports.
+                          Supported types: `Service` and `Backend`.
+                        properties:
+                          group:
+                            default: ""
+                            description: Group of the referent, for example `gateway.networking.k8s.io`.
+                              Empty selects the core API group
+                            maxLength: 253
+                            pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
+                          kind:
+                            default: Service
+                            description: Kubernetes resource kind of the referent,
+                              for example `Service`. Defaults to `Service`
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
+                            type: string
+                          name:
+                            description: Name is the name of the referent.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          namespace:
+                            description: Namespace of the referent. Defaults to the
+                              local namespace. A cross-namespace reference requires
+                              a ReferenceGrant in the referent namespace
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                          port:
+                            description: Destination port number. Required when the
+                              referent is a Kubernetes `Service`
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                        required:
+                        - name
+                        type: object
+                        x-kubernetes-validations:
+                        - message: Must have port for Service reference
+                          rule: '(size(self.group) == 0 && self.kind == ''Service'')
+                            ? has(self.port) : true'
+                      dimensions:
+                        additionalProperties:
+                          description: A Common Expression Language (CEL) expression.
+                          maxLength: 16384
+                          minLength: 1
+                          type: string
+                        description: |-
+                          Additional dimensions to include in the report, as CEL expressions
+                          evaluated against the original incoming request.
+                        maxProperties: 32
+                        type: object
+                      maxRetries:
+                        description: |-
+                          Number of retries after a failed delivery attempt. Defaults to 2
+                          (three attempts total). Set to 0 to disable retries.
+                        format: int32
+                        maximum: 5
+                        minimum: 0
+                        type: integer
+                      path:
+                        description: Request path on the endpoint. Defaults to `/usage`.
+                        type: string
+                      timeout:
+                        description: Per-attempt timeout. Defaults to 2s.
+                        type: string
+                    required:
+                    - backendRef
+                    type: object
                 type: object
                 x-kubernetes-validations:
                 - message: phase PreRouting only supports extAuth, authorization,
                     transformation, extProc, jwtAuthentication, basicAuthentication,
                     apiKeyAuthentication and cors
-                  rule: 'has(self.phase) && self.phase == ''PreRouting'' ? [has(self.buffer),has(self.csrf),has(self.delay),has(self.directResponse),has(self.headerModifiers),has(self.hostRewrite),has(self.rateLimit),has(self.retry),has(self.timeouts)].filter(x,x==true).size()
+                  rule: 'has(self.phase) && self.phase == ''PreRouting'' ? [has(self.buffer),has(self.csrf),has(self.delay),has(self.directResponse),has(self.headerModifiers),has(self.hostRewrite),has(self.rateLimit),has(self.retry),has(self.timeouts),has(self.usageReport)].filter(x,x==true).size()
                     == 0 : true'
             type: object
             x-kubernetes-validations:

@@ -1,0 +1,88 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: usage-report
+  namespace: default
+spec:
+  targetRefs:
+  - kind: Gateway
+    name: test
+    group: gateway.networking.k8s.io
+  traffic:
+    usageReport:
+      backendRef:
+        name: usage-svc
+        port: 9100
+      path: /v1/billing/ingest
+      timeout: 5s
+      maxRetries: 4
+      dimensions:
+        tenant: 'request.headers["x-tenant"]'
+        keyHash: 'request.headers["x-key-sha"]'
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: usage-svc
+  namespace: default
+spec:
+  ports:
+    - port: 9100
+---
+# Output
+output:
+- gateway:
+    Name: test
+    Namespace: default
+  resource:
+    policy:
+      key: traffic/default/usage-report:usage-report:default/test
+      name:
+        kind: AgentgatewayPolicy
+        name: usage-report
+        namespace: default
+      target:
+        gateway:
+          name: test
+          namespace: default
+      traffic:
+        usageReport:
+          dimensions:
+          - key: keyHash
+            value: request.headers["x-key-sha"]
+          - key: tenant
+            value: request.headers["x-tenant"]
+          maxRetries: 4
+          path: /v1/billing/ingest
+          target:
+            port: 9100
+            service:
+              hostname: usage-svc.default.svc.cluster.local
+              namespace: default
+          timeout: 5s
+status:
+- apiVersion: agentgateway.dev/v1alpha1
+  kind: AgentgatewayPolicy
+  metadata:
+    name: usage-report
+    namespace: default
+  spec: null
+  status:
+    ancestors:
+    - ancestorRef:
+        group: gateway.networking.k8s.io
+        kind: Gateway
+        name: test
+        namespace: default
+      conditions:
+      - lastTransitionTime: fake
+        message: Policy accepted
+        reason: Valid
+        status: "True"
+        type: Accepted
+      - lastTransitionTime: fake
+        message: Attached to all targets
+        reason: Attached
+        status: "True"
+        type: Attached
+      controllerName: agentgateway.dev/agentgateway

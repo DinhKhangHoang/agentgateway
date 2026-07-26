@@ -880,6 +880,10 @@ type Traffic struct {
 	// +optional
 	ExtProc *ExtProcOrConditional `json:"extProc,omitempty"`
 
+	// Reports final LLM token usage to an external endpoint on request completion.
+	// +optional
+	UsageReport *UsageReport `json:"usageReport,omitempty"`
+
 	// External authentication configuration for the policy.
 	// This selects the external server to send requests to for authentication.
 	//
@@ -2630,6 +2634,46 @@ type ExtProc struct {
 	// +optional
 	// +kubebuilder:validation:MaxProperties=64
 	ResponseAttributes map[string]CELExpression `json:"responseAttributes,omitempty"`
+}
+
+// UsageReport reports final LLM token usage to an external endpoint once per
+// request, after the response completes. Intended for accounting and billing
+// systems that need actual token counts rather than estimates.
+//
+// The report is delivered asynchronously and is not durable: reports in flight
+// when the gateway exits are lost. Consumers needing an audit trail should
+// reconcile against access logs, which carry the same token counts.
+//
+// There is deliberately no failureMode. This callout fires after the response
+// has already reached the client; there is no request left to reject, so
+// "fail closed" would have no meaning. Delivery failures are counted on
+// agentgateway_llm_usage_report_dropped_total instead.
+type UsageReport struct {
+	// Endpoint that receives usage reports.
+	// Supported types: `Service` and `Backend`.
+	// +required
+	BackendRef gwv1.BackendObjectReference `json:"backendRef"`
+
+	// Request path on the endpoint. Defaults to `/usage`.
+	// +optional
+	Path *string `json:"path,omitempty"`
+
+	// Per-attempt timeout. Defaults to 2s.
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// Number of retries after a failed delivery attempt. Defaults to 2
+	// (three attempts total). Set to 0 to disable retries.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=5
+	MaxRetries *int32 `json:"maxRetries,omitempty"`
+
+	// Additional dimensions to include in the report, as CEL expressions
+	// evaluated against the original incoming request.
+	// +optional
+	// +kubebuilder:validation:MaxProperties=32
+	Dimensions map[string]CELExpression `json:"dimensions,omitempty"`
 }
 
 type ExtProcConditional struct {

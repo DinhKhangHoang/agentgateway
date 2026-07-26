@@ -43,6 +43,7 @@ import (
 const (
 	extauthPolicySuffix            = ":extauth"
 	extprocPolicySuffix            = ":extproc"
+	usageReportPolicySuffix        = ":usage-report"
 	rbacPolicySuffix               = ":rbac"
 	localRateLimitPolicySuffix     = ":rl-local"
 	globalRateLimitPolicySuffix    = ":rl-global"
@@ -508,6 +509,11 @@ func translateTrafficPolicyToAgw(
 			basePolicyName,
 			policyName,
 		))
+	}
+
+	// Convert UsageReport policy if present
+	if traffic.UsageReport != nil {
+		appendPolicy("usageReport")(processUsageReportPolicy(ctx, traffic.UsageReport, traffic.Phase, basePolicyName, policyName))
 	}
 
 	// Convert Authorization policy if present
@@ -1537,6 +1543,66 @@ func castCEL(item agentgateway.CELExpression, invalid func(agentgateway.CELExpre
 }
 
 // processAuthorizationPolicy processes Authorization configuration and creates corresponding Agw policies
+// processUsageReportPolicy converts a UsageReport CRD policy into the
+// corresponding agentgateway traffic policy.
+//
+// Optional fields are left unset rather than defaulted here: the data plane
+// owns the defaults (/usage, 2s, 2 retries), and defaulting in two places
+// invites them to drift apart.
+func processUsageReportPolicy(
+	ctx PolicyCtx,
+	usageReport *agentgateway.UsageReport,
+	policyPhase *agentgateway.PolicyPhase,
+	basePolicyName string,
+	policy types.NamespacedName,
+) (*api.Policy, error) {
+	var errs []error
+
+	be, err := BuildBackendRef(ctx, usageReport.BackendRef, policy.Namespace)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("failed to build usageReport: %v", err))
+	}
+
+	spec := &api.TrafficPolicySpec_UsageReport{
+		Target: be,
+		Path:   usageReport.Path,
+	}
+	if usageReport.Timeout != nil {
+		spec.Timeout = durationpb.New(usageReport.Timeout.Duration)
+	}
+	if usageReport.MaxRetries != nil {
+		spec.MaxRetries = ptr.Of(uint32(*usageReport.MaxRetries))
+	}
+	for k, v := range usageReport.Dimensions {
+		spec.Dimensions = append(spec.Dimensions, &api.TrafficPolicySpec_UsageReport_Dimension{
+			Key:   k,
+			Value: string(v),
+		})
+	}
+	// Map iteration order is random; without this the generated config churns
+	// on every reconcile and the xDS push is never a no-op.
+	slices.SortFunc(spec.Dimensions, func(a, b *api.TrafficPolicySpec_UsageReport_Dimension) int {
+		return strings.Compare(a.Key, b.Key)
+	})
+
+	pol := &api.Policy{
+		Key:  basePolicyName + usageReportPolicySuffix,
+		Name: TypedResourceFromName(wellknown.AgentgatewayPolicyGVK.Kind, policy),
+		Kind: &api.Policy_Traffic{
+			Traffic: &api.TrafficPolicySpec{
+				Phase: phase(policyPhase),
+				Kind:  &api.TrafficPolicySpec_UsageReport_{UsageReport: spec},
+			},
+		},
+	}
+
+	logger.Debug("generated UsageReport policy",
+		"policy", basePolicyName,
+		"agentgateway_policy", pol.Name)
+
+	return pol, errors.Join(errs...)
+}
+
 func processAuthorizationPolicy(
 	auth *agentgateway.Authorization,
 	policyPhase *agentgateway.PolicyPhase,
@@ -2230,6 +2296,9 @@ func referencedBackendRefsFromPolicy(policy *agentgateway.AgentgatewayPolicy) []
 			if p.BackendRef != nil {
 				app(*p.BackendRef)
 			}
+		}
+		if s.Traffic.UsageReport != nil {
+			app(s.Traffic.UsageReport.BackendRef)
 		}
 		for p := range PolicyOrConditionalSeq(s.Traffic.RateLimit) {
 			if p.Global != nil {
