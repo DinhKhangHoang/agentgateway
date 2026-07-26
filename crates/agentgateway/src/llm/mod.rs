@@ -2680,9 +2680,7 @@ impl AmendOnDrop {
 	/// test can await it instead of racing a spawned task. Production callers
 	/// (including `Drop`) discard it.
 	pub fn report_usage(&mut self) -> Option<tokio::task::JoinHandle<()>> {
-		let Some(pol) = self.pol.take() else {
-			return None;
-		};
+		let pol = self.pol.take()?;
 		if !pol.needs_completion_amend() {
 			return None;
 		}

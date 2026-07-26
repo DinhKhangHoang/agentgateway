@@ -61563,6 +61563,17 @@
 |`llm.policies.remoteRateLimit.descriptors[].cost`|string|cost determines the optional expression to determine the cost of the request.<br>If unset, type `requests` defaults to `1`, and type `tokens` defaults to `llm.totalTokens`.<br>If the expression fails to evaluate, the descriptor is skipped.<br>Costs for type `requests` are evaluated during request processing. Costs for type `tokens`<br>are evaluated upon request completion.|
 |`llm.policies.remoteRateLimit.descriptors[].limitOverride`|string|limitOverride determines the optional expression to determine the limit of the request.<br>This tells the remote server what limit to apply to the request.<br>Note: this does not specify the *cost* of the request, which is done by the `cost` field.<br>The expression must evaluate to a map with `unit` and `requestsPerUnit` keys. For example:<br>`{"unit":"second","requestsPerUnit":100}`.<br>Valid units: second, minute, hour, day, month, year<br>If the expression fails to evaluate, the descriptor is skipped.|
 |`llm.policies.remoteRateLimit.failureMode`|enum|Behavior when the remote rate limit service is unavailable or returns an error.<br>Defaults to failClosed, denying requests with a 500 status on service failure.<br>Possible values: `failClosed`, `FailClosed`, `failOpen`, `FailOpen`.|
+|`llm.policies.usageReport`|object|Report final LLM token usage to an HTTP endpoint, once per request, on<br>completion.|
+|`llm.policies.usageReport.target`|object|Backend that receives usage reports.<br>Exactly one of service, host, or backend may be set.|
+|`llm.policies.usageReport.target.service`|object|Service reference. Service must be defined in the top level services list.|
+|`llm.policies.usageReport.target.service.name`|string|Name of the target Service, as defined in the top-level `services` list.|
+|`llm.policies.usageReport.target.service.port`|integer|Port on the target Service to route to.|
+|`llm.policies.usageReport.target.host`|string|Hostname or IP address|
+|`llm.policies.usageReport.target.backend`|string|Explicit backend reference. Backend must be defined in the top level backends list|
+|`llm.policies.usageReport.path`|string|Request path. Defaults to `/usage`.|
+|`llm.policies.usageReport.timeout`|string|Per-attempt timeout. Defaults to 2s.|
+|`llm.policies.usageReport.maxRetries`|integer|Retries after a failed delivery attempt. Defaults to 2.<br><br>`Option` rather than a bare `u32` so that an explicit `0` (never retry)<br>stays distinguishable from "unset, use the default". With a plain u32<br>the two collapse and the documented default can never apply.|
+|`llm.policies.usageReport.dimensions`|object|Extra report dimensions, computed from CEL expressions evaluated<br>against the original incoming request.|
 |`mcp`|object|mcp defines a set of MCP servers exposed by the proxy. When configured, the MCP servers will be<br>served under the attached `gateways` at /mcp and /sse.<br>All MCP servers listed will be served as a single virtual MCP server.|
 |`mcp.gateways`|string|gateways attaches the MCP routes to named gateways. This can take the form of `<gateway-name>` or `<gateway-name>/<listener-name>` to attach to a specific listener within a gateway.<br>When omitted and a gateway named `default` exists, the MCP routes attach to it unless port is set.|
 |`mcp.port`|integer|port defines the port to serve the LLM routes under. Deprecated; use `gateways` instead.|

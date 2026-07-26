@@ -11499,6 +11499,18 @@
             }
           ],
           "default": null
+        },
+        "usageReport": {
+          "description": "Report final LLM token usage to an HTTP endpoint, once per request, on\ncompletion.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "additionalProperties": false

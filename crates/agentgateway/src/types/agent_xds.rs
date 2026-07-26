@@ -2545,7 +2545,7 @@ fn traffic_policy_from_proto(
 			TrafficPolicy::UsageReport(RequestPolicy::single(
 				llm::policy::usage_report::UsageReport {
 					target: resolve_simple_reference(ur.target.as_ref()),
-					path: ur.path.as_ref().map(|p| strng::new(p)),
+					path: ur.path.as_deref().map(strng::new),
 					timeout: ur.timeout.map(convert_duration),
 					max_retries: ur.max_retries,
 					dimensions,

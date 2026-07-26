@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+config:
+  readinessAddr: 127.0.0.1:19001
+  statsAddr: 127.0.0.1:19002
+
+llm:
+  port: 4000
+  policies:
+    # Report final token counts to an accounting service once per request,
+    # after the response completes. Streaming requests produce exactly one
+    # report, not one per SSE chunk.
+    usageReport:
+      target:
+        host: 127.0.0.1:9100
+      # Optional. Defaults to /usage.
+      path: /v1/usage
+      # Optional. Per-attempt timeout. Defaults to 2s.
+      timeout: 2s
+      # Optional. Retries after a failed attempt. Defaults to 2.
+      # Set to 0 to disable retries.
+      maxRetries: 2
+      # Optional. CEL expressions evaluated against the incoming request.
+      # A dimension whose expression fails is omitted; the report is still sent.
+      dimensions:
+        tenant: 'request.headers["x-tenant"]'
+  models:
+  - name: smart
+    provider: openAI
+    params:
+      model: gpt-5.5
+      apiKey: $OPENAI_API_KEY
