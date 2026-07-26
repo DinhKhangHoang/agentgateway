@@ -1,5 +1,9 @@
-use super::UsageReportPayload;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+use super::{UsageReport, UsageReportPayload, send};
 use crate::cel::LLMContext;
+use crate::types::agent::{SimpleBackendReference, Target};
 
 /// Build an LLMContext whose completion carries a sentinel we can grep for.
 ///
@@ -121,11 +125,153 @@ fn traceparent_is_included_when_present_and_omitted_when_not() {
 
 #[test]
 fn dimensions_are_passed_through() {
-	let dims =
-		std::collections::BTreeMap::from([("tenant".to_string(), "user-11374".to_string())]);
+	let dims = std::collections::BTreeMap::from([("tenant".to_string(), "user-11374".to_string())]);
 	let payload = UsageReportPayload::project(&ctx_with_sentinel(), None, dims);
 	let v: serde_json::Value = serde_json::to_value(&payload).unwrap();
 	assert_eq!(v["dimensions"]["tenant"], "user-11374");
+}
+
+// --- Delivery ---------------------------------------------------------------
+
+/// A receiver that always answers with `status`, and counts what it received.
+async fn receiver(status: u16) -> MockServer {
+	let mock = MockServer::start().await;
+	Mock::given(method("POST"))
+		.and(path("/usage"))
+		.respond_with(ResponseTemplate::new(status))
+		.mount(&mock)
+		.await;
+	mock
+}
+
+fn report_to(mock: &MockServer, max_retries: u32) -> UsageReport {
+	UsageReport {
+		target: SimpleBackendReference::InlineBackend(Target::Address(*mock.address())),
+		path: None,
+		timeout: None,
+		max_retries,
+		dimensions: vec![],
+	}
+}
+
+/// An unreachable target: `SimpleBackendReference::Invalid` fails to resolve in
+/// `call_reference` before any connection is attempted.
+fn unreachable_report() -> UsageReport {
+	UsageReport {
+		target: SimpleBackendReference::Invalid,
+		path: None,
+		timeout: None,
+		max_retries: 0,
+		dimensions: vec![],
+	}
+}
+
+fn payload() -> UsageReportPayload {
+	UsageReportPayload::project(&ctx_with_sentinel(), None, Default::default())
+}
+
+/// An unreachable receiver must not panic, must not block, and must be
+/// counted. Losing a usage report silently is the failure mode this whole
+/// counter exists to make visible.
+#[tokio::test]
+async fn unreachable_receiver_increments_dropped_counter() {
+	let client = crate::test_helpers::policy_client();
+
+	send(&unreachable_report(), payload(), client.clone()).await;
+
+	assert_eq!(
+		client.inputs.metrics.llm_usage_report_dropped.get(),
+		1,
+		"an undeliverable usage report must be counted as dropped"
+	);
+}
+
+/// max_retries controls attempts, not just the retry count: 0 retries means
+/// exactly one attempt.
+///
+/// The plan specified asserting this against an `outbound_calls` metric
+/// family. No such family exists — the only outbound-call metric is the
+/// `upstream_call_duration` histogram, and it is recorded at
+/// httpproxy.rs:4022, *after* `resolve_simple_backend` at :4001, so an
+/// unresolvable target records nothing at all. Counting requests that actually
+/// arrived at a receiver tests the same property and is not a proxy for it.
+#[tokio::test]
+async fn zero_retries_makes_exactly_one_attempt() {
+	let mock = receiver(500).await;
+	let client = crate::test_helpers::policy_client();
+
+	send(&report_to(&mock, 0), payload(), client.clone()).await;
+
+	assert_eq!(
+		mock.received_requests().await.unwrap().len(),
+		1,
+		"max_retries=0 must mean exactly one attempt"
+	);
+	assert_eq!(
+		client.inputs.metrics.llm_usage_report_dropped.get(),
+		1,
+		"a report the receiver rejected is still a dropped report"
+	);
+}
+
+/// A 5xx is retried up to max_retries times, then given up on.
+#[tokio::test]
+async fn rejected_report_is_retried_then_dropped() {
+	let mock = receiver(500).await;
+	let client = crate::test_helpers::policy_client();
+
+	send(&report_to(&mock, 2), payload(), client.clone()).await;
+
+	assert_eq!(
+		mock.received_requests().await.unwrap().len(),
+		3,
+		"max_retries=2 must mean three attempts in total"
+	);
+	assert_eq!(client.inputs.metrics.llm_usage_report_dropped.get(), 1);
+}
+
+/// The happy path: one attempt, nothing dropped, and the body the receiver
+/// gets is the payload we projected.
+#[tokio::test]
+async fn accepted_report_is_sent_once_and_not_dropped() {
+	let mock = receiver(200).await;
+	let client = crate::test_helpers::policy_client();
+
+	send(&report_to(&mock, 2), payload(), client.clone()).await;
+
+	let reqs = mock.received_requests().await.unwrap();
+	assert_eq!(reqs.len(), 1, "a report accepted first try must not repeat");
+	assert_eq!(
+		client.inputs.metrics.llm_usage_report_dropped.get(),
+		0,
+		"a delivered report must not be counted as dropped"
+	);
+
+	let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
+	assert_eq!(body["usage"]["inputTokens"], 400004);
+	assert_eq!(
+		reqs[0].headers.get("content-type").unwrap(),
+		"application/json"
+	);
+}
+
+/// The configured path must be used verbatim; the default is `/usage`.
+#[tokio::test]
+async fn configured_path_overrides_the_default() {
+	let mock = MockServer::start().await;
+	Mock::given(method("POST"))
+		.and(path("/v1/billing/ingest"))
+		.respond_with(ResponseTemplate::new(200))
+		.mount(&mock)
+		.await;
+	let client = crate::test_helpers::policy_client();
+
+	let mut cfg = report_to(&mock, 0);
+	cfg.path = Some("/v1/billing/ingest".into());
+	send(&cfg, payload(), client.clone()).await;
+
+	assert_eq!(mock.received_requests().await.unwrap().len(), 1);
+	assert_eq!(client.inputs.metrics.llm_usage_report_dropped.get(), 0);
 }
 
 /// A dimension whose CEL expression fails must be omitted, and the report

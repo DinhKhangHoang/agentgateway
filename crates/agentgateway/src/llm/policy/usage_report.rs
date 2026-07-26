@@ -1,8 +1,13 @@
 use std::collections::BTreeMap;
 
+use ::http::header::CONTENT_TYPE;
+use ::http::{HeaderValue, StatusCode};
 use serde::Serialize;
 
 use crate::cel::LLMContext;
+use crate::http::filters::BackendRequestTimeout;
+use crate::proxy::httpproxy::PolicyClient;
+use crate::telemetry::metrics::{OutboundCallKind, OutboundCallSubtype};
 use crate::types::agent::SimpleBackendReference;
 use crate::*;
 
@@ -180,6 +185,64 @@ impl UsageReportPayload {
 			dimensions,
 		}
 	}
+}
+
+/// Deliver one usage report, retrying on failure.
+///
+/// Never returns an error: the response has already reached the client, so
+/// there is nothing a caller could do with one. Failures are recorded on
+/// `llm_usage_report_dropped` instead, which is the metric operators alert on.
+///
+/// This is a plain `async fn` rather than something that spawns internally, so
+/// tests can await a delivery to completion. Spawning happens at the call site.
+pub async fn send(cfg: &UsageReport, payload: UsageReportPayload, client: PolicyClient) {
+	let attempts = cfg.max_retries.saturating_add(1);
+	let mut backoff = Duration::from_millis(50);
+
+	for attempt in 0..attempts {
+		match try_send_once(cfg, &payload, &client).await {
+			Ok(status) if status.is_success() => return,
+			Ok(status) => {
+				debug!("usage report attempt {attempt} rejected with status {status}");
+			},
+			Err(e) => {
+				debug!("usage report attempt {attempt} failed: {e}");
+			},
+		}
+		if attempt + 1 < attempts {
+			tokio::time::sleep(backoff).await;
+			backoff *= 2;
+		}
+	}
+
+	client.inputs.metrics.llm_usage_report_dropped.inc();
+	warn!(
+		provider = %payload.provider,
+		model = %payload.request_model,
+		"usage report dropped after {attempts} attempts; usage for this request is unbilled"
+	);
+}
+
+async fn try_send_once(
+	cfg: &UsageReport,
+	payload: &UsageReportPayload,
+	client: &PolicyClient,
+) -> anyhow::Result<StatusCode> {
+	let body = serde_json::to_vec(payload)?;
+	let mut req = ::http::Request::builder()
+		.method(::http::Method::POST)
+		.uri(cfg.path.as_deref().unwrap_or(DEFAULT_PATH))
+		.header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+		.body(crate::http::Body::from(body))?;
+	req.extensions_mut().insert(BackendRequestTimeout(
+		cfg.timeout.unwrap_or(DEFAULT_TIMEOUT),
+	));
+
+	let res = client
+		.with_outbound(OutboundCallKind::Policy, OutboundCallSubtype::UsageReport)
+		.call_reference(req, &cfg.target)
+		.await?;
+	Ok(res.status())
 }
 
 #[cfg(test)]

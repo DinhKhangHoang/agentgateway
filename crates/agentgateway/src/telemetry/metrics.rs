@@ -175,6 +175,7 @@ pub enum OutboundCallSubtype {
 	Guardrail,
 	RateLimit,
 	Oidc,
+	UsageReport,
 }
 
 #[derive(Clone, Hash, Debug, PartialEq, Eq, EncodeLabelSet)]
@@ -221,6 +222,10 @@ pub struct Metrics {
 	pub guardrail_checks: Family<GuardrailLabels, counter::Counter>,
 
 	pub cost_catalog_lookups: Family<CostCatalogLookupLabels, counter::Counter>,
+
+	/// Usage reports abandoned after the final retry, or shed because the
+	/// in-flight cap was reached. Non-zero means unbilled usage: alert on it.
+	pub llm_usage_report_dropped: counter::Counter,
 
 	// metrics for request retries
 	pub retries: Counter,
@@ -369,6 +374,15 @@ impl Metrics {
 				registry.register(
 					"cost_catalog_lookups",
 					"Total number of model cost catalog lookups by resolution status",
+					m.clone(),
+				);
+				m
+			},
+			llm_usage_report_dropped: {
+				let m = counter::Counter::default();
+				registry.register(
+					"llm_usage_report_dropped",
+					"Total number of LLM usage reports that were never delivered; each one is unbilled usage",
 					m.clone(),
 				);
 				m
