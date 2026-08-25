@@ -718,11 +718,14 @@ func processRetriesPolicy(retry *agentgateway.Retry, basePolicyName string, poli
 		// silently disable retries entirely. Left unset (0 on the wire), the data
 		// plane applies its own 64 KiB default.
 		//
-		// AsInt64 rather than Value: Value returns the low 64 bits of a quantity too
-		// large to represent instead of saturating, so "18446744073709617152" reads
-		// back as 65536 and would sail through the range check.
-		n, ok := v.Value.AsInt64()
-		if !ok || n < minRetryMaxReplayBytes || n > maxRetryMaxReplayBytes {
+		// CmpInt64 rather than Value() or AsInt64(): Value() returns the low 64 bits
+		// of a quantity too large to represent instead of saturating, so
+		// "18446744073709617152" reads back as 65536 and sails through the range
+		// check; AsInt64() reports every non-integer quantity unrepresentable, which
+		// would reject an idiomatic "1.5Mi" that sits well inside the range. CmpInt64
+		// compares exactly, which is also what the CEL rules on the field do, so the
+		// two gates admit the same set and cannot drift apart.
+		if v.Value.CmpInt64(minRetryMaxReplayBytes) < 0 || v.Value.CmpInt64(maxRetryMaxReplayBytes) > 0 {
 			// String() reports apimachinery's canonical form, which is not necessarily
 			// what was written ("16Ei" comes back as 9223372036854775807), hence
 			// "normalizes to" rather than quoting it back as their input.

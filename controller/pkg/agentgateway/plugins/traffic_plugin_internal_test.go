@@ -55,6 +55,10 @@ func TestProcessRetriesPolicyAcceptsBoundaryMaxReplayBytes(t *testing.T) {
 	}{
 		{"1Ki", 1024},
 		{"100Mi", 104_857_600},
+		// A fractional quantity is idiomatic Kubernetes and 1.5Mi is well inside the
+		// range, but AsInt64() reports every non-integer quantity unrepresentable --
+		// gating on it discarded this value and silently reverted the cap to 64 KiB.
+		{"1.5Mi", 1_572_864},
 	} {
 		got, err := processRetriesPolicy(retryWith(byteSize(t, tc.in)), "base", types.NamespacedName{Name: "n", Namespace: "ns"})
 		if err != nil {
@@ -85,13 +89,13 @@ func TestProcessRetriesPolicyKeepsPolicyWhenMaxReplayBytesIsRejected(t *testing.
 		"zero":          "0",
 		"below floor":   "512",
 		"above ceiling": "200Mi",
-		// AsInt64 reports these unrepresentable, which is the only thing that keeps
-		// them out: "1e30" and the 20-digit literal both read back as an in-range
-		// number through Quantity.Value(), which returns the low 64 bits rather than
-		// saturating -- 0 and 65536 respectively. "16Ei" saturates Value() to
-		// MaxInt64. Any of these silently becoming a valid cap is the regression
-		// these rows exist to catch.
-		"unrepresentable as int64":         "1e30",
+		// CmpInt64 compares these exactly, so the range check itself excludes them.
+		// They are listed because the lossy int64 conversions do not: through
+		// Quantity.Value(), which returns the low 64 bits rather than saturating,
+		// "1e30" reads back as 0 and the 20-digit literal as 65536 -- an in-range
+		// number. "16Ei" saturates Value() to MaxInt64. Any of them silently
+		// becoming a valid cap is the regression these rows exist to catch.
+		"too large for int64":              "1e30",
 		"wraps to in-range in low 64 bits": "18446744073709617152",
 		"saturates int64":                  "16Ei",
 	}
