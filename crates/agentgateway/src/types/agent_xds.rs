@@ -1647,6 +1647,7 @@ impl ModelRoute {
 				key: strng::new(&s.key),
 				name,
 				kind,
+				extra_paths: model_match.paths.iter().map(|p| strng::new(p)).collect(),
 			},
 			strng::new(&s.listener_key),
 		))
@@ -4604,6 +4605,7 @@ mod tests {
 			created: 1_704_067_200,
 			r#match: Some(proto::agent::model_route::Match {
 				model: "gpt-5-mini".to_string(),
+				paths: vec![],
 			}),
 			kind: Some(Kind::ConcreteModel(ConcreteModel {
 				model_visibility: ModelVisibility::Internal as i32,
@@ -4687,6 +4689,7 @@ mod tests {
 			created: 1_704_153_600,
 			r#match: Some(proto::agent::model_route::Match {
 				model: "fast".to_string(),
+				paths: vec![],
 			}),
 			kind: Some(Kind::VirtualModel(VirtualModel {
 				routing: Some(Routing::Weighted(Weighted {
@@ -4736,6 +4739,7 @@ mod tests {
 			created: 0,
 			r#match: Some(proto::agent::model_route::Match {
 				model: "smart".to_string(),
+				paths: vec![],
 			}),
 			kind: Some(Kind::VirtualModel(VirtualModel {
 				routing: Some(Routing::Conditional(Conditional {
@@ -4782,6 +4786,7 @@ mod tests {
 			created: 0,
 			r#match: Some(proto::agent::model_route::Match {
 				model: "smart".to_string(),
+				paths: vec![],
 			}),
 			kind: Some(Kind::VirtualModel(VirtualModel {
 				routing: Some(Routing::Conditional(Conditional {
@@ -4823,6 +4828,7 @@ mod tests {
 			created: 0,
 			r#match: Some(proto::agent::model_route::Match {
 				model: "resilient".to_string(),
+				paths: vec![],
 			}),
 			kind: Some(Kind::VirtualModel(VirtualModel {
 				routing: Some(Routing::Failover(Failover {

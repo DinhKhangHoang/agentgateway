@@ -232,6 +232,18 @@ type ModelMatch struct {
 	// +kubebuilder:validation:XValidation:rule="!self.contains('*') || (self.indexOf('*') == self.lastIndexOf('*') && (self.indexOf('*') == 0 || self.indexOf('*') == size(self) - 1))",message="model wildcards must be '*', a suffix like 'gpt-*', or a prefix like '*-latest'"
 	// +optional
 	Model *LongString `json:"model,omitempty"`
+
+	// `paths` lists additional request paths routed to the model router, beyond
+	// the built-in OpenAI-shaped surface (`/v1/chat/completions`, `/v1/messages`,
+	// `/v1/responses`, `/v1/embeddings`, `/v1/rerank` and friends).
+	//
+	// Paths are unioned across every model on the same listener, so a path opened
+	// by one model becomes reachable for all of them. The request body's `model`
+	// field still selects which model serves it. Pair each entry with a
+	// `policies.routes` entry naming the route type for that path.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	Paths []string `json:"paths,omitempty"`
 }
 
 // ModelProvider identifies the LLM provider serving a concrete model.

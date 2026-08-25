@@ -2033,6 +2033,11 @@ message ModelRoute {
   message Match {
     // User-facing model name or wildcard pattern for this model route.
     string model = 1;
+
+    // Additional request paths routed to the model router on this model's
+    // listener, beyond the built-in OpenAI-shaped surface. Paths are unioned
+    // across all models on the listener.
+    repeated string paths = 2;
   }
 
   message VirtualModel {

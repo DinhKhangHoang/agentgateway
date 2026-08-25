@@ -167,7 +167,7 @@ func convertAgentgatewayModel(ctx RouteContext, model *agentgateway.Agentgateway
 	route := &api.ModelRoute{
 		Key:         key,
 		ListenerKey: parent.ListenerKey,
-		Match:       &api.ModelRoute_Match{Model: effectiveModelName(model)},
+		Match:       modelRouteMatch(model),
 		Created:     uint64(created),
 	}
 	var resources []*api.Resource
@@ -643,6 +643,14 @@ func stringPtr[T ~string](v *T) *string {
 		return nil
 	}
 	return new(string(*v))
+}
+
+func modelRouteMatch(model *agentgateway.AgentgatewayModel) *api.ModelRoute_Match {
+	m := &api.ModelRoute_Match{Model: effectiveModelName(model)}
+	if model.Spec.Match != nil {
+		m.Paths = append(m.Paths, model.Spec.Match.Paths...)
+	}
+	return m
 }
 
 func effectiveModelName(model *agentgateway.AgentgatewayModel) string {

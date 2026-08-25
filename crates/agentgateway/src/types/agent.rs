@@ -742,6 +742,13 @@ pub struct ModelRoute {
 	pub key: RouteKey,
 	pub name: Strng,
 	pub kind: ModelRouteKind,
+	/// Additional request paths this model's listener should route to the model
+	/// router, beyond the built-in OpenAI-shaped surface.
+	///
+	/// Paths are unioned across every model on the listener, so a path opened by
+	/// one model is reachable by all of them; the body's `model` field still
+	/// selects which model actually serves the request.
+	pub extra_paths: Vec<Strng>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

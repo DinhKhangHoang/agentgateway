@@ -756,8 +756,8 @@ impl Store {
 		strng::format!("llm:request:{listener}")
 	}
 
-	fn model_router_matches() -> Vec<RouteMatch> {
-		let mut matches = [
+	fn model_router_matches(extra_paths: &[Strng]) -> Vec<RouteMatch> {
+		let builtin = [
 			"/v1/models",
 			"/models",
 			"/v1/chat/completions",
@@ -770,15 +770,22 @@ impl Store {
 			"/v1/embeddings",
 			"/v1/rerank",
 			"/v2/rerank",
-		]
-		.into_iter()
-		.map(|path| RouteMatch {
-			path: agent::PathMatch::Exact(strng::new(path)),
-			method: None,
-			headers: vec![],
-			query: vec![],
-		})
-		.collect::<Vec<_>>();
+		];
+		// A BTreeSet rather than a HashSet so the emitted match order is identical
+		// across processes and across listener rebuilds: two pods must derive the
+		// same route table from the same config, and declaration order must not
+		// leak into it.
+		let mut seen: std::collections::BTreeSet<Strng> = builtin.into_iter().map(strng::new).collect();
+		seen.extend(extra_paths.iter().cloned());
+		let mut matches = seen
+			.into_iter()
+			.map(|path| RouteMatch {
+				path: agent::PathMatch::Exact(path),
+				method: None,
+				headers: vec![],
+				query: vec![],
+			})
+			.collect::<Vec<_>>();
 		matches.push(RouteMatch {
 			path: agent::PathMatch::Regex(
 				regex::Regex::new(r"^/v(?:[0-9]+|[0-9]+beta[0-9]+)/projects/[^/]+/locations/[^/]+/publishers/[^/]+/models/[^/]+:(?:rawPredict|streamRawPredict)$")
@@ -800,12 +807,14 @@ impl Store {
 
 		let mut models = Vec::new();
 		let mut virtual_models = Vec::new();
+		let mut extra_paths: Vec<Strng> = Vec::new();
 		for (_, model_route) in self
 			.model_routes
 			.values()
 			.filter(|(model_listener, _)| model_listener == listener)
 			.sorted_by_key(|(_, model_route)| model_route.key.clone())
 		{
+			extra_paths.extend(model_route.extra_paths.iter().cloned());
 			match &model_route.kind {
 				agent::ModelRouteKind::Concrete(model) => models.push(model.clone()),
 				agent::ModelRouteKind::Virtual(model) => virtual_models.push(model.clone()),
@@ -842,7 +851,7 @@ impl Store {
 					kind: None,
 				},
 				hostnames: vec![],
-				matches: Self::model_router_matches(),
+				matches: Self::model_router_matches(&extra_paths),
 				backends: vec![RouteBackendReference {
 					weight: 1,
 					target: agent::BackendReference::Backend(backend_key).into(),
@@ -2305,7 +2314,7 @@ mod tests {
 
 	#[test]
 	fn model_router_matches_only_standard_endpoints() {
-		let matches = Store::model_router_matches();
+		let matches = Store::model_router_matches(&[]);
 		assert!(matches.iter().any(|route_match| {
 			matches!(
 				route_match.path,
@@ -2331,6 +2340,60 @@ mod tests {
 	}
 
 	#[test]
+	fn model_router_matches_include_extra_paths_deduplicated() {
+		let extra = [strng::new("/v1/completions"), strng::new("/v1/completions")];
+		let matches = Store::model_router_matches(&extra);
+		let count = matches
+			.iter()
+			.filter(|m| matches!(&m.path, agent::PathMatch::Exact(p) if p.as_str() == "/v1/completions"))
+			.count();
+		assert_eq!(count, 1, "duplicate extra paths must collapse to one match");
+	}
+
+	#[test]
+	fn model_router_extra_paths_never_shadow_builtins() {
+		let extra = [strng::new("/v1/chat/completions")];
+		let matches = Store::model_router_matches(&extra);
+		let count = matches
+			.iter()
+			.filter(
+				|m| matches!(&m.path, agent::PathMatch::Exact(p) if p.as_str() == "/v1/chat/completions"),
+			)
+			.count();
+		assert_eq!(
+			count, 1,
+			"an extra path equal to a builtin must not duplicate the match"
+		);
+	}
+
+	#[test]
+	fn model_router_matches_are_order_stable() {
+		let a = Store::model_router_matches(&[
+			strng::new("/v1/completions"),
+			strng::new("/v1/generateContent"),
+		]);
+		let b = Store::model_router_matches(&[
+			strng::new("/v1/generateContent"),
+			strng::new("/v1/completions"),
+		]);
+		let ka: Vec<String> = a
+			.iter()
+			.filter_map(|m| match &m.path {
+				agent::PathMatch::Exact(p) => Some(p.to_string()),
+				_ => None,
+			})
+			.collect();
+		let kb: Vec<String> = b
+			.iter()
+			.filter_map(|m| match &m.path {
+				agent::PathMatch::Exact(p) => Some(p.to_string()),
+				_ => None,
+			})
+			.collect();
+		assert_eq!(ka, kb, "match order must not depend on declaration order");
+	}
+
+	#[test]
 	fn xds_model_route_builds_listener_llm_router() {
 		use agent_xds::{Handler, XdsResource};
 
@@ -2346,6 +2409,7 @@ mod tests {
 			created: 0,
 			r#match: Some(crate::types::proto::agent::model_route::Match {
 				model: "gpt-5-mini".to_string(),
+				paths: vec![],
 			}),
 			kind: Some(Kind::ConcreteModel(ConcreteModel {
 				model_visibility: ModelVisibility::Public as i32,
@@ -2394,6 +2458,7 @@ mod tests {
 			created: 0,
 			r#match: Some(crate::types::proto::agent::model_route::Match {
 				model: "claude-haiku".to_string(),
+				paths: vec![],
 			}),
 			kind: Some(Kind::ConcreteModel(ConcreteModel {
 				model_visibility: ModelVisibility::Public as i32,
@@ -2466,6 +2531,7 @@ mod tests {
 				created: 0,
 				r#match: Some(crate::types::proto::agent::model_route::Match {
 					model: name.to_string(),
+					paths: vec![],
 				}),
 				kind: Some(Kind::ConcreteModel(ConcreteModel {
 					model_visibility: ModelVisibility::Public as i32,

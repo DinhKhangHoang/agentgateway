@@ -16379,7 +16379,11 @@ func (x *CrossAppAccessAuth_SubjectToken) GetSource() *AuthorizationLocation {
 type ModelRoute_Match struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// User-facing model name or wildcard pattern for this model route.
-	Model         string `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	Model string `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	// Additional request paths routed to the model router on this model's
+	// listener, beyond the built-in OpenAI-shaped surface. Paths are unioned
+	// across all models on the listener.
+	Paths         []string `protobuf:"bytes,2,rep,name=paths,proto3" json:"paths,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -16419,6 +16423,13 @@ func (x *ModelRoute_Match) GetModel() string {
 		return x.Model
 	}
 	return ""
+}
+
+func (x *ModelRoute_Match) GetPaths() []string {
+	if x != nil {
+		return x.Paths
+	}
+	return nil
 }
 
 type ModelRoute_VirtualModel struct {
@@ -18213,7 +18224,7 @@ const file_resource_proto_rawDesc = "" +
 	"clientAuthB\x16\n" +
 	"\x14_token_endpoint_path\x1aX\n" +
 	"\fSubjectToken\x12H\n" +
-	"\x06source\x18\x01 \x01(\v20.agentgateway.dev.resource.AuthorizationLocationR\x06source\"\xd3\f\n" +
+	"\x06source\x18\x01 \x01(\v20.agentgateway.dev.resource.AuthorizationLocationR\x06source\"\xe9\f\n" +
 	"\n" +
 	"ModelRoute\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12!\n" +
@@ -18223,9 +18234,10 @@ const file_resource_proto_rawDesc = "" +
 	"\x0econcrete_model\x18\x05 \x01(\v23.agentgateway.dev.resource.ModelRoute.ConcreteModelH\x00R\rconcreteModel\x12L\n" +
 	"\tai_policy\x18\x06 \x01(\v2/.agentgateway.dev.resource.BackendPolicySpec.AiR\baiPolicy\x12\x18\n" +
 	"\acreated\x18\a \x01(\x04R\acreated\x12W\n" +
-	"\rauthorization\x18\b \x01(\v21.agentgateway.dev.resource.TrafficPolicySpec.RBACR\rauthorization\x1a\x1d\n" +
+	"\rauthorization\x18\b \x01(\v21.agentgateway.dev.resource.TrafficPolicySpec.RBACR\rauthorization\x1a3\n" +
 	"\x05Match\x12\x14\n" +
-	"\x05model\x18\x01 \x01(\tR\x05model\x1a\xdc\x05\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x12\x14\n" +
+	"\x05paths\x18\x02 \x03(\tR\x05paths\x1a\xdc\x05\n" +
 	"\fVirtualModel\x12Y\n" +
 	"\bweighted\x18\x01 \x01(\v2;.agentgateway.dev.resource.ModelRoute.VirtualModel.WeightedH\x00R\bweighted\x12b\n" +
 	"\vconditional\x18\x02 \x01(\v2>.agentgateway.dev.resource.ModelRoute.VirtualModel.ConditionalH\x00R\vconditional\x12Y\n" +
