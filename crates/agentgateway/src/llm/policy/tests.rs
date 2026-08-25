@@ -1523,3 +1523,47 @@ fn test_google_model_armor_implicit_auth_used_when_no_user_credentials() {
 		resolved.backend_auth
 	);
 }
+
+/// The route-type map is a path-*suffix* map, so a longer, more specific key must
+/// always be consulted before a shorter one — including before the `"*"` wildcard.
+/// Config-driven route types (e.g. mapping `/v1/completions` to `Detect` on a
+/// gateway whose default is `Passthrough`) depend entirely on this ordering.
+#[test]
+fn sorted_routes_prefer_specific_path_over_wildcard() {
+	let mut r = SortedRoutes::default();
+	r.insert(strng::new("*"), crate::llm::RouteType::Passthrough);
+	r.insert(strng::new("/v1/completions"), crate::llm::RouteType::Detect);
+	let first = r.iter().next().expect("at least one route");
+	assert_eq!(first.0.as_str(), "/v1/completions");
+	assert_eq!(*first.1, crate::llm::RouteType::Detect);
+}
+
+/// `:generateContent` is a *suffix of* `:streamGenerateContent`. If the shorter key
+/// were ever consulted first, every streaming Gemini request would be classified as
+/// non-streaming, and the only symptom would be wrong `streaming` telemetry and a
+/// missed `amend_request_info` streaming flag — no error, no failed request.
+#[test]
+fn sorted_routes_prefer_longer_key_regardless_of_insert_order() {
+	let mut a = SortedRoutes::default();
+	a.insert(
+		strng::new(":generateContent"),
+		crate::llm::RouteType::Detect,
+	);
+	a.insert(
+		strng::new(":streamGenerateContent"),
+		crate::llm::RouteType::Detect,
+	);
+	let mut b = SortedRoutes::default();
+	b.insert(
+		strng::new(":streamGenerateContent"),
+		crate::llm::RouteType::Detect,
+	);
+	b.insert(
+		strng::new(":generateContent"),
+		crate::llm::RouteType::Detect,
+	);
+	let ka: Vec<String> = a.iter().map(|(k, _)| k.to_string()).collect();
+	let kb: Vec<String> = b.iter().map(|(k, _)| k.to_string()).collect();
+	assert_eq!(ka, kb, "route ordering must not depend on insertion order");
+	assert_eq!(ka[0], ":streamGenerateContent");
+}
