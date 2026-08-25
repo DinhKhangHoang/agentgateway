@@ -1524,12 +1524,20 @@ impl ModelRoute {
 			));
 		}
 		let name = strng::new(&model_match.model);
-		let llm_policy = s
-			.ai_policy
-			.as_ref()
-			.map(|policy| convert_backend_ai_policy(policy, diagnostics).map(Arc::new))
-			.transpose()?
-			.unwrap_or_else(llm::model_router::default_route_types);
+		let llm_policy = match s.ai_policy.as_ref() {
+			Some(policy) => {
+				let mut converted = convert_backend_ai_policy(policy, diagnostics)?;
+				if converted.routes.is_empty() {
+					// A model-level AI policy (e.g. one carrying only `transformations`) must not
+					// silently erase the default path -> RouteType table; without it every path
+					// would fall through to Completions. A policy that does define its own routes
+					// replaces the table outright.
+					converted.routes = llm::model_router::default_route_types().routes.clone();
+				}
+				Arc::new(converted)
+			},
+			None => llm::model_router::default_route_types(),
+		};
 		let authorization = s
 			.authorization
 			.as_ref()
@@ -4725,6 +4733,162 @@ mod tests {
 		assert_eq!(targets[0].weight, 40);
 		assert_eq!(targets[1].model, "anthropic/claude-haiku-4-5");
 		assert_eq!(targets[1].weight, 60);
+		Ok(())
+	}
+
+	fn model_route_concrete_kind() -> proto::agent::model_route::Kind {
+		use proto::agent::backend_reference;
+		use proto::agent::model_route::concrete_model::ModelVisibility;
+		use proto::agent::model_route::{ConcreteModel, Kind};
+
+		Kind::ConcreteModel(ConcreteModel {
+			model_visibility: ModelVisibility::Public as i32,
+			backend: Some(proto::agent::BackendReference {
+				port: 0,
+				kind: Some(backend_reference::Kind::Backend(
+					"default/deepseek".to_string(),
+				)),
+			}),
+			backend_policies: vec![],
+		})
+	}
+
+	fn model_route_virtual_kind() -> proto::agent::model_route::Kind {
+		use proto::agent::model_route::virtual_model::{Routing, Weighted, weighted};
+		use proto::agent::model_route::{Kind, VirtualModel};
+
+		Kind::VirtualModel(VirtualModel {
+			routing: Some(Routing::Weighted(Weighted {
+				targets: vec![weighted::Target {
+					model: "deepseek-v4-pro".to_string(),
+					weight: 100,
+				}],
+			})),
+		})
+	}
+
+	fn model_route_proto_with_ai_policy(
+		kind: proto::agent::model_route::Kind,
+		ai_policy: Option<proto::agent::backend_policy_spec::Ai>,
+	) -> proto::agent::ModelRoute {
+		proto::agent::ModelRoute {
+			key: "default/deepseek-v4-pro-direct".to_string(),
+			listener_key: "default/gw.http".to_string(),
+			created: 0,
+			r#match: Some(proto::agent::model_route::Match {
+				model: "deepseek-v4-pro-direct".to_string(),
+				paths: vec![],
+			}),
+			kind: Some(kind),
+			ai_policy,
+			authorization: None,
+		}
+	}
+
+	fn model_route_llm_policy(route: &ModelRoute) -> Arc<llm::Policy> {
+		match &route.kind {
+			ModelRouteKind::Concrete(model) => model.policies.llm.clone(),
+			ModelRouteKind::Virtual(model) => model.llm_policy.clone(),
+		}
+	}
+
+	fn assert_default_route_types(policy: &llm::Policy) {
+		let expected = llm::model_router::default_route_types();
+		assert_eq!(policy.routes.len(), expected.routes.len());
+		for (path, rt) in expected.routes.iter() {
+			assert_eq!(
+				policy.routes.get(path.as_str()),
+				Some(rt),
+				"missing default route type for {path}"
+			);
+		}
+		assert!(policy.routes.contains_key("/v1/chat/completions"));
+		assert!(policy.routes.contains_key("*"));
+	}
+
+	#[test]
+	fn test_model_route_without_ai_policy_keeps_default_route_types() -> Result<(), ProtoError> {
+		for kind in [model_route_concrete_kind(), model_route_virtual_kind()] {
+			let proto_route = model_route_proto_with_ai_policy(kind, None);
+			let (route, _) = ModelRoute::from_xds(&proto_route, &mut Diagnostics::default())?;
+			let policy = model_route_llm_policy(&route);
+			assert_default_route_types(&policy);
+			assert_eq!(
+				policy.resolve_route("/v1/completions"),
+				llm::RouteType::Passthrough
+			);
+			assert_eq!(
+				policy.resolve_route("/v1/chat/completions"),
+				llm::RouteType::Completions
+			);
+		}
+		Ok(())
+	}
+
+	#[test]
+	fn test_model_route_transformation_only_ai_policy_keeps_default_route_types()
+	-> Result<(), ProtoError> {
+		let ai_policy = proto::agent::backend_policy_spec::Ai {
+			transformations: std::collections::HashMap::from([(
+				"model".to_string(),
+				"'deepseek-v4-pro'".to_string(),
+			)]),
+			..Default::default()
+		};
+
+		for kind in [model_route_concrete_kind(), model_route_virtual_kind()] {
+			let proto_route = model_route_proto_with_ai_policy(kind, Some(ai_policy.clone()));
+			let (route, _) = ModelRoute::from_xds(&proto_route, &mut Diagnostics::default())?;
+			let policy = model_route_llm_policy(&route);
+			assert_default_route_types(&policy);
+			assert!(policy.transformations.is_some());
+			// The bug: an empty route table made resolve_route fall through to Completions for
+			// every path, so /v1/completions was parsed as a chat completion request.
+			assert_eq!(
+				policy.resolve_route("/v1/completions"),
+				llm::RouteType::Passthrough
+			);
+			assert_eq!(
+				policy.resolve_route("/v1/chat/completions"),
+				llm::RouteType::Completions
+			);
+			assert_eq!(
+				policy.resolve_route("/v1/embeddings"),
+				llm::RouteType::Embeddings
+			);
+		}
+		Ok(())
+	}
+
+	#[test]
+	fn test_model_route_ai_policy_routes_replace_defaults() -> Result<(), ProtoError> {
+		use proto::agent::backend_policy_spec::ai::RouteType as ProtoRouteType;
+
+		let ai_policy = proto::agent::backend_policy_spec::Ai {
+			routes: std::collections::HashMap::from([(
+				"/v1/embeddings".to_string(),
+				ProtoRouteType::Embeddings as i32,
+			)]),
+			..Default::default()
+		};
+
+		for kind in [model_route_concrete_kind(), model_route_virtual_kind()] {
+			let proto_route = model_route_proto_with_ai_policy(kind, Some(ai_policy.clone()));
+			let (route, _) = ModelRoute::from_xds(&proto_route, &mut Diagnostics::default())?;
+			let policy = model_route_llm_policy(&route);
+			assert_eq!(policy.routes.len(), 1);
+			assert_eq!(
+				policy.routes.get("/v1/embeddings"),
+				Some(&llm::RouteType::Embeddings)
+			);
+			assert!(!policy.routes.contains_key("/v1/chat/completions"));
+			assert!(!policy.routes.contains_key("*"));
+			// No wildcard was configured, so resolve_route keeps its hardcoded fallback.
+			assert_eq!(
+				policy.resolve_route("/v1/completions"),
+				llm::RouteType::Completions
+			);
+		}
 		Ok(())
 	}
 
