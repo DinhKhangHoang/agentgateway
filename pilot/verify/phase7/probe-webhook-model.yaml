@@ -1,0 +1,61 @@
+# PROBE ONLY - not part of the pilot manifest set. Applied transiently by
+# Task 3 to answer whether ext-auth-injected headers reach a promptGuard
+# webhook, then reverted by re-applying pilot/06-model-deepseek.yaml.
+#
+# `kubectl apply` REPLACES `spec.policies`, so the live regex guardrail and the
+# health/eviction policy are reproduced verbatim below. The webhook is appended
+# as a SECOND promptGuard.request entry - purely additive.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: deepseek-v4-pro-direct
+  namespace: user-11377-maas-v2-agw
+spec:
+  baseURL: https://api.deepseek.com
+  match:
+    model: deepseek-v4-pro-direct
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-v2-agw
+  provider: OpenAI
+  visibility: Internal
+  policies:
+    auth:
+      secretRef:
+        key: key
+        name: deepseek-direct-key
+    transformations:
+    - expression: "'deepseek-v4-pro'"
+      field: model
+    health:
+      eviction:
+        consecutiveFailures: 2
+        duration: 30s
+      unhealthyCondition: "response.code == 429 || response.code >= 500"
+    promptGuard:
+      request:
+      - regex:
+          action: Reject
+          matches:
+          - "(?i)vng-secret-project"
+        response:
+          message: '{"error":{"code":"guardrail_keyword_tenant_policy","message":"Blocked by gateway guardrail: this API key is not permitted to reference that project.","param":null,"type":"invalid_request_error"}}'
+          statusCode: 403
+      - webhook:
+          backendRef:
+            kind: Service
+            name: echo-webhook
+            port: 8099
+          failureMode: FailClosed
+          forwardHeaderMatches:
+          # The question under test.
+          - name: X-Api-Key-Sha
+            type: RegularExpression
+            value: ".*"
+          # POSITIVE CONTROL: a header the client demonstrably sets. If this
+          # one arrives and X-Api-Key-Sha does not, the forwarding machinery
+          # works and the sha genuinely is not on the request at guard time.
+          - name: X-Probe-Control
+            type: RegularExpression
+            value: ".*"
