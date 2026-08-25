@@ -3187,13 +3187,22 @@ type Retry struct {
 	// so a retry can replay it. A request whose body exceeds this is sent once and
 	// not retried, and the gateway logs a warning.
 	//
+	// Must be between `1Ki` and `100Mi`. `kubectl apply` rejects a value outside
+	// that range. A value that reaches the control plane without passing CRD
+	// admission is reported on this policy's status and ignored, so the data plane
+	// falls back to its own default of 64 KiB -- the same default that applies when
+	// the field is left unset.
+	//
 	// Set this to at least the listener's `maxBufferSize` when large requests must
-	// stay retriable. Must be between `1Ki` and `100Mi`; values outside that range
-	// are rejected. When unset, the data plane applies its own default of 64 KiB.
+	// stay retriable. The cap is per in-flight request, so the worst case memory it
+	// admits is the cap times the number of retriable requests in flight; size it
+	// against request concurrency, not against one request.
 	//
 	// Suffixes follow the Kubernetes quantity rules, where the plain suffixes are
 	// decimal and the `i` suffixes are binary: `64K` is 64000 while `64Ki` is 65536,
 	// and `50M` is 50000000 while `50Mi` is 52428800. Use the binary suffixes.
+	// +kubebuilder:validation:XValidation:rule="!quantity(string(self)).isLessThan(quantity('1024'))",message="maxReplayBytes must be at least 1Ki (1024 bytes)"
+	// +kubebuilder:validation:XValidation:rule="!quantity(string(self)).isGreaterThan(quantity('104857600'))",message="maxReplayBytes must be at most 100Mi (104857600 bytes)"
 	// +optional
 	MaxReplayBytes *ByteSize `json:"maxReplayBytes,omitempty"`
 }

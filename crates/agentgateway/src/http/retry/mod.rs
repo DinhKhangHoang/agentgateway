@@ -30,12 +30,19 @@ pub struct Policy {
 	pub codes: Box<[http::StatusCode]>,
 	/// Maximum number of request-body bytes buffered in memory for retry replay.
 	/// A request whose body exceeds this cannot be retried, because the bytes needed
-	/// to replay it were never kept. Defaults to 64 KiB.
+	/// to replay it were never kept. Omitting this, or setting it to `0`, applies the
+	/// default of 64 KiB — `0` is the unset sentinel here just as it is on the xDS
+	/// path, not a request to buffer nothing.
 	///
 	/// Raise this to match the listener's `maxBufferSize` when large request bodies
 	/// must stay retriable — LLM chat traffic carrying conversation history routinely
-	/// exceeds the default, and exceeding it disables retries for that request.
-	#[serde(default = "default_max_replay_bytes")]
+	/// exceeds the default, and exceeding it disables retries for that request. The
+	/// cap applies per in-flight request, so the memory it admits is this value times
+	/// the number of retriable requests in flight.
+	#[serde(
+		default = "default_max_replay_bytes",
+		deserialize_with = "de_max_replay_bytes"
+	)]
 	pub max_replay_bytes: usize,
 	/// CEL expression evaluated against the request before any attempt; when `false`,
 	/// retries are disabled (only the initial attempt is made), e.g. `request.method == "GET"`.
@@ -72,6 +79,22 @@ where
 		.collect::<Result<Vec<_>, _>>()?;
 	Ok(boxed.into_boxed_slice())
 }
+/// Maps an explicit `0` to the default so it means the same thing on the static config
+/// path as it does on the xDS path, where 0 is the unset sentinel. Taken literally, `0`
+/// would make `ReplayBody::try_new` reject every body with a non-zero size hint, turning
+/// retries off for all but empty requests with nothing but a warning to show for it.
+pub fn de_max_replay_bytes<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	let raw = usize::deserialize(deserializer)?;
+	Ok(if raw == 0 {
+		default_max_replay_bytes()
+	} else {
+		raw
+	})
+}
+
 fn default_attempts() -> NonZeroU8 {
 	NonZeroU8::new(1).unwrap()
 }
@@ -118,6 +141,15 @@ mod tests {
 	fn policy_default_max_replay_bytes_is_64k() {
 		let p: Policy = serde_json::from_str(r#"{"attempts":2,"codes":[503]}"#).expect("policy parses");
 		assert_eq!(p.max_replay_bytes, 64 * 1024);
+	}
+
+	#[test]
+	fn policy_explicit_zero_max_replay_bytes_is_the_default() {
+		// 0 is the unset sentinel on the xDS path; the static path must agree, or a
+		// literal 0 would disable retries for every request carrying a body.
+		let p: Policy = serde_json::from_str(r#"{"attempts":2,"codes":[503],"maxReplayBytes":0}"#)
+			.expect("policy parses");
+		assert_eq!(p.max_replay_bytes, default_max_replay_bytes());
 	}
 
 	#[test]

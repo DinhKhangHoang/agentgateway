@@ -661,8 +661,8 @@ func translatePolicyInheritance(strategy *agentgateway.PolicyStrategy) api.Polic
 // clears that with headroom. The floor exists because a tiny cap silently
 // near-disables retries for anything but the smallest bodies, which is the exact
 // failure this field was added to prevent -- rejecting the value is better than
-// quietly accepting one that cannot work. Raise either bound by editing the
-// constant here; both are covered by tests.
+// quietly accepting one that cannot work. The same two bounds are expressed as
+// CEL rules on the CRD field; raising one means raising both.
 const (
 	minRetryMaxReplayBytes = 1 << 10   // 1Ki
 	maxRetryMaxReplayBytes = 100 << 20 // 100Mi
@@ -707,21 +707,30 @@ func processRetriesPolicy(retry *agentgateway.Retry, basePolicyName string, poli
 	}
 
 	if v := retry.MaxReplayBytes; v != nil && v.Value != nil {
+		// The CEL rules on the CRD field are the primary gate: an out-of-range value
+		// is refused at admission and never gets here. This is the backstop for
+		// values that reach the control plane without passing CRD admission -- a
+		// different xDS producer, or a cluster whose CRD predates those rules -- and
+		// it is where the bound is covered by tests.
+		//
 		// Accumulate like the fields above rather than returning early: a bad
 		// quantity must not discard the whole retry policy, or a typo here would
 		// silently disable retries entirely. Left unset (0 on the wire), the data
 		// plane applies its own 64 KiB default.
 		//
-		// The bound is enforced here rather than as a CEL rule on the field because
-		// ByteSize is an int-or-string: written as a string ("50Mi"), which is the
-		// form operators use for byte sizes, a rule shaped like ByteSize's own
-		// `(self >= N && self <= M) || self.size() > 0` short-circuits on
-		// `self.size() > 0` and validates nothing. Here it is real and testable.
-		n := v.Value.Value()
-		if n < minRetryMaxReplayBytes || n > maxRetryMaxReplayBytes {
-			errs = append(errs, fmt.Errorf("retry maxReplayBytes %q is out of range: must be between 1Ki and 100Mi", v.Value.String()))
-		} else if clamped := quantityUint32(v); clamped != nil {
-			translatedRetry.MaxReplayBytes = *clamped
+		// AsInt64 rather than Value: Value returns the low 64 bits of a quantity too
+		// large to represent instead of saturating, so "18446744073709617152" reads
+		// back as 65536 and would sail through the range check.
+		n, ok := v.Value.AsInt64()
+		if !ok || n < minRetryMaxReplayBytes || n > maxRetryMaxReplayBytes {
+			// String() reports apimachinery's canonical form, which is not necessarily
+			// what was written ("16Ei" comes back as 9223372036854775807), hence
+			// "normalizes to" rather than quoting it back as their input.
+			errs = append(errs, fmt.Errorf(
+				"retry maxReplayBytes normalizes to %q, outside the accepted range of 1Ki (%d) to 100Mi (%d); it is ignored, so the data plane default of 64Ki applies",
+				v.Value.String(), minRetryMaxReplayBytes, maxRetryMaxReplayBytes))
+		} else {
+			translatedRetry.MaxReplayBytes = *quantityUint32(v)
 		}
 	}
 

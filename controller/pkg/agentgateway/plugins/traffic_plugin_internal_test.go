@@ -85,8 +85,15 @@ func TestProcessRetriesPolicyKeepsPolicyWhenMaxReplayBytesIsRejected(t *testing.
 		"zero":          "0",
 		"below floor":   "512",
 		"above ceiling": "200Mi",
-		"beyond int64":  "1e30",
-		"beyond uint32": "8Gi",
+		// AsInt64 reports these unrepresentable, which is the only thing that keeps
+		// them out: "1e30" and the 20-digit literal both read back as an in-range
+		// number through Quantity.Value(), which returns the low 64 bits rather than
+		// saturating -- 0 and 65536 respectively. "16Ei" saturates Value() to
+		// MaxInt64. Any of these silently becoming a valid cap is the regression
+		// these rows exist to catch.
+		"unrepresentable as int64":         "1e30",
+		"wraps to in-range in low 64 bits": "18446744073709617152",
+		"saturates int64":                  "16Ei",
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {

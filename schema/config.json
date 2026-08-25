@@ -7291,7 +7291,7 @@
           }
         },
         "maxReplayBytes": {
-          "description": "Maximum number of request-body bytes buffered in memory for retry replay.\nA request whose body exceeds this cannot be retried, because the bytes needed\nto replay it were never kept. Defaults to 64 KiB.\n\nRaise this to match the listener's `maxBufferSize` when large request bodies\nmust stay retriable — LLM chat traffic carrying conversation history routinely\nexceeds the default, and exceeding it disables retries for that request.",
+          "description": "Maximum number of request-body bytes buffered in memory for retry replay.\nA request whose body exceeds this cannot be retried, because the bytes needed\nto replay it were never kept. Omitting this, or setting it to `0`, applies the\ndefault of 64 KiB — `0` is the unset sentinel here just as it is on the xDS\npath, not a request to buffer nothing.\n\nRaise this to match the listener's `maxBufferSize` when large request bodies\nmust stay retriable — LLM chat traffic carrying conversation history routinely\nexceeds the default, and exceeding it disables retries for that request. The\ncap applies per in-flight request, so the memory it admits is this value times\nthe number of retriable requests in flight.",
           "type": "integer",
           "format": "uint",
           "minimum": 0,
