@@ -28,6 +28,15 @@ pub struct Policy {
 	#[serde(serialize_with = "ser_display_iter", deserialize_with = "de_codes")]
 	#[cfg_attr(feature = "schema", schemars(with = "Vec<std::num::NonZeroU16>"))]
 	pub codes: Box<[http::StatusCode]>,
+	/// Maximum number of request-body bytes buffered in memory for retry replay.
+	/// A request whose body exceeds this cannot be retried, because the bytes needed
+	/// to replay it were never kept. Defaults to 64 KiB.
+	///
+	/// Raise this to match the listener's `maxBufferSize` when large request bodies
+	/// must stay retriable — LLM chat traffic carrying conversation history routinely
+	/// exceeds the default, and exceeding it disables retries for that request.
+	#[serde(default = "default_max_replay_bytes")]
+	pub max_replay_bytes: usize,
 	/// CEL expression evaluated against the request before any attempt; when `false`,
 	/// retries are disabled (only the initial attempt is made), e.g. `request.method == "GET"`.
 	/// Retrying requires buffering the request body in memory for replay, so this lets us skip
@@ -65,6 +74,9 @@ where
 }
 fn default_attempts() -> NonZeroU8 {
 	NonZeroU8::new(1).unwrap()
+}
+fn default_max_replay_bytes() -> usize {
+	64 * 1024
 }
 
 #[cfg(test)]

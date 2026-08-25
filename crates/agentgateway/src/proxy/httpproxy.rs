@@ -976,7 +976,6 @@ impl HTTPProxy {
 				}
 			});
 		}
-		const MAX_BUFFERED_BYTES: usize = 64 * 1024;
 		let retries = route_retry;
 
 		// LLM token rate limiting reuses the rate-limit policy selected above in the normal
@@ -995,9 +994,16 @@ impl HTTPProxy {
 			.and_then(|t| t.request_timeout);
 		let body = if attempts > 1 {
 			// If we are going to attempt a retry we will need to track the incoming bytes for replay
-			let body = http::retry::ReplayBody::try_new(body, MAX_BUFFERED_BYTES);
+			let max_replay_bytes = retries
+				.as_ref()
+				.map(|r| r.max_replay_bytes)
+				.unwrap_or(64 * 1024);
+			let body = http::retry::ReplayBody::try_new(body, max_replay_bytes);
 			if body.is_err() {
-				debug!("initial body is too large to retry, disabling retries")
+				warn!(
+					max_replay_bytes,
+					"request body exceeds maxReplayBytes; retries are disabled for this request"
+				);
 			}
 			body
 		} else {
@@ -3132,6 +3138,7 @@ mod tests {
 				.iter()
 				.map(|c| ::http::StatusCode::from_u16(*c).unwrap())
 				.collect(),
+			max_replay_bytes: 64 * 1024,
 			precondition: None,
 			condition: condition
 				.map(|e| std::sync::Arc::new(crate::cel::Expression::new_strict(e).unwrap())),
