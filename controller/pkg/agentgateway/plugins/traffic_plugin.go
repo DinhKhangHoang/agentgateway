@@ -692,11 +692,16 @@ func processRetriesPolicy(retry *agentgateway.Retry, basePolicyName string, poli
 	}
 
 	if retry.MaxReplayBytes != nil {
+		// Accumulate like the fields above rather than returning early: a bad
+		// quantity must not discard the whole retry policy, or a typo here would
+		// silently disable retries entirely. Left unset, the dataplane applies
+		// its own 64 KiB default.
 		v, ok := retry.MaxReplayBytes.AsInt64()
 		if !ok || v < 0 {
-			return nil, fmt.Errorf("retry.maxReplayBytes %q is not a valid byte quantity", retry.MaxReplayBytes.String())
+			errs = append(errs, fmt.Errorf("failed to parse retry maxReplayBytes %q as a byte quantity", retry.MaxReplayBytes.String()))
+		} else {
+			translatedRetry.MaxReplayBytes = uint64(v)
 		}
-		translatedRetry.MaxReplayBytes = uint64(v)
 	}
 
 	retryPolicy := &api.Policy{
