@@ -994,10 +994,11 @@ impl HTTPProxy {
 			.and_then(|t| t.request_timeout);
 		let body = if attempts > 1 {
 			// If we are going to attempt a retry we will need to track the incoming bytes for replay
+			// `attempts > 1` implies `retries` is Some; the fallback is defensive only.
 			let max_replay_bytes = retries
 				.as_ref()
 				.map(|r| r.max_replay_bytes)
-				.unwrap_or(64 * 1024);
+				.unwrap_or_else(http::retry::default_max_replay_bytes);
 			let body = http::retry::ReplayBody::try_new(body, max_replay_bytes);
 			if body.is_err() {
 				warn!(
@@ -3138,7 +3139,7 @@ mod tests {
 				.iter()
 				.map(|c| ::http::StatusCode::from_u16(*c).unwrap())
 				.collect(),
-			max_replay_bytes: 64 * 1024,
+			max_replay_bytes: crate::http::retry::default_max_replay_bytes(),
 			precondition: None,
 			condition: condition
 				.map(|e| std::sync::Arc::new(crate::cel::Expression::new_strict(e).unwrap())),

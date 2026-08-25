@@ -75,7 +75,7 @@ where
 fn default_attempts() -> NonZeroU8 {
 	NonZeroU8::new(1).unwrap()
 }
-fn default_max_replay_bytes() -> usize {
+pub(crate) fn default_max_replay_bytes() -> usize {
 	64 * 1024
 }
 
@@ -112,6 +112,24 @@ mod tests {
 		.unwrap();
 		assert!(pol.precondition.is_none());
 		assert!(pol.condition.is_none());
+	}
+
+	#[test]
+	fn policy_default_max_replay_bytes_is_64k() {
+		let p: Policy = serde_json::from_str(
+			r#"{"attempts":2,"codes":[503]}"#,
+		)
+		.expect("policy parses");
+		assert_eq!(p.max_replay_bytes, 64 * 1024);
+	}
+
+	#[test]
+	fn policy_max_replay_bytes_is_configurable() {
+		let p: Policy = serde_json::from_str(
+			r#"{"attempts":2,"codes":[503],"maxReplayBytes":52428800}"#,
+		)
+		.expect("policy parses");
+		assert_eq!(p.max_replay_bytes, 52_428_800);
 	}
 
 	#[test]

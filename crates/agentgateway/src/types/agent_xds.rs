@@ -2335,7 +2335,7 @@ fn traffic_policy_from_proto(
 				backoff,
 				codes: codes.into_boxed_slice(),
 				// TODO: not yet exposed on the xDS proto; wire this up when the proto field lands.
-				max_replay_bytes: 64 * 1024,
+				max_replay_bytes: http::retry::default_max_replay_bytes(),
 				precondition,
 				condition,
 			})
