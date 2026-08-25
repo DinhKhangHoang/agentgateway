@@ -3188,9 +3188,14 @@ type Retry struct {
 	// not retried, and the gateway logs a warning.
 	//
 	// Set this to at least the listener's `maxBufferSize` when large requests must
-	// stay retriable. Defaults to 64Ki.
+	// stay retriable. Must be between `1Ki` and `100Mi`; values outside that range
+	// are rejected. When unset, the data plane applies its own default of 64 KiB.
+	//
+	// Suffixes follow the Kubernetes quantity rules, where the plain suffixes are
+	// decimal and the `i` suffixes are binary: `64K` is 64000 while `64Ki` is 65536,
+	// and `50M` is 50000000 while `50Mi` is 52428800. Use the binary suffixes.
 	// +optional
-	MaxReplayBytes *resource.Quantity `json:"maxReplayBytes,omitempty"`
+	MaxReplayBytes *ByteSize `json:"maxReplayBytes,omitempty"`
 }
 
 // Per-request access log settings.

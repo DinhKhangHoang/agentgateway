@@ -10,27 +10,64 @@ import (
 	"github.com/agentgateway/agentgateway/controller/api/v1alpha1/agentgateway"
 )
 
-func TestProcessRetriesPolicyTranslatesMaxReplayBytes(t *testing.T) {
+func byteSize(t *testing.T, s string) *agentgateway.ByteSize {
+	t.Helper()
+	q := resource.MustParse(s)
+	return &agentgateway.ByteSize{Value: &q}
+}
+
+func retryWith(size *agentgateway.ByteSize) *agentgateway.Retry {
 	attempts := 2
-	maxBytes := resource.MustParse("50M")
-	retry := &agentgateway.Retry{
+	return &agentgateway.Retry{
 		HTTPRouteRetry: &gwv1.HTTPRouteRetry{Attempts: &attempts},
-		MaxReplayBytes: &maxBytes,
+		MaxReplayBytes: size,
 	}
-	got, err := processRetriesPolicy(retry, "base", types.NamespacedName{Name: "n", Namespace: "ns"})
+}
+
+func TestProcessRetriesPolicyTranslatesMaxReplayBytes(t *testing.T) {
+	// Binary suffix: 50Mi is 52428800, not 50000000. The distinction matters
+	// because `50M` would be a different (decimal) number.
+	got, err := processRetriesPolicy(retryWith(byteSize(t, "50Mi")), "base", types.NamespacedName{Name: "n", Namespace: "ns"})
 	if err != nil {
 		t.Fatalf("processRetriesPolicy: %v", err)
 	}
-	spec := got.GetTraffic().GetRetry()
-	if spec.GetMaxReplayBytes() != 50_000_000 {
-		t.Fatalf("MaxReplayBytes = %d, want 50000000", spec.GetMaxReplayBytes())
+	if v := got.GetTraffic().GetRetry().GetMaxReplayBytes(); v != 52_428_800 {
+		t.Fatalf("MaxReplayBytes = %d, want 52428800", v)
+	}
+}
+
+func TestProcessRetriesPolicyTranslatesDecimalMaxReplayBytes(t *testing.T) {
+	// The decimal suffix is accepted too, and means exactly what Kubernetes says
+	// it means: 50M is 50000000, which is 2428800 fewer bytes than 50Mi.
+	got, err := processRetriesPolicy(retryWith(byteSize(t, "50M")), "base", types.NamespacedName{Name: "n", Namespace: "ns"})
+	if err != nil {
+		t.Fatalf("processRetriesPolicy: %v", err)
+	}
+	if v := got.GetTraffic().GetRetry().GetMaxReplayBytes(); v != 50_000_000 {
+		t.Fatalf("MaxReplayBytes = %d, want 50000000", v)
+	}
+}
+
+func TestProcessRetriesPolicyAcceptsBoundaryMaxReplayBytes(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want uint32
+	}{
+		{"1Ki", 1024},
+		{"100Mi", 104_857_600},
+	} {
+		got, err := processRetriesPolicy(retryWith(byteSize(t, tc.in)), "base", types.NamespacedName{Name: "n", Namespace: "ns"})
+		if err != nil {
+			t.Fatalf("processRetriesPolicy(%s): %v", tc.in, err)
+		}
+		if v := got.GetTraffic().GetRetry().GetMaxReplayBytes(); v != tc.want {
+			t.Fatalf("MaxReplayBytes(%s) = %d, want %d", tc.in, v, tc.want)
+		}
 	}
 }
 
 func TestProcessRetriesPolicyOmitsMaxReplayBytesWhenUnset(t *testing.T) {
-	attempts := 2
-	retry := &agentgateway.Retry{HTTPRouteRetry: &gwv1.HTTPRouteRetry{Attempts: &attempts}}
-	got, err := processRetriesPolicy(retry, "base", types.NamespacedName{Name: "n", Namespace: "ns"})
+	got, err := processRetriesPolicy(retryWith(nil), "base", types.NamespacedName{Name: "n", Namespace: "ns"})
 	if err != nil {
 		t.Fatalf("processRetriesPolicy: %v", err)
 	}
@@ -39,31 +76,46 @@ func TestProcessRetriesPolicyOmitsMaxReplayBytesWhenUnset(t *testing.T) {
 	}
 }
 
-func TestProcessRetriesPolicyKeepsPolicyWhenMaxReplayBytesIsUnusable(t *testing.T) {
-	// A quantity too large for int64 cannot be applied. The policy must still come
-	// back with its other fields intact and MaxReplayBytes left at 0 (so the
-	// dataplane applies its own default). Returning a nil policy here would
-	// silently disable retries entirely -- the exact failure this field exists to
-	// prevent.
-	attempts := 2
-	maxBytes := resource.MustParse("1e30")
-	retry := &agentgateway.Retry{
-		HTTPRouteRetry: &gwv1.HTTPRouteRetry{Attempts: &attempts},
-		MaxReplayBytes: &maxBytes,
+// A rejected quantity must leave the rest of the retry policy intact. Returning a
+// nil policy here would silently disable retries entirely -- the exact failure this
+// field exists to prevent -- so every rejection case asserts the policy survives.
+func TestProcessRetriesPolicyKeepsPolicyWhenMaxReplayBytesIsRejected(t *testing.T) {
+	cases := map[string]string{
+		"negative":      "-1",
+		"zero":          "0",
+		"below floor":   "512",
+		"above ceiling": "200Mi",
+		"beyond int64":  "1e30",
+		"beyond uint32": "8Gi",
 	}
-	got, err := processRetriesPolicy(retry, "base", types.NamespacedName{Name: "n", Namespace: "ns"})
-	if err == nil {
-		t.Fatal("expected an error reporting the unusable quantity")
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := processRetriesPolicy(retryWith(byteSize(t, in)), "base", types.NamespacedName{Name: "n", Namespace: "ns"})
+			if err == nil {
+				t.Fatalf("expected an error reporting the out-of-range quantity %q", in)
+			}
+			if got == nil {
+				t.Fatal("policy must still be returned so the remaining retry config applies")
+			}
+			if v := got.GetTraffic().GetRetry().GetMaxReplayBytes(); v != 0 {
+				t.Fatalf("MaxReplayBytes = %d, want 0 so the dataplane default applies", v)
+			}
+			if v := got.GetTraffic().GetRetry().GetAttempts(); v != 2 {
+				t.Fatalf("Attempts = %d, want 2 -- other fields must survive", v)
+			}
+		})
 	}
-	if got == nil {
-		t.Fatal("policy must still be returned so the remaining retry config applies")
+}
+
+// An unparsable quantity is dropped by ByteSize.UnmarshalJSON (which warns and
+// leaves Value nil) rather than reaching here, so a nil Value must be treated as
+// unset instead of dereferenced.
+func TestProcessRetriesPolicyTreatsEmptyByteSizeAsUnset(t *testing.T) {
+	got, err := processRetriesPolicy(retryWith(&agentgateway.ByteSize{}), "base", types.NamespacedName{Name: "n", Namespace: "ns"})
+	if err != nil {
+		t.Fatalf("processRetriesPolicy: %v", err)
 	}
 	if got.GetTraffic().GetRetry().GetMaxReplayBytes() != 0 {
-		t.Fatalf("MaxReplayBytes = %d, want 0 so the dataplane default applies",
-			got.GetTraffic().GetRetry().GetMaxReplayBytes())
-	}
-	if got.GetTraffic().GetRetry().GetAttempts() != 2 {
-		t.Fatalf("Attempts = %d, want 2 -- other fields must survive",
-			got.GetTraffic().GetRetry().GetAttempts())
+		t.Fatal("MaxReplayBytes should stay 0 so the dataplane applies its default")
 	}
 }

@@ -7290,6 +7290,13 @@
             "maximum": 65535
           }
         },
+        "maxReplayBytes": {
+          "description": "Maximum number of request-body bytes buffered in memory for retry replay.\nA request whose body exceeds this cannot be retried, because the bytes needed\nto replay it were never kept. Defaults to 64 KiB.\n\nRaise this to match the listener's `maxBufferSize` when large request bodies\nmust stay retriable — LLM chat traffic carrying conversation history routinely\nexceeds the default, and exceeding it disables retries for that request.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 65536
+        },
         "precondition": {
           "description": "CEL expression evaluated against the request before any attempt; when `false`,\nretries are disabled (only the initial attempt is made), e.g. `request.method == \"GET\"`.\nRetrying requires buffering the request body in memory for replay, so this lets us skip\nthat cost when the request is known to be non-retriable (e.g. streaming or websockets).",
           "anyOf": [

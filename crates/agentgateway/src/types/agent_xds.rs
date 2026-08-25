@@ -2336,6 +2336,9 @@ fn traffic_policy_from_proto(
 				codes: codes.into_boxed_slice(),
 				precondition,
 				condition,
+				// 0 means unset on the wire, so fall back to the data plane default. The
+				// control plane only emits values within [1Ki, 100Mi]; the conversion stays
+				// fallible so this is correct on targets where usize is narrower than u32.
 				max_replay_bytes: if r.max_replay_bytes == 0 {
 					http::retry::default_max_replay_bytes()
 				} else {

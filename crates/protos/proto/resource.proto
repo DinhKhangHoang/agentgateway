@@ -336,8 +336,12 @@ message Retry {
   // code is in retry_status_codes or this expression evaluates to true.
   string condition = 5;
   // Maximum number of request-body bytes buffered in memory for retry replay.
-  // A request whose body exceeds this cannot be retried. 0 means the default (64 KiB).
-  uint64 max_replay_bytes = 6;
+  // A request whose body exceeds this cannot be retried, because the bytes needed to
+  // replay it were never kept.
+  //
+  // 0 means unset: the data plane applies its own default of 64 KiB (65536). The control
+  // plane only emits values in [1Ki, 100Mi]; anything outside that range is rejected there.
+  uint32 max_replay_bytes = 6;
 }
 
 message Delay {

@@ -653,6 +653,21 @@ func translatePolicyInheritance(strategy *agentgateway.PolicyStrategy) api.Polic
 	return api.Policy_DEFAULT
 }
 
+// Bounds accepted for a Retry's `maxReplayBytes`, in bytes.
+//
+// The ceiling must clear the largest request the gateway is configured to buffer:
+// the listener buffer policy deployed on the dev gateway
+// (AgentgatewayPolicy/maas-v2-agw-buffer) allows 50 MB, and 100Mi (104857600)
+// clears that with headroom. The floor exists because a tiny cap silently
+// near-disables retries for anything but the smallest bodies, which is the exact
+// failure this field was added to prevent -- rejecting the value is better than
+// quietly accepting one that cannot work. Raise either bound by editing the
+// constant here; both are covered by tests.
+const (
+	minRetryMaxReplayBytes = 1 << 10   // 1Ki
+	maxRetryMaxReplayBytes = 100 << 20 // 100Mi
+)
+
 func processRetriesPolicy(retry *agentgateway.Retry, basePolicyName string, policy types.NamespacedName) (*api.Policy, error) {
 	translatedRetry := &api.Retry{}
 	var errs []error
@@ -691,16 +706,22 @@ func processRetriesPolicy(retry *agentgateway.Retry, basePolicyName string, poli
 		translatedRetry.Condition = string(*retry.Condition)
 	}
 
-	if retry.MaxReplayBytes != nil {
+	if v := retry.MaxReplayBytes; v != nil && v.Value != nil {
 		// Accumulate like the fields above rather than returning early: a bad
 		// quantity must not discard the whole retry policy, or a typo here would
-		// silently disable retries entirely. Left unset, the dataplane applies
-		// its own 64 KiB default.
-		v, ok := retry.MaxReplayBytes.AsInt64()
-		if !ok || v < 0 {
-			errs = append(errs, fmt.Errorf("failed to parse retry maxReplayBytes %q as a byte quantity", retry.MaxReplayBytes.String()))
-		} else {
-			translatedRetry.MaxReplayBytes = uint64(v)
+		// silently disable retries entirely. Left unset (0 on the wire), the data
+		// plane applies its own 64 KiB default.
+		//
+		// The bound is enforced here rather than as a CEL rule on the field because
+		// ByteSize is an int-or-string: written as a string ("50Mi"), which is the
+		// form operators use for byte sizes, a rule shaped like ByteSize's own
+		// `(self >= N && self <= M) || self.size() > 0` short-circuits on
+		// `self.size() > 0` and validates nothing. Here it is real and testable.
+		n := v.Value.Value()
+		if n < minRetryMaxReplayBytes || n > maxRetryMaxReplayBytes {
+			errs = append(errs, fmt.Errorf("retry maxReplayBytes %q is out of range: must be between 1Ki and 100Mi", v.Value.String()))
+		} else if clamped := quantityUint32(v); clamped != nil {
+			translatedRetry.MaxReplayBytes = *clamped
 		}
 	}
 

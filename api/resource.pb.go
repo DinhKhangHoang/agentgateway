@@ -4362,8 +4362,12 @@ type Retry struct {
 	// code is in retry_status_codes or this expression evaluates to true.
 	Condition string `protobuf:"bytes,5,opt,name=condition,proto3" json:"condition,omitempty"`
 	// Maximum number of request-body bytes buffered in memory for retry replay.
-	// A request whose body exceeds this cannot be retried. 0 means the default (64 KiB).
-	MaxReplayBytes uint64 `protobuf:"varint,6,opt,name=max_replay_bytes,json=maxReplayBytes,proto3" json:"max_replay_bytes,omitempty"`
+	// A request whose body exceeds this cannot be retried, because the bytes needed to
+	// replay it were never kept.
+	//
+	// 0 means unset: the data plane applies its own default of 64 KiB (65536). The control
+	// plane only emits values in [1Ki, 100Mi]; anything outside that range is rejected there.
+	MaxReplayBytes uint32 `protobuf:"varint,6,opt,name=max_replay_bytes,json=maxReplayBytes,proto3" json:"max_replay_bytes,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -4433,7 +4437,7 @@ func (x *Retry) GetCondition() string {
 	return ""
 }
 
-func (x *Retry) GetMaxReplayBytes() uint64 {
+func (x *Retry) GetMaxReplayBytes() uint32 {
 	if x != nil {
 		return x.MaxReplayBytes
 	}
@@ -17042,7 +17046,7 @@ const file_resource_proto_rawDesc = "" +
 	"\abackoff\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\abackoff\x12\"\n" +
 	"\fprecondition\x18\x04 \x01(\tR\fprecondition\x12\x1c\n" +
 	"\tcondition\x18\x05 \x01(\tR\tcondition\x12(\n" +
-	"\x10max_replay_bytes\x18\x06 \x01(\x04R\x0emaxReplayBytes\"#\n" +
+	"\x10max_replay_bytes\x18\x06 \x01(\rR\x0emaxReplayBytes\"#\n" +
 	"\x05Delay\x12\x1a\n" +
 	"\bduration\x18\x01 \x01(\tR\bduration\"\xcf\x04\n" +
 	"\x11BackendAuthPolicy\x12J\n" +

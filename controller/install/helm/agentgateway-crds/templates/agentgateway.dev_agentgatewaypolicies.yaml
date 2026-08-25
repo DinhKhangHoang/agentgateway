@@ -9326,9 +9326,20 @@ spec:
                           not retried, and the gateway logs a warning.
 
                           Set this to at least the listener's `maxBufferSize` when large requests must
-                          stay retriable. Defaults to 64Ki.
-                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          stay retriable. Must be between `1Ki` and `100Mi`; values outside that range
+                          are rejected. When unset, the data plane applies its own default of 64 KiB.
+
+                          Suffixes follow the Kubernetes quantity rules, where the plain suffixes are
+                          decimal and the `i` suffixes are binary: `64K` is 64000 while `64Ki` is 65536,
+                          and `50M` is 50000000 while `50Mi` is 52428800. Use the binary suffixes.
+                        maxLength: 32
+                        minLength: 1
+                        pattern: ^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)(([KMGTPE]i)|[numkMGTPE]|[eE](\+?0*([0-9]|1[0-8])|-0*[0-9]))?$
                         x-kubernetes-int-or-string: true
+                        x-kubernetes-validations:
+                        - message: value must be at least 1 byte and fit within uint32
+                          rule: (self >= 1 && self <= 4294967295) || self.size() >
+                            0
                       precondition:
                         description: |-
                           `precondition` is a CEL expression evaluated against the request before any

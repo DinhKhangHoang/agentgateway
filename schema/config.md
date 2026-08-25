@@ -4343,6 +4343,7 @@
 |`binds[].listeners[].routes[].policies.retry.attempts`|integer|Total number of attempts, including the original request.|
 |`binds[].listeners[].routes[].policies.retry.backoff`|string|Delay between retry attempts.|
 |`binds[].listeners[].routes[].policies.retry.codes`|[]integer|HTTP response status codes that should be retried.|
+|`binds[].listeners[].routes[].policies.retry.maxReplayBytes`|integer|Maximum number of request-body bytes buffered in memory for retry replay.<br>A request whose body exceeds this cannot be retried, because the bytes needed<br>to replay it were never kept. Defaults to 64 KiB.<br><br>Raise this to match the listener's `maxBufferSize` when large request bodies<br>must stay retriable — LLM chat traffic carrying conversation history routinely<br>exceeds the default, and exceeding it disables retries for that request.|
 |`binds[].listeners[].routes[].policies.retry.precondition`|string|CEL expression evaluated against the request before any attempt; when `false`,<br>retries are disabled (only the initial attempt is made), e.g. `request.method == "GET"`.<br>Retrying requires buffering the request body in memory for replay, so this lets us skip<br>that cost when the request is known to be non-retriable (e.g. streaming or websockets).|
 |`binds[].listeners[].routes[].policies.retry.condition`|string|CEL expression evaluated against each response to decide whether to retry. A response<br>is retried when its status code is in `codes` *or* this expression evaluates to `true`.|
 |`binds[].listeners[].routes[].policies.delay`|object|Inject artificial latency before forwarding requests.|
@@ -19165,6 +19166,7 @@
 |`policies[].policy.retry.attempts`|integer|Total number of attempts, including the original request.|
 |`policies[].policy.retry.backoff`|string|Delay between retry attempts.|
 |`policies[].policy.retry.codes`|[]integer|HTTP response status codes that should be retried.|
+|`policies[].policy.retry.maxReplayBytes`|integer|Maximum number of request-body bytes buffered in memory for retry replay.<br>A request whose body exceeds this cannot be retried, because the bytes needed<br>to replay it were never kept. Defaults to 64 KiB.<br><br>Raise this to match the listener's `maxBufferSize` when large request bodies<br>must stay retriable — LLM chat traffic carrying conversation history routinely<br>exceeds the default, and exceeding it disables retries for that request.|
 |`policies[].policy.retry.precondition`|string|CEL expression evaluated against the request before any attempt; when `false`,<br>retries are disabled (only the initial attempt is made), e.g. `request.method == "GET"`.<br>Retrying requires buffering the request body in memory for replay, so this lets us skip<br>that cost when the request is known to be non-retriable (e.g. streaming or websockets).|
 |`policies[].policy.retry.condition`|string|CEL expression evaluated against each response to decide whether to retry. A response<br>is retried when its status code is in `codes` *or* this expression evaluates to `true`.|
 |`policies[].policy.delay`|object|Inject artificial latency before forwarding requests.|
@@ -31956,6 +31958,7 @@
 |`routeGroups[].routes[].policies.retry.attempts`|integer|Total number of attempts, including the original request.|
 |`routeGroups[].routes[].policies.retry.backoff`|string|Delay between retry attempts.|
 |`routeGroups[].routes[].policies.retry.codes`|[]integer|HTTP response status codes that should be retried.|
+|`routeGroups[].routes[].policies.retry.maxReplayBytes`|integer|Maximum number of request-body bytes buffered in memory for retry replay.<br>A request whose body exceeds this cannot be retried, because the bytes needed<br>to replay it were never kept. Defaults to 64 KiB.<br><br>Raise this to match the listener's `maxBufferSize` when large request bodies<br>must stay retriable — LLM chat traffic carrying conversation history routinely<br>exceeds the default, and exceeding it disables retries for that request.|
 |`routeGroups[].routes[].policies.retry.precondition`|string|CEL expression evaluated against the request before any attempt; when `false`,<br>retries are disabled (only the initial attempt is made), e.g. `request.method == "GET"`.<br>Retrying requires buffering the request body in memory for replay, so this lets us skip<br>that cost when the request is known to be non-retriable (e.g. streaming or websockets).|
 |`routeGroups[].routes[].policies.retry.condition`|string|CEL expression evaluated against each response to decide whether to retry. A response<br>is retried when its status code is in `codes` *or* this expression evaluates to `true`.|
 |`routeGroups[].routes[].policies.delay`|object|Inject artificial latency before forwarding requests.|
@@ -47114,6 +47117,7 @@
 |`routes[].policies.retry.attempts`|integer|Total number of attempts, including the original request.|
 |`routes[].policies.retry.backoff`|string|Delay between retry attempts.|
 |`routes[].policies.retry.codes`|[]integer|HTTP response status codes that should be retried.|
+|`routes[].policies.retry.maxReplayBytes`|integer|Maximum number of request-body bytes buffered in memory for retry replay.<br>A request whose body exceeds this cannot be retried, because the bytes needed<br>to replay it were never kept. Defaults to 64 KiB.<br><br>Raise this to match the listener's `maxBufferSize` when large request bodies<br>must stay retriable — LLM chat traffic carrying conversation history routinely<br>exceeds the default, and exceeding it disables retries for that request.|
 |`routes[].policies.retry.precondition`|string|CEL expression evaluated against the request before any attempt; when `false`,<br>retries are disabled (only the initial attempt is made), e.g. `request.method == "GET"`.<br>Retrying requires buffering the request body in memory for replay, so this lets us skip<br>that cost when the request is known to be non-retriable (e.g. streaming or websockets).|
 |`routes[].policies.retry.condition`|string|CEL expression evaluated against each response to decide whether to retry. A response<br>is retried when its status code is in `codes` *or* this expression evaluates to `true`.|
 |`routes[].policies.delay`|object|Inject artificial latency before forwarding requests.|
@@ -66055,6 +66059,7 @@
 |`mcp.policies.retry.attempts`|integer|Total number of attempts, including the original request.|
 |`mcp.policies.retry.backoff`|string|Delay between retry attempts.|
 |`mcp.policies.retry.codes`|[]integer|HTTP response status codes that should be retried.|
+|`mcp.policies.retry.maxReplayBytes`|integer|Maximum number of request-body bytes buffered in memory for retry replay.<br>A request whose body exceeds this cannot be retried, because the bytes needed<br>to replay it were never kept. Defaults to 64 KiB.<br><br>Raise this to match the listener's `maxBufferSize` when large request bodies<br>must stay retriable — LLM chat traffic carrying conversation history routinely<br>exceeds the default, and exceeding it disables retries for that request.|
 |`mcp.policies.retry.precondition`|string|CEL expression evaluated against the request before any attempt; when `false`,<br>retries are disabled (only the initial attempt is made), e.g. `request.method == "GET"`.<br>Retrying requires buffering the request body in memory for replay, so this lets us skip<br>that cost when the request is known to be non-retriable (e.g. streaming or websockets).|
 |`mcp.policies.retry.condition`|string|CEL expression evaluated against each response to decide whether to retry. A response<br>is retried when its status code is in `codes` *or* this expression evaluates to `true`.|
 |`mcp.policies.delay`|object|Inject artificial latency before forwarding requests.|
