@@ -45,3 +45,9 @@ cfg.yaml
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Kong -> agentgateway parity generator output.
+# The Kong input carries plaintext provider keys and the output contains
+# Secret manifests; regenerate with pilot/gen/generate.py instead of committing.
+pilot/gen/out/
+pilot/gen/__pycache__/
