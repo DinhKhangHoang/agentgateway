@@ -3182,6 +3182,15 @@ type Retry struct {
 	// this expression evaluates to `true`.
 	// +optional
 	Condition *CELExpression `json:"condition,omitempty"`
+
+	// `maxReplayBytes` is the maximum amount of the request body buffered in memory
+	// so a retry can replay it. A request whose body exceeds this is sent once and
+	// not retried, and the gateway logs a warning.
+	//
+	// Set this to at least the listener's `maxBufferSize` when large requests must
+	// stay retriable. Defaults to 64Ki.
+	// +optional
+	MaxReplayBytes *resource.Quantity `json:"maxReplayBytes,omitempty"`
 }
 
 // Per-request access log settings.

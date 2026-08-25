@@ -2334,10 +2334,18 @@ fn traffic_policy_from_proto(
 				attempts,
 				backoff,
 				codes: codes.into_boxed_slice(),
-				// TODO: not yet exposed on the xDS proto; wire this up when the proto field lands.
-				max_replay_bytes: http::retry::default_max_replay_bytes(),
 				precondition,
 				condition,
+				max_replay_bytes: if r.max_replay_bytes == 0 {
+					http::retry::default_max_replay_bytes()
+				} else {
+					r.max_replay_bytes.try_into().map_err(|_| {
+						ProtoError::Generic(format!(
+							"retry.maxReplayBytes {} exceeds usize on this target",
+							r.max_replay_bytes
+						))
+					})?
+				},
 			})
 		},
 		Some(tps::Kind::Delay(d)) => TrafficPolicy::Delay(http::delay::Policy {

@@ -691,6 +691,14 @@ func processRetriesPolicy(retry *agentgateway.Retry, basePolicyName string, poli
 		translatedRetry.Condition = string(*retry.Condition)
 	}
 
+	if retry.MaxReplayBytes != nil {
+		v, ok := retry.MaxReplayBytes.AsInt64()
+		if !ok || v < 0 {
+			return nil, fmt.Errorf("retry.maxReplayBytes %q is not a valid byte quantity", retry.MaxReplayBytes.String())
+		}
+		translatedRetry.MaxReplayBytes = uint64(v)
+	}
+
 	retryPolicy := &api.Policy{
 		Key:  basePolicyName + retryPolicySuffix,
 		Name: TypedResourceFromName(wellknown.AgentgatewayPolicyGVK.Kind, policy),

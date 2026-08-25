@@ -4360,9 +4360,12 @@ type Retry struct {
 	Precondition string `protobuf:"bytes,4,opt,name=precondition,proto3" json:"precondition,omitempty"`
 	// CEL expression evaluated against each response. A response is retried when its status
 	// code is in retry_status_codes or this expression evaluates to true.
-	Condition     string `protobuf:"bytes,5,opt,name=condition,proto3" json:"condition,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Condition string `protobuf:"bytes,5,opt,name=condition,proto3" json:"condition,omitempty"`
+	// Maximum number of request-body bytes buffered in memory for retry replay.
+	// A request whose body exceeds this cannot be retried. 0 means the default (64 KiB).
+	MaxReplayBytes uint64 `protobuf:"varint,6,opt,name=max_replay_bytes,json=maxReplayBytes,proto3" json:"max_replay_bytes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Retry) Reset() {
@@ -4428,6 +4431,13 @@ func (x *Retry) GetCondition() string {
 		return x.Condition
 	}
 	return ""
+}
+
+func (x *Retry) GetMaxReplayBytes() uint64 {
+	if x != nil {
+		return x.MaxReplayBytes
+	}
+	return 0
 }
 
 type Delay struct {
@@ -17025,13 +17035,14 @@ const file_resource_proto_rawDesc = "" +
 	"\f_max_version\"\x82\x01\n" +
 	"\aTimeout\x123\n" +
 	"\arequest\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\arequest\x12B\n" +
-	"\x0fbackend_request\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x0ebackendRequest\"\xc8\x01\n" +
+	"\x0fbackend_request\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x0ebackendRequest\"\xf2\x01\n" +
 	"\x05Retry\x12,\n" +
 	"\x12retry_status_codes\x18\x01 \x03(\x05R\x10retryStatusCodes\x12\x1a\n" +
 	"\battempts\x18\x02 \x01(\x05R\battempts\x123\n" +
 	"\abackoff\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\abackoff\x12\"\n" +
 	"\fprecondition\x18\x04 \x01(\tR\fprecondition\x12\x1c\n" +
-	"\tcondition\x18\x05 \x01(\tR\tcondition\"#\n" +
+	"\tcondition\x18\x05 \x01(\tR\tcondition\x12(\n" +
+	"\x10max_replay_bytes\x18\x06 \x01(\x04R\x0emaxReplayBytes\"#\n" +
 	"\x05Delay\x12\x1a\n" +
 	"\bduration\x18\x01 \x01(\tR\bduration\"\xcf\x04\n" +
 	"\x11BackendAuthPolicy\x12J\n" +

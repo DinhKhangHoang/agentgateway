@@ -9316,6 +9316,19 @@ spec:
                         maxLength: 16384
                         minLength: 1
                         type: string
+                      maxReplayBytes:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: |-
+                          `maxReplayBytes` is the maximum amount of the request body buffered in memory
+                          so a retry can replay it. A request whose body exceeds this is sent once and
+                          not retried, and the gateway logs a warning.
+
+                          Set this to at least the listener's `maxBufferSize` when large requests must
+                          stay retriable. Defaults to 64Ki.
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
                       precondition:
                         description: |-
                           `precondition` is a CEL expression evaluated against the request before any

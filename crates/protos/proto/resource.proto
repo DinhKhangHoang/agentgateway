@@ -335,6 +335,9 @@ message Retry {
   // CEL expression evaluated against each response. A response is retried when its status
   // code is in retry_status_codes or this expression evaluates to true.
   string condition = 5;
+  // Maximum number of request-body bytes buffered in memory for retry replay.
+  // A request whose body exceeds this cannot be retried. 0 means the default (64 KiB).
+  uint64 max_replay_bytes = 6;
 }
 
 message Delay {
