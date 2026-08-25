@@ -156,3 +156,55 @@ a dataplane change. It is not needed for per-tenant guardrails.
 - `probe-webhook-model.yaml` — the transient model spec. **Not part of the
   pilot manifest set**; kept for reproducibility. Re-applying it would
   re-attach the probe webhook to a live model.
+
+## Parity build deployed to dev — 2026-08-25
+
+`feat/maas-v2-parity` @ `dcb5b524` built and pushed as:
+
+| image | tag | digest |
+|---|---|---|
+| `agentgateway` (dataplane) | `maas-v2-parity-dcb5b524` | `sha256:076f5d41…` |
+| `agentgateway-controller` | `maas-v2-parity-dcb5b524` | `sha256:007c6612…` |
+
+Both images are required together: the configurable-path change touches the
+proto and the CRD, so a controller emitting `ModelRoute.Match.paths` needs a
+dataplane that reads it. The dataplane tag is not set on a Deployment — it comes
+from the controller's `AGW_PROXY_IMAGE_TAG` env, and the controller container is
+named `controller`, not `agentgateway`.
+
+Push credential: `60108-khanghd` from the cluster's `vcr-registry-secret`. The
+local `81-aigateway` login authenticates but has zero actions on this repo and
+401s on push — the pilot's earlier "the registry is pull-only" note was a
+credential problem, not a registry limitation.
+
+The two changed CRDs (`agentgatewaymodels`, and the policy CRD) were applied with
+`--force-conflicts --field-manager=agentgateway-parity` because helm owns
+`.spec.versions`. **A later `helm upgrade` of the CRD chart will conflict back**
+and silently drop `match.paths`.
+
+Post-deploy smoke, against the same model and body as the pre-deploy baseline:
+
+```
+POST /v1/chat/completions  model=deepseek-v4-pro
+HTTP 200   usage 85 prompt / 10 completion / 95 total   1.63s  (baseline 2.28s)
+```
+
+Identical to baseline on every field but latency. Dataplane self-reports
+`version: "v1.4.0-beta.1-20-gdcb5b524"`.
+
+### Task 5 acceptance, and what it exposed
+
+`spec.match.paths` works. `POST /v1/completions` went from `404 route not found`
+to a real routed request that hit ext-auth (`403 model not allowed for this key`
+on a disallowed model, i.e. still failing closed) and then reached the LLM
+pipeline on an allowed one.
+
+It also exposed two things the plan did not anticipate, both written up in
+`../../gen/README.md`:
+
+1. A bug — a model carrying any AI policy lost the entire default route-type
+   table and parsed every path as chat completions. Fixed on the same branch.
+2. A missing surface — there is no per-model `routes` field on any CRD, so
+   `/v1/completions` can only resolve to `Passthrough`, which does no token
+   metering at all. Making these paths route is not the same as making them
+   meter.
