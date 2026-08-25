@@ -135,6 +135,13 @@ pub fn extract_model_from_path(path: &str) -> Option<Strng> {
 			.split_once("/publishers/")
 			.and_then(|(_, rest)| rest.split_once("/models/"))
 			.and_then(|(_, rest)| rest.split_once(':').map(|(model, _)| model))
+			// Google AI Studio shape: /v1beta/models/{model}:generateContent — no
+			// /publishers/ segment, so the Vertex parse above finds nothing.
+			.or_else(|| {
+				path
+					.split_once("/models/")
+					.and_then(|(_, rest)| rest.split_once(':').map(|(model, _)| model))
+			})
 	} else if path.ends_with("/invoke-with-response-stream")
 		|| path.ends_with("/invoke")
 		|| path.ends_with("/converse-stream")
@@ -303,6 +310,32 @@ mod tests {
 		assert_eq!(llm_response.input_tokens, Some(8));
 		assert_eq!(llm_response.output_tokens, Some(14));
 		assert_eq!(llm_response.total_tokens, Some(22));
+	}
+
+	#[test]
+	fn extracts_model_from_ai_studio_generate_content() {
+		assert_eq!(
+			extract_model_from_path("/v1beta/models/gemini-2.5-flash:generateContent"),
+			Some(strng::new("gemini-2.5-flash"))
+		);
+	}
+
+	#[test]
+	fn extracts_model_from_ai_studio_stream_generate_content() {
+		assert_eq!(
+			extract_model_from_path("/v1beta/models/gemini-2.5-pro:streamGenerateContent"),
+			Some(strng::new("gemini-2.5-pro"))
+		);
+	}
+
+	#[test]
+	fn vertex_generate_content_still_wins_over_ai_studio_parsing() {
+		assert_eq!(
+			extract_model_from_path(
+				"/v1/projects/p/locations/global/publishers/google/models/gemini-2.5-flash:generateContent"
+			),
+			Some(strng::new("gemini-2.5-flash"))
+		);
 	}
 }
 
