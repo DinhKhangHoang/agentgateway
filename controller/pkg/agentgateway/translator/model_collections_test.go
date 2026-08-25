@@ -155,6 +155,80 @@ func TestModelProviderInlinePolicies(t *testing.T) {
 	}
 }
 
+func TestModelRouteAIPolicyRoutes(t *testing.T) {
+	t.Run("routes only", func(t *testing.T) {
+		policies := &agentgateway.ModelPolicies{
+			Routes: map[string]agentgateway.RouteType{
+				"/v1/completions":     agentgateway.RouteTypeDetect,
+				"/v1/generateContent": agentgateway.RouteTypeDetect,
+				"*":                   agentgateway.RouteTypePassthrough,
+			},
+		}
+		routePolicy, err := translateModelRouteAIPolicy(RouteContext{}, "default", policies)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if routePolicy == nil {
+			t.Fatal("AI policy = nil, want routes to produce an AI policy")
+		}
+		got := routePolicy.GetRoutes()
+		want := map[string]api.BackendPolicySpec_Ai_RouteType{
+			"/v1/completions":     api.BackendPolicySpec_Ai_DETECT,
+			"/v1/generateContent": api.BackendPolicySpec_Ai_DETECT,
+			"*":                   api.BackendPolicySpec_Ai_PASSTHROUGH,
+		}
+		if len(got) != len(want) {
+			t.Fatalf("routes = %#v, want %#v", got, want)
+		}
+		for path, routeType := range want {
+			if got[path] != routeType {
+				t.Errorf("route %q = %v, want %v", path, got[path], routeType)
+			}
+		}
+		if len(routePolicy.GetTransformations()) != 0 {
+			t.Errorf("transformations = %#v, want empty", routePolicy.GetTransformations())
+		}
+	})
+
+	t.Run("routes alongside transformations", func(t *testing.T) {
+		policies := &agentgateway.ModelPolicies{
+			Transformations: []agentgateway.FieldTransformation{{Field: "temperature", Expression: "0.5"}},
+			Routes:          map[string]agentgateway.RouteType{"/v1/completions": agentgateway.RouteTypeDetect},
+		}
+		routePolicy, err := translateModelRouteAIPolicy(RouteContext{}, "default", policies)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if routePolicy == nil {
+			t.Fatal("AI policy = nil, want an AI policy")
+		}
+		if got := routePolicy.GetRoutes()["/v1/completions"]; got != api.BackendPolicySpec_Ai_DETECT {
+			t.Errorf("route /v1/completions = %v, want DETECT", got)
+		}
+		if got := routePolicy.GetTransformations()["temperature"]; got != "0.5" {
+			t.Errorf("temperature transformation = %q, want %q", got, "0.5")
+		}
+	})
+
+	t.Run("nil and empty policies produce no AI policy", func(t *testing.T) {
+		for name, policies := range map[string]*agentgateway.ModelPolicies{
+			"nil":   nil,
+			"empty": {},
+			"no ai fields": {
+				Health: &agentgateway.Health{UnhealthyCondition: new(agentgateway.CELExpression("response.code >= 500"))},
+			},
+		} {
+			routePolicy, err := translateModelRouteAIPolicy(RouteContext{}, "default", policies)
+			if err != nil {
+				t.Fatalf("%s: unexpected error: %v", name, err)
+			}
+			if routePolicy != nil {
+				t.Errorf("%s: AI policy = %#v, want nil", name, routePolicy)
+			}
+		}
+	})
+}
+
 func TestModelAuthorization(t *testing.T) {
 	providerType := agentgateway.ModelProviderOpenAI
 	model := &agentgateway.AgentgatewayModel{

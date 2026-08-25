@@ -143,6 +143,17 @@ type ModelPolicies struct {
 	// Guardrails for requests and responses sent to this model provider.
 	// +optional
 	PromptGuard *AIPromptGuard `json:"promptGuard,omitempty"`
+
+	// Rules for identifying the type of traffic to handle for this model.
+	// The keys are URL path suffixes matched using ends-with comparison, for
+	// example `"/v1/chat/completions"`.
+	// The special `*` wildcard matches any path.
+	// Setting this field *replaces* the built-in default route table wholesale
+	// rather than extending it, so the map must restate every suffix it still
+	// wants, including a `"*"` wildcard entry if one is desired.
+	// If not specified, the built-in defaults apply.
+	// +optional
+	Routes map[string]RouteType `json:"routes,omitempty"`
 }
 
 // ModelBackendAuth configures credentials for a model provider.

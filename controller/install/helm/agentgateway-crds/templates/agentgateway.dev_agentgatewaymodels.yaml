@@ -4317,6 +4317,33 @@ spec:
                         be set
                       rule: '[has(self.request),has(self.response)].filter(x,x==true).size()
                         >= 1'
+                  routes:
+                    additionalProperties:
+                      description: |-
+                        How the AI gateway should process incoming requests
+                        based on the URL path and the API format expected.
+                      enum:
+                      - AnthropicTokenCount
+                      - Completions
+                      - Detect
+                      - Embeddings
+                      - Messages
+                      - Models
+                      - Passthrough
+                      - Realtime
+                      - Rerank
+                      - Responses
+                      type: string
+                    description: |-
+                      Rules for identifying the type of traffic to handle for this model.
+                      The keys are URL path suffixes matched using ends-with comparison, for
+                      example `"/v1/chat/completions"`.
+                      The special `*` wildcard matches any path.
+                      Setting this field *replaces* the built-in default route table wholesale
+                      rather than extending it, so the map must restate every suffix it still
+                      wants, including a `"*"` wildcard entry if one is desired.
+                      If not specified, the built-in defaults apply.
+                    type: object
                   tls:
                     description: TLS settings for connections to this model provider.
                     properties:
@@ -4535,8 +4562,9 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: at least one of the fields in [auth authorization headers
-                    health promptGuard tls transformations tunnel] must be set
-                  rule: '[has(self.auth),has(self.authorization),has(self.headers),has(self.health),has(self.promptGuard),has(self.tls),has(self.transformations),has(self.tunnel)].filter(x,x==true).size()
+                    health promptGuard routes tls transformations tunnel] must be
+                    set
+                  rule: '[has(self.auth),has(self.authorization),has(self.headers),has(self.health),has(self.promptGuard),has(self.routes),has(self.tls),has(self.transformations),has(self.tunnel)].filter(x,x==true).size()
                     >= 1'
               provider:
                 description: |-
