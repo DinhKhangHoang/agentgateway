@@ -276,3 +276,116 @@ path that does exist, and one Kong covers.
 - **P6 is PARTIAL.** The mid-stream failure is surfaced rather than laundered
   into a clean-looking 200 — which is the important half — but usage is not
   reported for the aborted request.
+
+---
+
+## Post-probe build: `maas-v2-parity-f83e591c` — two fork fixes verified in-cluster
+
+Date: 2026-08-26. Cluster `aigateway-dev`, namespace `user-11377-maas-v2-agw`.
+
+Images built and pushed after the probe run above (which was on `dcb5b524`):
+
+| Component | Tag | Digest |
+|---|---|---|
+| controller | `.../dev/agentgateway-controller:maas-v2-parity-f83e591c` | `sha256:45921174af6eb3e776437de7afb7ca2c25afc0faf21900a84a3a3d46b330825f` |
+| dataplane | `.../dev/agentgateway:maas-v2-parity-f83e591c` | `sha256:8e86d6d1d3cfca74a0ba84e044ef82dadbf08f96e69077d4a5e4f5d110555b4d` |
+
+Rolled by patching `deploy/agentgateway` in `agentgateway-system`: container
+`controller` image, and env `AGW_PROXY_IMAGE_TAG`. The dataplane Deployment
+`maas-v2-agw` picks the new tag up on the controller's next reconcile — it
+reported "successfully rolled out" on the *old* image for ~30 s first, so verify
+by reading `.spec.template.spec.containers[0].image`, not by `rollout status`.
+
+The regenerated `agentgateway.dev_agentgatewaymodels.yaml` CRD was applied with
+`--server-side --force-conflicts --field-manager=agentgateway-parity` because
+helm owns `.spec.versions`. **A later `helm upgrade` of the CRD chart will
+conflict back over this and silently drop `spec.match.paths` and
+`spec.policies.routes` from the schema.**
+
+### Fix 1 — `ModelRoute::from_xds` no longer discards the default route table
+
+`crates/agentgateway/src/types/agent_xds.rs` (commit `52afb9e4`). Before the fix,
+*any* AI policy on a model — including `policies.transformations` alone — replaced
+the whole default path→`RouteType` table with an empty map, so every path except
+the ones the policy restated stopped resolving.
+
+Subject: `deepseek-v4-pro-direct`, which carries
+`transformations: [{field: model, expression: "'deepseek-v4-pro'"}]` and therefore
+emits an `ai_policy`. `spec.match.paths: ["/v1/completions"]` was added to open the
+path on the listener; no `policies.routes` set, so the default table must supply
+the route type.
+
+```
+POST /v1/completions  {"model":"deepseek-v4-pro","prompt":"say hi","max_tokens":8}
+→ 400 {"error":{"message":"The supported API model names are deepseek-v4-pro, ...,
+        but you passed deepseek-v4-pro-direct."}}
+```
+
+Access log for that request:
+
+```
+route=internal/llm:request endpoint=api.deepseek.com:443 http.path=/v1/completions
+http.status=400 protocol=llm duration=293ms
+```
+
+`endpoint=api.deepseek.com:443` is the assertion. The request reached the upstream
+via the default table's `*` → `Passthrough` entry. Pre-fix the same request never
+left the router: `503`, `missing field 'messages'`. The absence of any `gen_ai.*`
+field on the line confirms `Passthrough` specifically — it does no metering — and
+the upstream's complaint that it "passed deepseek-v4-pro-direct" confirms the body
+went through verbatim, un-transformed, as `Passthrough` requires.
+
+### Fix 2 — `ModelPolicies.Routes` makes the route table addressable per model
+
+`controller/api/v1alpha1/agentgateway/agentgateway_model_types.go` +
+`controller/pkg/agentgateway/translator/model_collections.go:462` (commit
+`f83e591c`). Before this there was no surface at all: a Gateway-targeted
+`AgentgatewayPolicy` with `backend.ai.routes` reported `Accepted=True,
+Attached=True` and did nothing, because the model router is a synthetic backend
+with `inline_policies: vec![]`.
+
+Same model, same request, with `policies.routes` set — the built-in table
+restated plus one changed entry, since the field replaces wholesale:
+
+```yaml
+policies:
+  routes:
+    "/v1/chat/completions": Completions
+    "/v1/completions":      Detect      # <- the entry under test
+    "/v1/messages":         Messages
+    "/v1/responses":        Responses
+    "/v1/embeddings":       Embeddings
+    "/v1/rerank":           Rerank
+    "*":                    Passthrough
+```
+
+```
+route=internal/llm:request endpoint=api.deepseek.com:443 http.path=/v1/completions
+http.status=400 protocol=llm gen_ai.operation.name=chat gen_ai.provider.name=openai
+gen_ai.request.model=deepseek-v4-pro gen_ai.request.max_tokens=8 duration=185ms
+```
+
+Two independent signals that `Detect` actually took effect on that path:
+
+1. The `gen_ai.*` fields appear. Under `Passthrough` (Fix 1's line, same path,
+   same body) they are absent — the request is now parsed and metered.
+2. `gen_ai.request.model=deepseek-v4-pro`, and the upstream error changed from
+   *"you passed deepseek-v4-pro-direct"* to DeepSeek's own *"completions api is
+   only available when using beta api"*. The CEL transformation ran, so the body
+   was deserialized and re-serialized rather than relayed — which only a parsing
+   route type does.
+
+Checking the status code alone would have proved nothing here: both arms return
+`400`. The evidence is which `400`.
+
+### Revert
+
+Both mutations were removed (`kubectl patch --type=json`, `remove` on
+`/spec/match/paths` and `/spec/policies/routes`). The resulting `spec` compares
+byte-identical to the pre-probe snapshot, `deepseek-v4-pro` (virtual) is
+unmodified, `/v1/chat/completions` still returns `200`, and `/v1/completions` is
+back to `404 route not found`.
+
+A patch adding `policies` to the *virtual* model `deepseek-v4-pro` was rejected by
+the CRD (`policies cannot be used with virtualModel`) and so left nothing to undo.
+Policies — and therefore route tables — are a concrete-model surface only.
