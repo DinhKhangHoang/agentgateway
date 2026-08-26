@@ -1,0 +1,341 @@
+{
+  "generated": "2026-08-25T23:28:44+0000",
+  "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+  "results": [
+    {
+      "probe": "P1",
+      "verdict": "PASS",
+      "requirement": "FR-1.1/1.2, FR-6.8 (auth injection)",
+      "mode": "proxy path, LLM listener, non-streaming, all tiers healthy",
+      "config": {
+        "virtualModel": "probe-model",
+        "tier0.baseUrl": "http://172.29.77.11:8080",
+        "tier0.path": "/v1/chat/completions",
+        "tier0.params.model": "upstream-tier0"
+      },
+      "evidence": {
+        "client_status": 200,
+        "upstream_hits": {
+          "tier0": 1,
+          "tier1": 0,
+          "tier2": 0
+        },
+        "tier0_hit": {
+          "seq": 1,
+          "tier": "tier0",
+          "ts": 1787700516.350628,
+          "method": "POST",
+          "path": "/v1/chat/completions",
+          "body_len": 91,
+          "body_sha256": "4a29fc2de2d5072c2b435d3c749df7628f08650fe1b2475303b1472a8a9c9546",
+          "auth_present": true,
+          "auth_sha256": "c81be34ead11eac21ab152fc34121370e587a3f9c8653b6d84dfa7fbe4be7187",
+          "x_retry_attempt": null,
+          "model": "upstream-tier0",
+          "stream": false,
+          "prefix_match_bytes": 0,
+          "body_file": "/work/bodies/tier0-00001.bin",
+          "headers": {
+            "accept-encoding": "identity",
+            "content-type": "application/json",
+            "host": "127.0.0.1:18080",
+            "content-length": "91"
+          }
+        },
+        "expected_auth_sha256": "c81be34ead11eac21ab152fc34121370e587a3f9c8653b6d84dfa7fbe4be7187",
+        "auth_header_matches_configured_credential": true,
+        "client_body": "{\"model\":\"upstream-tier0\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18},\"choices\":[{\"message\":{\"content\":\"served-by-tier0\",\"role\":\"assistant\"},\"index\":0,\"finish_reason\":\"stop\"}],\"id\":\"chatcmpl-mock-tier0\",\"object\":\"chat.completion\",\"created\":1700000000}"
+      },
+      "notes": "Credential compared by sha256 only; the raw value is never recorded. Path mapping proven by the upstream-observed path, model rewrite by the upstream-observed model.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:36+0000"
+    },
+    {
+      "probe": "P2",
+      "verdict": "PASS",
+      "requirement": "FR-4.2",
+      "mode": "proxy path, non-streaming, tier0 forced 503",
+      "config": {
+        "retry.codes": [
+          429,
+          500,
+          502,
+          503,
+          504
+        ],
+        "retry.attempts(config)": 2,
+        "total_upstream_attempts": 3,
+        "maxReplayBytes": 52428800
+      },
+      "evidence": {
+        "client_status": 200,
+        "upstream_hits": {
+          "tier0": 1,
+          "tier1": 1,
+          "tier2": 0
+        },
+        "tier1_x_retry_attempt": "1",
+        "client_body": "{\"model\":\"upstream-tier1\",\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18},\"choices\":[{\"message\":{\"content\":\"served-by-tier1\",\"role\":\"assistant\"},\"index\":0,\"finish_reason\":\"stop\"}],\"id\":\"chatcmpl-mock-tier1\",\"object\":\"chat.completion\",\"created\":1700000000}",
+        "elapsed_s": 0.058
+      },
+      "notes": "Client never sees the 503; tier0 was really attempted (1 hit).",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:37+0000"
+    },
+    {
+      "probe": "P3",
+      "verdict": "PASS",
+      "requirement": "FR-4.3",
+      "mode": "proxy path, STREAMING, tier0 forced 503, GATEWAY RESTARTED immediately before this probe (fresh health/eviction state)",
+      "config": {
+        "retry.attempts(config)": 2,
+        "total_upstream_attempts": 3,
+        "retry.codes": [
+          429,
+          500,
+          502,
+          503,
+          504
+        ],
+        "maxReplayBytes": 52428800,
+        "fresh_state": "container recreated before the request"
+      },
+      "evidence": {
+        "client_status": 200,
+        "content_type": "text/event-stream",
+        "upstream_hits": {
+          "tier0": 1,
+          "tier1": 1,
+          "tier2": 0
+        },
+        "tier0_attempted": true,
+        "tier1_x_retry_attempt": "1",
+        "sse_message_count": 7,
+        "sse_first": "{\"id\": \"chatcmpl-mock-tier1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"upstream-tier1\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"a",
+        "sse_last": "[DONE]",
+        "client_saw_503": false,
+        "elapsed_s": 0.057
+      },
+      "notes": "tier0 hit count of exactly 1 is what separates 'retried' from 'tier0 was already evicted and never tried'.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:38+0000"
+    },
+    {
+      "probe": "P4",
+      "verdict": "PASS",
+      "requirement": "FR-4.4",
+      "mode": "proxy path, STREAMING, tier0+tier1 forced 503, fresh state",
+      "config": {
+        "retry.attempts(config)": 2,
+        "total_upstream_attempts": 3,
+        "priority tiers": "tier0=0, tier1=1, tier2=2"
+      },
+      "evidence": {
+        "client_status": 200,
+        "upstream_hits": {
+          "tier0": 1,
+          "tier1": 1,
+          "tier2": 1
+        },
+        "total_upstream_hits_for_one_client_request": 3,
+        "x_retry_attempt_by_tier": {
+          "tier0": [
+            null
+          ],
+          "tier1": [
+            "1"
+          ],
+          "tier2": [
+            "2"
+          ]
+        },
+        "served_by_tier2": true,
+        "elapsed_s": 0.111
+      },
+      "notes": "Three upstream hits for one client request is the assertion.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:39+0000"
+    },
+    {
+      "probe": "P6",
+      "verdict": "PARTIAL",
+      "requirement": "FR-4.3 negative / clean failure + FR-7.8 on the abort path",
+      "mode": "proxy path, STREAMING, tier0 aborts the connection after 3 SSE frames",
+      "config": {
+        "abort_after_frames": 3,
+        "retry.attempts(config)": 2,
+        "total_upstream_attempts": 3
+      },
+      "evidence": {
+        "client_status": 200,
+        "sse_frames_delivered": 2,
+        "stream_terminated_with_DONE": false,
+        "failure_surfaced_to_client": true,
+        "client_transport_error": "IncompleteRead(0 bytes read)",
+        "upstream_hits": {
+          "tier0": 1,
+          "tier1": 0,
+          "tier2": 0
+        },
+        "retry_attempted_after_headers": false,
+        "elapsed_s": 0.003,
+        "followup_request_status": 200,
+        "access_log_line_for_aborted_request": "2026-08-25T23:28:39.996734Z\tinfo\trequest gateway=default/default listener=llm route=internal/llm:request endpoint=172.29.77.11:8080 src.addr=172.29.77.1:56492 http.method=POST http.host=127.0.0.1 http.path=/v1/chat/completions http.version=HTTP/1.1 http.status=200 protocol=llm gen_ai.operation.name=chat gen_ai.provider.name=custom gen_ai.request.model=upstream-tier0 gen_ai.response.model=upstream-tier0 duration=1ms",
+        "usage_reported_on_aborted_request": false,
+        "gateway_log_tail": "Z\tdebug\tllm::cost\tpolicy event\tconnection.id=3 request.id=3 policy_kind=\"llm_cost\" details=Structured(Object {\"provider\": String(\"custom\"), \"model\": String(\"upstream-tier0\"), \"status\": String(\"noCatalog\"), \"reason\": String(\"no model catalog\")})\n2026-08-25T23:28:40.005664Z\tdebug\tproxy::httpproxy\tresponse not retry-able\tconnection.id=3 request.id=3\n2026-08-25T23:28:40.005698Z\tdebug\tllm::cost\tpolicy event\tconnection.id=3 policy_kind=\"llm_cost\" details=Structured(Object {\"provider\": String(\"custom\"), \"model\": String(\"upstream-tier0\"), \"status\": String(\"noCatalog\"), \"reason\": String(\"no model catalog\")})\n2026-08-25T23:28:40.5732Z\tinfo\trequest gateway=default/default listener=llm route=internal/llm:request endpoint=172.29.77.11:8080 src.addr=172.29.77.1:56496 http.method=POST http.host=127.0.0.1 http.path=/v1/chat/completions http.version=HTTP/1.1 http.status=200 protocol=llm gen_ai.operation.name=chat gen_ai.provider.name=custom gen_ai.request.model=upstream-tier0 gen_ai.response.model=upstream-tier0 gen_ai.usage.input_tokens=11 gen_ai.usage.output_tokens=7 duration=1ms\n2026-08-25T23:28:40.006663Z\tdebug\tproxy::gateway\tconnection completed\tconnection.id=3 bind=\"bind/8080\" dur=2.861278ms\n"
+      },
+      "notes": "A mid-stream failure is unretriable by construction; the assertion is that it terminates promptly, does not retry after headers, leaves the process serving, AND still reports usage. PARTIAL = the first three hold but the access log for the aborted request carries no gen_ai.usage.* fields, so the tokens the provider already produced are never metered.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:40+0000"
+    },
+    {
+      "probe": "P7",
+      "verdict": "PARTIAL",
+      "requirement": "FR-4.7 (bounded attempts) + FR-4.8 (reject + Retry-After)",
+      "mode": "proxy path, STREAMING, all three tiers forced 503",
+      "config": {
+        "retry.attempts(config)": 2,
+        "total_upstream_attempts": 3,
+        "retry.codes": [
+          429,
+          500,
+          502,
+          503,
+          504
+        ]
+      },
+      "evidence": {
+        "client_status": 503,
+        "upstream_hits": {
+          "tier0": 1,
+          "tier1": 1,
+          "tier2": 1
+        },
+        "total_attempts": 3,
+        "bounded": true,
+        "elapsed_s": 0.11,
+        "hang": false,
+        "retry_after_header": null,
+        "response_headers": {
+          "server": "mock-upstream/1 Python/3.12.14",
+          "date": "Tue, 25 Aug 2026 23:28:40 GMT",
+          "content-type": "application/json",
+          "content-length": "78"
+        },
+        "client_body": "{\"error\": {\"message\": \"mock upstream forced failure\", \"type\": \"server_error\"}}"
+      },
+      "notes": "FR-4.7 and FR-4.8 are scored separately: bounded=True, prompt_reject=True, Retry-After=None",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:40+0000"
+    },
+    {
+      "probe": "P11",
+      "verdict": "PASS",
+      "requirement": "NFR-6.4 / FR-9.7",
+      "mode": "startup validation, local file config (`--file`), distroless image",
+      "config": {
+        "cases": [
+          "type-error",
+          "unknown-field",
+          "dangling-ref",
+          "bad-url"
+        ]
+      },
+      "evidence": {
+        "cases": [
+          {
+            "case": "type-error",
+            "fault": "retry.maxReplayBytes: \"fifty-megs\"",
+            "refused_to_boot": true,
+            "still_running_after_timeout": false,
+            "exit_code": 1,
+            "names_the_fault": true,
+            "matched_tokens": [
+              "maxReplayBytes"
+            ],
+            "output_tail": "ize: null\nmcp:\n  sessionTtl: 30m0s\ndynamicCaCertCache:\n  ttl: 5m0s\n  capacity: 256\nmodelCatalog:\n  sources: []\n\t\n2026-08-25T23:28:41.365751Z\tinfo\tmanagement::hyper_helpers\tlistener established\taddress=127.0.0.1:15021 component=\"readiness\"\n2026-08-25T23:28:41.367497Z\tinfo\tagent_core::readiness\tTask 'agentgateway' complete (3.979301ms), still awaiting 1 tasks\t\n2026-08-25T23:28:41.367515Z\tinfo\tagent_core::readiness\tTask 'state manager' complete (3.997305ms), marking server ready\t\nError: policies[0].policy.retry.maxReplayBytes: invalid type: string \"fifty-megs\", expected usize at line 1 column 314"
+          },
+          {
+            "case": "unknown-field",
+            "fault": "llm.providers[0].bogusField",
+            "refused_to_boot": true,
+            "still_running_after_timeout": false,
+            "exit_code": 1,
+            "names_the_fault": true,
+            "matched_tokens": [
+              "bogusField"
+            ],
+            "output_tail": "nTtl: 30m0s\ndynamicCaCertCache:\n  ttl: 5m0s\n  capacity: 256\nmodelCatalog:\n  sources: []\n\t\n2026-08-25T23:28:42.106058Z\tinfo\tmanagement::hyper_helpers\tlistener established\taddress=127.0.0.1:15021 component=\"readiness\"\n2026-08-25T23:28:42.107503Z\tinfo\tagent_core::readiness\tTask 'agentgateway' complete (3.676685ms), still awaiting 1 tasks\t\n2026-08-25T23:28:42.107522Z\tinfo\tagent_core::readiness\tTask 'state manager' complete (3.697144ms), marking server ready\t\nError: llm.providers[0].bogusField: unknown field `bogusField`, expected one of `name`, `params`, `provider`, `defaults` at line 1 column 776"
+          },
+          {
+            "case": "dangling-ref",
+            "fault": "virtualModel target -> undefined model",
+            "refused_to_boot": true,
+            "still_running_after_timeout": false,
+            "exit_code": 1,
+            "names_the_fault": true,
+            "matched_tokens": [
+              "no-such-model"
+            ],
+            "output_tail": ": 10s\n  poolIdleTimeout: 1m30s\n  poolMaxSize: null\nmcp:\n  sessionTtl: 30m0s\ndynamicCaCertCache:\n  ttl: 5m0s\n  capacity: 256\nmodelCatalog:\n  sources: []\n\t\n2026-08-25T23:28:42.874919Z\tinfo\tmanagement::hyper_helpers\tlistener established\taddress=127.0.0.1:15021 component=\"readiness\"\n2026-08-25T23:28:42.876702Z\tinfo\tagent_core::readiness\tTask 'agentgateway' complete (4.112333ms), still awaiting 1 tasks\t\n2026-08-25T23:28:42.876724Z\tinfo\tagent_core::readiness\tTask 'state manager' complete (4.137425ms), marking server ready\t\nError: virtual model target no-such-model does not match any llm.models entry"
+          },
+          {
+            "case": "bad-url",
+            "fault": "provider params.baseUrl = 'not a url'",
+            "refused_to_boot": true,
+            "still_running_after_timeout": false,
+            "exit_code": 1,
+            "names_the_fault": true,
+            "matched_tokens": [
+              "baseUrl",
+              "url"
+            ],
+            "output_tail": "IdleTimeout: 1m30s\n  poolMaxSize: null\nmcp:\n  sessionTtl: 30m0s\ndynamicCaCertCache:\n  ttl: 5m0s\n  capacity: 256\nmodelCatalog:\n  sources: []\n\t\n2026-08-25T23:28:43.608862Z\tinfo\tmanagement::hyper_helpers\tlistener established\taddress=127.0.0.1:15021 component=\"readiness\"\n2026-08-25T23:28:43.610802Z\tinfo\tagent_core::readiness\tTask 'agentgateway' complete (4.749032ms), still awaiting 1 tasks\t\n2026-08-25T23:28:43.610830Z\tinfo\tagent_core::readiness\tTask 'state manager' complete (4.782205ms), marking server ready\t\nError: invalid params.baseUrl for model tier0\n\nCaused by:\n    relative URL without a base"
+          }
+        ],
+        "refused_count": 4,
+        "named_fault_count": 4,
+        "total_cases": 4
+      },
+      "notes": "PARTIAL means it refuses to boot but at least one fault class produces a message that does not identify the offending field.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:43+0000"
+    },
+    {
+      "probe": "P14",
+      "verdict": "PASS",
+      "requirement": "FR-4.4 (feature actually active)",
+      "mode": "proxy path, STREAMING, deliberately dead primary, RUST_LOG=debug, full pilot policy shape (retry + failover + per-provider health)",
+      "config": {
+        "retry.attempts(config)": 2,
+        "total_upstream_attempts": 3,
+        "eviction.consecutiveFailures": 1,
+        "eviction.duration": "60s"
+      },
+      "evidence": {
+        "mechanism_signal_upstream_header_x_retry_attempt": "1",
+        "mechanism_signal_gateway_log_lines": [
+          "    attempts: 2",
+          "2026-08-25T23:28:44.777557Z\tdebug\tproxy::httpproxy\tattempt 0/2\tconnection.id=1 request.id=1",
+          "2026-08-25T23:28:44.777639Z\tdebug\tproxy::httpproxy\tresponse not retry-able\tconnection.id=1 request.id=1",
+          "2026-08-25T23:28:44.787896Z\tdebug\tproxy::httpproxy\tattempt 0/2\tconnection.id=2 request.id=2",
+          "2026-08-25T23:28:44.789381Z\tdebug\tproxy::httpproxy\tattempting another retry, last result was false Ok(503)\tconnection.id=2 request.id=2 backoff=Some(50ms)",
+          "2026-08-25T23:28:44.839667Z\tdebug\tproxy::httpproxy\tattempt 1/2\tconnection.id=2 request.id=2",
+          "2026-08-25T23:28:44.842118Z\tdebug\tproxy::httpproxy\tresponse not retry-able\tconnection.id=2 request.id=2",
+          "2026-08-25T23:28:44.842470Z\tinfo\trequest gateway=default/default listener=llm route=internal/llm:request endpoint=172.29.77.12:8080 src.addr=172.29.77.1:56512 http.method=POST http.host=127.0.0.1 http.path=/v1/chat/completions http.version=HTTP/1.1 http.status=200 protocol=llm gen_ai.operation.name=chat gen_ai.provider.name=custom gen_ai.request.model=upstream-tier1 gen_ai.response.model=upstream-tier1 gen_ai.usage.input_tokens=11 gen_ai.usage.output_tokens=4 retry.attempt=1 duration=54ms"
+        ],
+        "upstream_hits": {
+          "tier0": 1,
+          "tier1": 1,
+          "tier2": 0
+        },
+        "failover_target_model_seen_upstream": "upstream-tier1",
+        "client_status": 200,
+        "response_alone_would_have_looked_normal": true
+      },
+      "notes": "The response is a normal 200 either way -- the verdict rests on the x-retry-attempt header agentgateway stamps on the replayed request and on its own retry/eviction log lines.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:44+0000"
+    }
+  ]
+}

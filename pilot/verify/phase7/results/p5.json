@@ -1,0 +1,201 @@
+{
+  "generated": "2026-08-25T23:29:12+0000",
+  "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+  "results": [
+    {
+      "probe": "P5",
+      "verdict": "PASS",
+      "requirement": "FR-4.9",
+      "mode": "proxy path, LLM listener, streaming=True, 3-tier failover pool",
+      "config": {
+        "maxReplayBytes": 52428800,
+        "maxBufferSize": 64000000,
+        "retry.attempts(config)": 2,
+        "total_upstream_attempts": 3,
+        "retry.codes": [
+          429,
+          500,
+          502,
+          503,
+          504
+        ],
+        "gateway_restarted_before_each_size": true
+      },
+      "evidence": {
+        "sizes": [
+          {
+            "size_label": "1K",
+            "body_bytes": 1117,
+            "client_status": 200,
+            "elapsed_s": 0.057,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 1,
+              "tier2": 0
+            },
+            "tier1_x_retry_attempt": "1",
+            "retry_observed": true,
+            "served_by_tier1": true,
+            "client_body_head": "data: {\"id\": \"chatcmpl-mock-tier1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"upstream-tier1\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish"
+          },
+          {
+            "size_label": "40K",
+            "body_bytes": 41054,
+            "client_status": 200,
+            "elapsed_s": 0.058,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 1,
+              "tier2": 0
+            },
+            "tier1_x_retry_attempt": "1",
+            "retry_observed": true,
+            "served_by_tier1": true,
+            "client_body_head": "data: {\"id\": \"chatcmpl-mock-tier1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"upstream-tier1\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish"
+          },
+          {
+            "size_label": "60K",
+            "body_bytes": 61534,
+            "client_status": 200,
+            "elapsed_s": 0.058,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 1,
+              "tier2": 0
+            },
+            "tier1_x_retry_attempt": "1",
+            "retry_observed": true,
+            "served_by_tier1": true,
+            "client_body_head": "data: {\"id\": \"chatcmpl-mock-tier1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"upstream-tier1\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish"
+          },
+          {
+            "size_label": "70K",
+            "body_bytes": 71774,
+            "client_status": 200,
+            "elapsed_s": 0.058,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 1,
+              "tier2": 0
+            },
+            "tier1_x_retry_attempt": "1",
+            "retry_observed": true,
+            "served_by_tier1": true,
+            "client_body_head": "data: {\"id\": \"chatcmpl-mock-tier1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"upstream-tier1\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish"
+          },
+          {
+            "size_label": "100K",
+            "body_bytes": 102495,
+            "client_status": 200,
+            "elapsed_s": 0.058,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 1,
+              "tier2": 0
+            },
+            "tier1_x_retry_attempt": "1",
+            "retry_observed": true,
+            "served_by_tier1": true,
+            "client_body_head": "data: {\"id\": \"chatcmpl-mock-tier1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"upstream-tier1\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish"
+          },
+          {
+            "size_label": "1M",
+            "body_bytes": 1048669,
+            "client_status": 200,
+            "elapsed_s": 0.082,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 1,
+              "tier2": 0
+            },
+            "tier1_x_retry_attempt": "1",
+            "retry_observed": true,
+            "served_by_tier1": true,
+            "client_body_head": "data: {\"id\": \"chatcmpl-mock-tier1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"upstream-tier1\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish"
+          },
+          {
+            "size_label": "50M",
+            "body_bytes": 50000094,
+            "client_status": 200,
+            "elapsed_s": 1.285,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 1,
+              "tier2": 0
+            },
+            "tier1_x_retry_attempt": "1",
+            "retry_observed": true,
+            "served_by_tier1": true,
+            "client_body_head": "data: {\"id\": \"chatcmpl-mock-tier1\", \"object\": \"chat.completion.chunk\", \"created\": 1700000000, \"model\": \"upstream-tier1\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\"}, \"finish"
+          }
+        ],
+        "first_failing_size": null
+      },
+      "notes": "Retry is proven by tier0 hit >=1 AND tier1 hit >=1 for one client request, plus the x-retry-attempt header agentgateway stamps on the replayed attempt -- not by the client status.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:29:08+0000"
+    },
+    {
+      "probe": "P5-control-default-cap",
+      "verdict": "INFO",
+      "requirement": "FR-4.9 (control arm)",
+      "mode": "proxy path, streaming, retry policy WITHOUT maxReplayBytes",
+      "config": {
+        "maxReplayBytes": "unset -> code default 64 KiB",
+        "retry.attempts(config)": 2,
+        "total_upstream_attempts": 3
+      },
+      "evidence": {
+        "sizes": [
+          {
+            "size_label": "40K",
+            "client_status": 200,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 1,
+              "tier2": 0
+            },
+            "retry_observed": true,
+            "elapsed_s": 0.058
+          },
+          {
+            "size_label": "60K",
+            "client_status": 200,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 1,
+              "tier2": 0
+            },
+            "retry_observed": true,
+            "elapsed_s": 0.06
+          },
+          {
+            "size_label": "70K",
+            "client_status": 503,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 0,
+              "tier2": 0
+            },
+            "retry_observed": false,
+            "elapsed_s": 0.004
+          },
+          {
+            "size_label": "100K",
+            "client_status": 503,
+            "upstream_hits": {
+              "tier0": 1,
+              "tier1": 0,
+              "tier2": 0
+            },
+            "retry_observed": false,
+            "elapsed_s": 0.004
+          }
+        ]
+      },
+      "notes": "Control arm establishing that the sweep can detect the cliff: if this arm also passed at every size the P5 result would be meaningless.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:29:12+0000"
+    }
+  ]
+}

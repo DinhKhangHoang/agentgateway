@@ -1,0 +1,62 @@
+{
+  "generated": "2026-08-26T00:05:00+0000",
+  "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+  "where": "live dev cluster, gateway maas-v2-agw, namespace user-11377-maas-v2-agw",
+  "build_note": "The deployed dataplane is dcb5b524. Commits 52afb9e4 (default route-type table) and f83e591c (ModelPolicies.routes) landed after this image was built. Neither is on the code path either probe exercises.",
+  "results": [
+    {
+      "probe": "P8",
+      "verdict": "PASS",
+      "requirement": "FR-6.1, NFR-3.2",
+      "mode": "live cluster, ext-auth via AgentgatewayPolicy maas-v2-agw-extauth -> Service ai-gateway-plugin-server:8080, failureMode FailClosed",
+      "evidence": {
+        "control_valid_key": {"status": 200, "time_total_s": 1.784},
+        "no_auth_header": {"status": 401, "time_total_s": 0.071, "body": "{\"message\":\"missing api key\"}"},
+        "garbage_key": {"status": 401, "time_total_s": 0.070, "body": "{\"message\":\"unknown api key\"}"},
+        "authorizer_unavailable": {
+          "how": "kubectl scale deploy/ai-gateway-plugin-server --replicas=0; endpoints confirmed empty before probing",
+          "key_used": "VALID",
+          "runs": [{"status": 403, "time_total_s": 0.066}, {"status": 403, "time_total_s": 0.064}, {"status": 403, "time_total_s": 0.243}],
+          "body": "external authorization failed",
+          "restored": "replicas=4, rollout complete, control request returned 200 afterwards"
+        },
+        "no_upstream_connect_argument": "Every denial returned in 0.06-0.24s against a 1.78s control that reached DeepSeek and returned usage. A 25x latency gap with a gateway-authored body (not a provider error shape) is the evidence; upstream hit counters are not available for a real provider."
+      },
+      "note": "Fail-closed holds for all three denial modes, including a VALID key while the authorizer has zero endpoints. A true slow-authorizer timeout was NOT tested separately: scaling to zero produces connection failure, not a hang. That distinction is UNVERIFIED."
+    },
+    {
+      "probe": "P10",
+      "verdict": "PASS",
+      "requirement": "NFR-3.5",
+      "mode": "live cluster, streaming chat completion, kubectl rollout restart deploy/maas-v2-agw issued at t=6s",
+      "evidence": {
+        "curl_exit": 0,
+        "sse_data_frames": 860,
+        "done_markers": 1,
+        "bytes": 269883,
+        "last_line": "data: [DONE]",
+        "stderr": "",
+        "pod_age_after_probe_s": 18,
+        "restart_confirmed": "rollout status reported success and the serving pod was 18s old after the stream ended, so the pod was genuinely replaced mid-stream and the old pod drained without truncating."
+      }
+    },
+    {
+      "probe": "P13",
+      "verdict": "N-A",
+      "requirement": "FR-2.6a",
+      "reason": "Agentgateway has no server-side tool-augmentation path. There is no augmented route to send the request through, so the probe has no subject. This is the same reason the parity generator refuses the 7 dev / 6 prod web_search routes rather than emitting them. An absent probe here is a GAP, not a pass."
+    },
+    {
+      "probe": "P16",
+      "verdict": "N-A",
+      "requirement": "FR-2.6c",
+      "reason": "Same: no augmentation service exists to make answer with an error body. The failure mode this probe guards against (a 200 with empty output laundering an upstream error) cannot occur because the code path does not exist. An absent probe here is a GAP, not a pass."
+    },
+    {
+      "probe": "P17",
+      "verdict": "N-A",
+      "requirement": "FR-7.10",
+      "reason": "Same: metering on the bypass/hijack path cannot be measured where there is no bypass path. Note this is NOT the same as saying metering is complete -- P6 measured usage_reported_on_aborted_request = false, which is a real metering hole on a path that DOES exist."
+    }
+  ]
+}

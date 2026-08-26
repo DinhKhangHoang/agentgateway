@@ -1,0 +1,160 @@
+{
+  "generated": "2026-08-25T23:28:51+0000",
+  "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+  "results": [
+    {
+      "probe": "P12",
+      "verdict": "PASS",
+      "requirement": "FR-2.7 / NFR-4.5",
+      "mode": "proxy path, non-streaming, THREE distinct gateway OS processes (two concurrent containers + one restart), identical request body",
+      "config": {
+        "runs_per_process": 6,
+        "processes": [
+          "A(pid=1836237)",
+          "B(pid=1836362)",
+          "C(pid=1836535 restart)"
+        ]
+      },
+      "evidence": {
+        "distinct_upstream_body_sha256": [
+          "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0"
+        ],
+        "capture_count": 18,
+        "captures": [
+          {
+            "process": "A(pid=1836237)",
+            "seq": 1,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00001.bin"
+          },
+          {
+            "process": "A(pid=1836237)",
+            "seq": 2,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00002.bin"
+          },
+          {
+            "process": "A(pid=1836237)",
+            "seq": 3,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00003.bin"
+          },
+          {
+            "process": "A(pid=1836237)",
+            "seq": 4,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00004.bin"
+          },
+          {
+            "process": "A(pid=1836237)",
+            "seq": 5,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00005.bin"
+          },
+          {
+            "process": "A(pid=1836237)",
+            "seq": 6,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00006.bin"
+          },
+          {
+            "process": "B(pid=1836362)",
+            "seq": 7,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00007.bin"
+          },
+          {
+            "process": "B(pid=1836362)",
+            "seq": 8,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00008.bin"
+          },
+          {
+            "process": "B(pid=1836362)",
+            "seq": 9,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00009.bin"
+          },
+          {
+            "process": "B(pid=1836362)",
+            "seq": 10,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00010.bin"
+          },
+          {
+            "process": "B(pid=1836362)",
+            "seq": 11,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00011.bin"
+          },
+          {
+            "process": "B(pid=1836362)",
+            "seq": 12,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00012.bin"
+          },
+          {
+            "process": "C(pid=1836535 restart)",
+            "seq": 13,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00013.bin"
+          },
+          {
+            "process": "C(pid=1836535 restart)",
+            "seq": 14,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00014.bin"
+          },
+          {
+            "process": "C(pid=1836535 restart)",
+            "seq": 15,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00015.bin"
+          },
+          {
+            "process": "C(pid=1836535 restart)",
+            "seq": 16,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00016.bin"
+          },
+          {
+            "process": "C(pid=1836535 restart)",
+            "seq": 17,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00017.bin"
+          },
+          {
+            "process": "C(pid=1836535 restart)",
+            "seq": 18,
+            "body_sha256": "3da4fdae58ab739c30fe66388af037dec7ed994d5a7097e46322ee4ec32dc6f0",
+            "body_len": 1034,
+            "body_file": "/work/bodies/tier0-00018.bin"
+          }
+        ],
+        "process_count": 3,
+        "tool_call_arguments_string_present_verbatim": true,
+        "upstream_body_sample": "{\"messages\":[{\"role\":\"system\",\"content\":\"zeta alpha omega\"},{\"role\":\"user\",\"content\":\"call the tool\"},{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"zeta\\\":1,\\\"alpha\\\":2,\\\"mu\\\":3,\\\"beta\\\":{\\\"y\\\":2,\\\"x\\\":1},\\\"omega\\\":\\\"z\\\"}\"}}]},{\"role\":\"tool\",\"content\":\"42\",\"tool_call_id\":\"call_1\"},{\"role\":\"user\",\"content\":\"thanks\"}],\"model\":\"upstream-tier0\",\"top_p\":0.95,\"temperature\":0.0,\"stream\":false,\"frequency_penalty\":0.2,\"presence_penalty\":0.1,\"max_tokens\":256,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"description\":\"d\",\"parameters\":{\"type\":\"object\",\"properties\":{\"zeta\":{\"type\":\"string\"},\"alpha\":{\"type\":\"integer\"},\"mu\":{\"type\":\"boolean\"},\"beta\":{\"type\":\"object\",\"properties\":{\"y\":{\"type\":\"integer\"},\"x\":{\"type\":\"integer\"}}},\"omega\":{\"type\":\"string\"}},\"required\":[\"zeta\",\"alpha\"]}}},{\"type\":\"function\",\"function\":{\"name\":\"second\",\"description\":\"d2\",\"parameters\":{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}}}}}],\"response_format\":{\"type\":\"json_object\"}}"
+      },
+      "notes": "CLAIM SCOPE: this is 'observed stable across 18 captures spanning 3 distinct OS processes', NOT 'guaranteed stable'. See SCORECARD.md for the source-level reasoning about whether the serializer's ordering is structurally guaranteed.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:51+0000"
+    }
+  ]
+}

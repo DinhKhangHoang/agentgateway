@@ -208,3 +208,71 @@ It also exposed two things the plan did not anticipate, both written up in
    `/v1/completions` can only resolve to `Passthrough`, which does no token
    metering at all. Making these paths route is not the same as making them
    meter.
+
+## Probe suite run — 2026-08-25/26
+
+`probes.py` + `mock_upstream.py` implement the `ai-gateway-spec/EVALUATION.md` §3
+suite. Results are JSON under `results/`; the filled-in scorecard is
+`SCORECARD.md`.
+
+Harness shape: three mock upstream tiers as containers on a dedicated docker
+bridge network, each able to return 200-with-SSE or a chosen error on demand and
+each logging every hit, so probes assert **upstream hit counts** rather than
+client status. The gateway runs as a fourth container on that network, published
+to `127.0.0.1` only — never `--network host`, never `0.0.0.0`.
+
+| Probe | Verdict | File |
+|---|---|---|
+| P1, P2, P3, P4, P11, P14 | PASS | `results/core.json` |
+| P6, P7 | PARTIAL | `results/core.json` |
+| P5 | PASS | `results/p5.json` |
+| P12 | PASS | `results/p12.json` |
+| P15 | N-A (mechanism absent) | `results/p15.json` |
+| P18 | PASS | `results/p18.json` |
+| P8, P10 | PASS | `results/cluster.json` |
+| P13, P16, P17 | N-A (no augmentation path) | `results/cluster.json` |
+
+### The three results worth reading directly
+
+**P5 carries its own control arm**, which is what makes it conclusive. With
+`maxReplayBytes` configured, retry is observed at every size from 1 KB to 50 MB.
+With the retry policy left at its default, 60 KB retries and **70 KB does not** —
+503 to the client, one upstream hit, no second attempt. The 64 KiB cliff is
+reproduced and closed in the same run.
+
+**P8 was run against a genuinely absent authorizer**, not a misconfigured one.
+`ai-gateway-plugin-server` was scaled to zero and its endpoints confirmed empty;
+a **valid** API key then got `403 external authorization failed` in 0.066 s.
+Fail-closed holds. One honest gap: scaling to zero produces a connection failure,
+not a hang, so a slow-authorizer **timeout** is UNVERIFIED as a distinct case.
+
+**P12 crossed a real process boundary** — two concurrent containers plus a
+restart, three distinct pids, 18 captures, one body sha256. A single-pod
+determinism test would have passed regardless, which is why it was not run that
+way.
+
+### P13, P16, P17 were not run, and that is a gap rather than a pass
+
+All three probe the augmentation / hijacked-response path. Agentgateway has no
+such path, so there is no subject to probe. This is the same fact that makes the
+parity generator refuse the 7 dev / 6 prod `web_search` routes. **A future reader
+must not read an absent probe as a passing one.**
+
+Note especially that P17's absence does not mean metering is complete. P6
+measured `usage_reported_on_aborted_request = false` — a real metering hole on a
+path that does exist, and one Kong covers.
+
+### Deviations from the probe plan
+
+- **P15 is N-A rather than FAIL.** The probe assumes an idle-stream keepalive
+  exists and asserts its frames. A search of the binary's `--help`, the config
+  schema at `dcb5b524`, and the CRD surface found only TCP `SO_KEEPALIVE`, no SSE
+  heartbeat. The measurement stands as evidence of the gap: a 7.96 s client-side
+  frame gap with zero frames injected, decoded stream byte-identical to baseline.
+- **P7 is PARTIAL, not PASS.** Attempts are bounded (exactly 3) and it does not
+  hang, so FR-4.7 passes; but there is no `Retry-After` and the client receives
+  the last upstream's 503 relayed rather than a gateway-authored reject, so
+  FR-4.8 fails.
+- **P6 is PARTIAL.** The mid-stream failure is surfaced rather than laundered
+  into a clean-looking 200 — which is the important half — but usage is not
+  reported for the aborted request.

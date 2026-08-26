@@ -1,0 +1,57 @@
+{
+  "generated": "2026-08-25T23:28:24+0000",
+  "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+  "results": [
+    {
+      "probe": "P15",
+      "verdict": "N-A",
+      "requirement": "FR-2.8",
+      "mode": "proxy path, STREAMING, upstream silent for 8s mid-stream",
+      "config": {
+        "idle_gap_s": 8,
+        "keepalive_knob": "none found -- see evidence.search"
+      },
+      "evidence": {
+        "search": [
+          {
+            "where": "binary --help",
+            "query": "keepalive|heartbeat|ping|idle",
+            "hits": []
+          },
+          {
+            "where": "schema/config.json @ dcb5b524",
+            "query": "keepalive|heartbeat|sse ping|idle",
+            "hits": [
+              "KeepaliveConfig / backend.keepalives (TCP SO_KEEPALIVE on upstream conns)",
+              "frontendPolicies.http.http2KeepaliveInterval (HTTP/2 PING frames, not SSE data frames)",
+              "backend.poolIdleTimeout",
+              "-- no SSE/stream heartbeat or idle-keepalive knob"
+            ],
+            "note": "see /home/stackops/agw-pilot/pilot/verify/phase7/config-schema-keys.txt for the raw key dump"
+          }
+        ],
+        "baseline_message_count": 7,
+        "idle_arm_message_count": 7,
+        "decoded_streams_byte_identical": true,
+        "frames_injected_during_idle_window": [],
+        "client_frame_arrival_gaps_s": [
+          0.043,
+          7.959,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_gap_s": 7.959,
+        "baseline_elapsed_s": 0.004,
+        "idle_elapsed_s": 8.002,
+        "baseline_status": 200,
+        "idle_status": 200
+      },
+      "notes": "N-A: this build exposes no idle-stream keepalive/heartbeat setting for SSE. Measured behaviour is recorded anyway: the client saw a single gap equal to the upstream silence and NO injected frames, i.e. the mechanism is absent rather than present-and-disabled.",
+      "build": "vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-dcb5b524",
+      "ts": "2026-08-25T23:28:24+0000"
+    }
+  ]
+}
