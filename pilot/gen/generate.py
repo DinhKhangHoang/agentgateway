@@ -46,6 +46,49 @@ ROUTE_TYPE_PATH = {
 # an explicit spec.match.paths entry to route at all on the canonical surface.
 NON_BUILTIN_PATHS = {"/v1/completions", "/v1/generateContent"}
 
+# `spec.policies.routes` REPLACES the built-in table wholesale rather than
+# extending it (verified in-cluster 2026-08-26, pilot/verify/phase7/README.md),
+# so any model that needs one extra entry must restate every default it still
+# wants. Mirrors default_route_types(), crates/agentgateway/src/llm/
+# model_router.rs:55 -- keep the two in step.
+DEFAULT_ROUTE_TABLE = [
+    ("/v1/chat/completions", "Completions"),
+    ("/v1/messages", "Messages"),
+    (":rawPredict", "Messages"),
+    (":streamRawPredict", "Messages"),
+    ("/v1/responses", "Responses"),
+    ("/v1/images/generations", "Detect"),
+    ("/v1/images/edits", "Detect"),
+    ("/v1/images/variations", "Detect"),
+    ("/v1/responses/compact", "Detect"),
+    ("/v1/embeddings", "Embeddings"),
+    ("/v1/rerank", "Rerank"),
+    ("/v2/rerank", "Rerank"),
+    ("*", "Passthrough"),
+]
+
+# Route type for each path the built-in table does not name. `Detect` forwards
+# the body untranslated -- inbound and outbound formats are identical on both
+# of these, every row being an OpenAI-compatible upstream -- while still
+# reading model/stream/max_tokens for routing and metering. The cost is that
+# `InputFormat::supports_prompt_guard()` is false for Detect.
+# Upstream hosts whose certificate chain the system trust store cannot verify.
+# MEASURED in-cluster 2026-08-26 against the deployed parity surface, not
+# inferred from the hostname: each of these returned `invalid peer certificate`
+# at connect while every other host in the corpus completed its handshake.
+PRIVATE_CA_HOSTS = {
+    "122.201.15.117.nip.io",
+    "122.201.15.40.nip.io",
+    "49.213.86.184.nip.io",
+    "58.84.3.121.nip.io",
+    "58.84.3.29.nip.io",
+}
+
+NON_BUILTIN_ROUTE_TYPE = {
+    "/v1/completions": "Detect",
+    "/v1/generateContent": "Detect",
+}
+
 # Endpoint suffixes stripped from Kong's fully-qualified `upstream_url` to
 # recover a base URL. Kong points several route types at the same upstream
 # endpoint (e.g. llm/v1/messages -> .../chat/completions) and relies on its own
@@ -319,6 +362,10 @@ class Report(object):
             (k, 0) for k in sorted(UNSUPPORTED_FEATURES))
         self.counts = collections.OrderedDict()
         self.no_guardrail_models = []    # Detect-mapped models (see gen/README.md)
+        # host -> backend-reference count, for upstreams whose certificate the
+        # system trust store cannot chain. Measured, not guessed: see the
+        # Structural losses section.
+        self.private_ca_hosts = {}
 
     def loss(self, heading, item):
         self.losses.setdefault(heading, []).append(item)
@@ -540,6 +587,12 @@ def group(rows, rep):
                 "base": base, "upstream_name": upstream_name,
                 "auth": auth, "paths": extra_paths, "rows": brows,
             })
+            if extra_paths:
+                # Those paths map to Detect, for which supports_prompt_guard()
+                # is false. A guardrail named against this model in Tier-2
+                # KeyConfig would be accepted and silently never run.
+                rep.no_guardrail_models.append(
+                    "%s -- via %s" % (mm, ", ".join(extra_paths)))
     return backends, models
 
 
@@ -623,9 +676,11 @@ def emit_models(models, creds, ns, gw_name, gw_ns):
            "# emitted as an exact match, plus a bare-name CR wherever that name is",
            "# unambiguous. See out/report.md for why `*/<model>` is NOT used.",
            "#",
-           "# No `routes` / route-type config is emitted anywhere: ModelPolicies has",
-           "# no such field and an AgentgatewayPolicy cannot target a model.",
-           "# See pilot/gen/README.md."]
+           "# Models opening a non-built-in path also carry `policies.routes`,",
+           "# which REPLACES the built-in table wholesale -- so the whole default",
+           "# table is restated alongside the new entry. An AgentgatewayPolicy",
+           "# still cannot target a model; ModelPolicies.routes is the only",
+           "# surface. See pilot/gen/README.md."]
     for m in models:
         out.append("---")
         out.append("apiVersion: agentgateway.dev/v1alpha1")
@@ -644,9 +699,10 @@ def emit_models(models, creds, ns, gw_name, gw_ns):
         out.append("    model: " + yq(m["match"]))
         if m["paths"]:
             out.append("    # Outside the built-in model_router_matches() list, so the")
-            out.append("    # path has to be opened explicitly. It resolves to")
-            out.append("    # RouteType::Passthrough, which reports no token usage --")
-            out.append("    # recorded in out/report.md under Fidelity losses.")
+            out.append("    # path has to be opened explicitly. Its route type comes")
+            out.append("    # from policies.routes below -- without that entry it would")
+            out.append("    # fall through the \"*\" wildcard to Passthrough and report")
+            out.append("    # no token usage.")
             out.append("    paths:")
             for p in m["paths"]:
                 out.append("      - " + yq(p))
@@ -667,6 +723,14 @@ def emit_models(models, creds, ns, gw_name, gw_ns):
             policy.append("    transformations:")
             policy.append("      - field: model")
             policy.append("        expression: " + yq("'%s'" % m["upstream_name"]))
+        if m["paths"]:
+            policy.append("    # REPLACES the built-in route table rather than extending")
+            policy.append("    # it, so every default this model still wants is restated.")
+            policy.append("    routes:")
+            for path, rt in DEFAULT_ROUTE_TABLE:
+                policy.append("      %s: %s" % (yq(path), rt))
+            for path in m["paths"]:
+                policy.append("      %s: %s" % (yq(path), NON_BUILTIN_ROUTE_TYPE[path]))
         if policy:
             out.append("  policies:")
             out.extend(policy)
@@ -935,9 +999,7 @@ def emit_report(rep, ns):
         for m in sorted(rep.no_guardrail_models):
             L.append("- `%s`" % m)
     else:
-        L.append("- (none) --- no CRD field maps any path to `Detect` today, so this")
-        L.append("  list is necessarily empty. It becomes load-bearing the moment a")
-        L.append("  `routes` surface lands on `ModelPolicies`.")
+        L.append("- (none) --- no model on this surface opens a `Detect` path.")
     L.append("")
 
     L.append("## Fidelity losses")
@@ -951,13 +1013,31 @@ def emit_report(rep, ns):
 
     L.append("### Structural losses that apply to the whole output")
     L.append("")
-    L.append("- **No route-type configuration is emitted anywhere.** `ModelPolicies`")
-    L.append("  has no `routes` field and an `AgentgatewayPolicy` cannot target a")
-    L.append("  model, so there is nowhere to put it. `/v1/completions` and")
-    L.append("  `/v1/generateContent` are therefore opened with `spec.match.paths` and")
-    L.append("  resolve through the `\"*\"` wildcard to `RouteType::Passthrough`, which")
-    L.append("  forwards the body untranslated and **extracts no token usage**. Every")
-    L.append("  request on those two paths is unmetered -- a direct miss on FR-7.1.")
+    L.append("- **Route types are configured per model, not per route.**")
+    L.append("  `ModelPolicies.routes` is the only surface -- an `AgentgatewayPolicy`")
+    L.append("  still cannot target a model. `/v1/completions` and")
+    L.append("  `/v1/generateContent` are opened with `spec.match.paths` and mapped to")
+    L.append("  `Detect`, which parses and meters them. Because the field replaces the")
+    L.append("  built-in table wholesale, every such model restates all 13 defaults; if")
+    L.append("  `default_route_types()` gains an entry upstream, `DEFAULT_ROUTE_TABLE`")
+    L.append("  in this generator must gain it too or those models lose it silently.")
+    L.append("  The cost of `Detect` is that prompt guard cannot run on those paths --")
+    L.append("  see \"Models that cannot carry guardrails\" above.")
+    L.append("- **Upstream TLS verification is not disabled, and 5 upstreams need")
+    L.append("  it.** Kong's ai-proxy does not verify the upstream certificate; this")
+    L.append("  generator emits `tls: {}`, which originates TLS *and verifies*. The")
+    L.append("  self-hosted `*.nip.io` MaaS endpoints present a private-CA chain, so")
+    L.append("  every request to them fails at connect with `invalid peer certificate:")
+    L.append("  UnknownIssuer` or `CaUsedAsEndEntity` (measured in-cluster")
+    L.append("  2026-08-26). Agentgateway is *stricter* than Kong here, so this is a")
+    L.append("  posture decision rather than a defect, and it is deliberately not made")
+    L.append("  automatically: the remedy is either")
+    L.append("  `policies.tls.caCertificateRefs` naming a ConfigMap with the private")
+    L.append("  CA (correct), or `policies.tls.insecureSkipVerify: All` (matches what")
+    L.append("  Kong effectively does today). Affected hosts, with backend-reference")
+    L.append("  counts:")
+    for h, n in sorted(rep.private_ca_hosts.items()):
+        L.append("  - `%s` -- %d" % (h, n))
     L.append("- **No weighting on the legacy surface.** `AgentgatewayBackend` has no")
     L.append("  weight field, so a Kong canary split cannot be reproduced there. A")
     L.append("  weighted split belongs on the canonical surface as a virtual")
@@ -1037,6 +1117,13 @@ def main():
 
     kept = classify(rows, unreachable, ai_proxy, rep)
     backends, models = group(kept, rep)
+
+    for r in kept:
+        if not r.upstream_url:
+            continue
+        parts = split_base_url(r.upstream_url)
+        if parts and parts[1] in PRIVATE_CA_HOSTS:
+            rep.private_ca_hosts[parts[1]] = rep.private_ca_hosts.get(parts[1], 0) + 1
 
     creds = Credentials()
     os.makedirs(args.out_dir, exist_ok=True)
