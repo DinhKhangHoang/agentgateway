@@ -51,3 +51,4 @@ cfg.yaml
 # Secret manifests; regenerate with pilot/gen/generate.py instead of committing.
 pilot/gen/out/
 pilot/gen/__pycache__/
+pilot/verify/phase7/__pycache__/

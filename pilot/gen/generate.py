@@ -42,10 +42,6 @@ ROUTE_TYPE_PATH = {
     "llm/v1/generateContent": "/v1/generateContent",
 }
 
-# Paths outside the built-in model_router_matches() list, which therefore need
-# an explicit spec.match.paths entry to route at all on the canonical surface.
-NON_BUILTIN_PATHS = {"/v1/completions", "/v1/generateContent"}
-
 # `spec.policies.routes` REPLACES the built-in table wholesale rather than
 # extending it (verified in-cluster 2026-08-26, pilot/verify/phase7/README.md),
 # so any model that needs one extra entry must restate every default it still
@@ -68,25 +64,39 @@ DEFAULT_ROUTE_TABLE = [
 ]
 
 # Route type for each path the built-in table does not name. `Detect` forwards
-# the body untranslated -- inbound and outbound formats are identical on both
-# of these, every row being an OpenAI-compatible upstream -- while still
-# reading model/stream/max_tokens for routing and metering. The cost is that
-# `InputFormat::supports_prompt_guard()` is false for Detect.
+# the body untranslated regardless of dialect -- `detect::Request` looks its
+# fields up across several JSON paths rather than parsing one schema -- while
+# still reading model/stream/max_tokens for routing and metering. The cost is
+# that `InputFormat::supports_prompt_guard()` is false for Detect, so a
+# guardrail does not run on a Detect-typed path.
+NON_BUILTIN_ROUTE_TYPE = {
+    "/v1/completions": "Detect",
+    "/v1/generateContent": "Detect",
+}
+
+# Derived, so the two can never disagree. A path present in both this and
+# DEFAULT_ROUTE_TABLE would emit a duplicate YAML mapping key, so refuse.
+NON_BUILTIN_PATHS = set(NON_BUILTIN_ROUTE_TYPE)
+_dupe = NON_BUILTIN_PATHS & {p for p, _ in DEFAULT_ROUTE_TABLE}
+if _dupe:
+    raise SystemExit("path in both DEFAULT_ROUTE_TABLE and "
+                     "NON_BUILTIN_ROUTE_TYPE: %s" % sorted(_dupe))
+
 # Upstream hosts whose certificate chain the system trust store cannot verify.
 # MEASURED in-cluster 2026-08-26 against the deployed parity surface, not
 # inferred from the hostname: each of these returned `invalid peer certificate`
 # at connect while every other host in the corpus completed its handshake.
+#
+# This is a point-in-time floor, not a ceiling: a private-CA upstream added to
+# Kong after that date is not in this set and will not be reported. Hosts that
+# have since LEFT the corpus are reported as a stale measurement, so the set
+# cannot quietly rot.
 PRIVATE_CA_HOSTS = {
     "122.201.15.117.nip.io",
     "122.201.15.40.nip.io",
     "49.213.86.184.nip.io",
     "58.84.3.121.nip.io",
     "58.84.3.29.nip.io",
-}
-
-NON_BUILTIN_ROUTE_TYPE = {
-    "/v1/completions": "Detect",
-    "/v1/generateContent": "Detect",
 }
 
 # Endpoint suffixes stripped from Kong's fully-qualified `upstream_url` to
@@ -303,11 +313,31 @@ class Row(object):
 
     @property
     def unsupported_features(self):
-        found = []
-        for key, desc in UNSUPPORTED_FEATURES.items():
-            if self.model_cfg.get(key) or self.options.get(key) or self.cfg.get(key):
-                found.append((key, desc))
-        return found
+        """Scan the WHOLE plugin config, not just its top level.
+
+        Kong puts these features in at least three places -- `config.model.X`,
+        `config.model.options.X` and `config.fallbacks[].model.X`. A top-level
+        scan misses the third: measured 2026-08-27, `11377-maas-no-delete-
+        glm-5.2-model` carries `web_search` only under `fallbacks[0].model`
+        and was reported as carrying none. EVALUATION.md warns about exactly
+        this miss; it had happened again. A full walk cannot miss a fourth
+        nesting we have not seen yet.
+        """
+        seen = set()
+
+        def walk(node):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k in UNSUPPORTED_FEATURES and v:
+                        seen.add(k)
+                    else:
+                        walk(v)
+            elif isinstance(node, list):
+                for v in node:
+                    walk(v)
+
+        walk(self.cfg)
+        return [(k, UNSUPPORTED_FEATURES[k]) for k in sorted(seen)]
 
     @property
     def lossy_options(self):
@@ -361,11 +391,12 @@ class Report(object):
         self.feature_scan = collections.OrderedDict(
             (k, 0) for k in sorted(UNSUPPORTED_FEATURES))
         self.counts = collections.OrderedDict()
-        self.no_guardrail_models = []    # Detect-mapped models (see gen/README.md)
+        self.detect_paths = set()        # paths mapped to Detect (guard skipped)
         # host -> backend-reference count, for upstreams whose certificate the
         # system trust store cannot chain. Measured, not guessed: see the
         # Structural losses section.
         self.private_ca_hosts = {}
+        self.stale_private_ca = []       # measured once, no longer in the corpus
 
     def loss(self, heading, item):
         self.losses.setdefault(heading, []).append(item)
@@ -587,12 +618,7 @@ def group(rows, rep):
                 "base": base, "upstream_name": upstream_name,
                 "auth": auth, "paths": extra_paths, "rows": brows,
             })
-            if extra_paths:
-                # Those paths map to Detect, for which supports_prompt_guard()
-                # is false. A guardrail named against this model in Tier-2
-                # KeyConfig would be accepted and silently never run.
-                rep.no_guardrail_models.append(
-                    "%s -- via %s" % (mm, ", ".join(extra_paths)))
+
     return backends, models
 
 
@@ -681,6 +707,8 @@ def emit_models(models, creds, ns, gw_name, gw_ns):
            "# table is restated alongside the new entry. An AgentgatewayPolicy",
            "# still cannot target a model; ModelPolicies.routes is the only",
            "# surface. See pilot/gen/README.md."]
+    # Listener-wide union of every non-built-in path any model opens.
+    opened = sorted({p for m in models for p in m["paths"]})
     for m in models:
         out.append("---")
         out.append("apiVersion: agentgateway.dev/v1alpha1")
@@ -699,10 +727,9 @@ def emit_models(models, creds, ns, gw_name, gw_ns):
         out.append("    model: " + yq(m["match"]))
         if m["paths"]:
             out.append("    # Outside the built-in model_router_matches() list, so the")
-            out.append("    # path has to be opened explicitly. Its route type comes")
-            out.append("    # from policies.routes below -- without that entry it would")
-            out.append("    # fall through the \"*\" wildcard to Passthrough and report")
-            out.append("    # no token usage.")
+            out.append("    # path has to be opened explicitly. Opening it here makes")
+            out.append("    # it routable for EVERY model on this listener, which is")
+            out.append("    # why policies.routes below is emitted on all of them.")
             out.append("    paths:")
             for p in m["paths"]:
                 out.append("      - " + yq(p))
@@ -723,13 +750,22 @@ def emit_models(models, creds, ns, gw_name, gw_ns):
             policy.append("    transformations:")
             policy.append("      - field: model")
             policy.append("        expression: " + yq("'%s'" % m["upstream_name"]))
-        if m["paths"]:
+        if opened:
+            # Emitted on EVERY model, not only the ones that opened a path.
+            # `spec.match.paths` is unioned across every model on the listener
+            # (Store::rebuild_model_router, crates/agentgateway/src/store/
+            # binds.rs), so a path one model opens is routable for all of them
+            # -- but `policies.routes` is per model. A model without its own
+            # entry resolves the shared path through `"*"` to Passthrough and
+            # is silently unmetered. Detect and Passthrough both forward the
+            # body untranslated, so giving every model the entry adds metering
+            # and invents nothing.
             policy.append("    # REPLACES the built-in route table rather than extending")
             policy.append("    # it, so every default this model still wants is restated.")
             policy.append("    routes:")
             for path, rt in DEFAULT_ROUTE_TABLE:
                 policy.append("      %s: %s" % (yq(path), rt))
-            for path in m["paths"]:
+            for path in opened:
                 policy.append("      %s: %s" % (yq(path), NON_BUILTIN_ROUTE_TYPE[path]))
         if policy:
             out.append("  policies:")
@@ -988,18 +1024,22 @@ def emit_report(rep, ns):
         L.append("- (none)")
     L.append("")
 
-    L.append("## Models that cannot carry guardrails")
+    L.append("## Paths on which guardrails silently do not run")
     L.append("")
-    L.append("Models whose route type resolves to `Detect`, for which")
-    L.append("`InputFormat::supports_prompt_guard()` is false and `get_messages()` is")
-    L.append("`unimplemented!()` -- a guardrail on such a model is accepted and")
-    L.append("silently never runs. See `pilot/gen/README.md`.")
+    L.append("`supports_prompt_guard()` is consulted per request against the")
+    L.append("RESOLVED ROUTE TYPE, not per model, and it is false for `Detect`")
+    L.append("(`get_messages()` is `unimplemented!()`). So this is a property of the")
+    L.append("PATH, not of the model: a model listed here still runs its guard")
+    L.append("normally on `/v1/chat/completions` and every other non-Detect path.")
+    L.append("On the paths below the guard is skipped with no warning and no error.")
     L.append("")
-    if rep.no_guardrail_models:
-        for m in sorted(rep.no_guardrail_models):
-            L.append("- `%s`" % m)
+    if rep.detect_paths:
+        for path in sorted(rep.detect_paths):
+            L.append("- `%s` -- mapped to `Detect`; affects all %d emitted models,"
+                     % (path, rep.counts.get("AgentgatewayModel CRs emitted", 0)))
+            L.append("  because `spec.match.paths` is unioned listener-wide.")
     else:
-        L.append("- (none) --- no model on this surface opens a `Detect` path.")
+        L.append("- (none) --- no `Detect`-typed path is opened on this surface.")
     L.append("")
 
     L.append("## Fidelity losses")
@@ -1018,26 +1058,43 @@ def emit_report(rep, ns):
     L.append("  still cannot target a model. `/v1/completions` and")
     L.append("  `/v1/generateContent` are opened with `spec.match.paths` and mapped to")
     L.append("  `Detect`, which parses and meters them. Because the field replaces the")
-    L.append("  built-in table wholesale, every such model restates all 13 defaults; if")
+    L.append("  built-in table wholesale, every model restates all %d defaults; if"
+             % len(DEFAULT_ROUTE_TABLE))
     L.append("  `default_route_types()` gains an entry upstream, `DEFAULT_ROUTE_TABLE`")
-    L.append("  in this generator must gain it too or those models lose it silently.")
+    L.append("  in this generator (all %d entries) must gain it too, or every model"
+             % len(DEFAULT_ROUTE_TABLE))
+    L.append("  loses it silently.")
     L.append("  The cost of `Detect` is that prompt guard cannot run on those paths --")
     L.append("  see \"Models that cannot carry guardrails\" above.")
-    L.append("- **Upstream TLS verification is not disabled, and 5 upstreams need")
-    L.append("  it.** Kong's ai-proxy does not verify the upstream certificate; this")
-    L.append("  generator emits `tls: {}`, which originates TLS *and verifies*. The")
-    L.append("  self-hosted `*.nip.io` MaaS endpoints present a private-CA chain, so")
-    L.append("  every request to them fails at connect with `invalid peer certificate:")
-    L.append("  UnknownIssuer` or `CaUsedAsEndEntity` (measured in-cluster")
-    L.append("  2026-08-26). Agentgateway is *stricter* than Kong here, so this is a")
-    L.append("  posture decision rather than a defect, and it is deliberately not made")
-    L.append("  automatically: the remedy is either")
-    L.append("  `policies.tls.caCertificateRefs` naming a ConfigMap with the private")
-    L.append("  CA (correct), or `policies.tls.insecureSkipVerify: All` (matches what")
-    L.append("  Kong effectively does today). Affected hosts, with backend-reference")
-    L.append("  counts:")
-    for h, n in sorted(rep.private_ca_hosts.items()):
-        L.append("  - `%s` -- %d" % (h, n))
+    if rep.private_ca_hosts:
+        L.append("- **Upstream TLS verification is not disabled, and %d upstream host%s"
+                 % (len(rep.private_ca_hosts),
+                    "" if len(rep.private_ca_hosts) == 1 else "s"))
+        L.append("  need%s it.** Kong's ai-proxy does not verify the upstream"
+                 % ("s" if len(rep.private_ca_hosts) == 1 else ""))
+        L.append("  certificate; this generator emits `tls: {}`, which originates TLS")
+        L.append("  *and verifies*. The self-hosted `*.nip.io` MaaS endpoints present a")
+        L.append("  private-CA chain, so every request to them fails at connect with")
+        L.append("  `invalid peer certificate: UnknownIssuer` or `CaUsedAsEndEntity`")
+        L.append("  (measured in-cluster 2026-08-26). Agentgateway is *stricter* than")
+        L.append("  Kong here, so this is a posture decision rather than a defect, and")
+        L.append("  it is deliberately not made automatically: the remedy is either")
+        L.append("  `policies.tls.caCertificateRefs` naming a ConfigMap with the")
+        L.append("  private CA (correct), or `policies.tls.insecureSkipVerify: All`")
+        L.append("  (matches what Kong effectively does today). Affected hosts, with")
+        L.append("  the number of kept (plugin, route) rows dialling each -- fallback")
+        L.append("  upstreams included:")
+        for h, n in sorted(rep.private_ca_hosts.items()):
+            L.append("  - `%s` -- %d" % (h, n))
+    if rep.stale_private_ca:
+        L.append("- **Stale TLS measurement.** %d host%s in `PRIVATE_CA_HOSTS` no longer"
+                 % (len(rep.stale_private_ca),
+                    "" if len(rep.stale_private_ca) == 1 else "s"))
+        L.append("  appear%s in the corpus, so the measurement behind that set is out of"
+                 % ("s" if len(rep.stale_private_ca) == 1 else ""))
+        L.append("  date and a private-CA upstream added since is not covered:")
+        for h in rep.stale_private_ca:
+            L.append("  - `%s`" % h)
     L.append("- **No weighting on the legacy surface.** `AgentgatewayBackend` has no")
     L.append("  weight field, so a Kong canary split cannot be reproduced there. A")
     L.append("  weighted split belongs on the canonical surface as a virtual")
@@ -1118,12 +1175,50 @@ def main():
     kept = classify(rows, unreachable, ai_proxy, rep)
     backends, models = group(kept, rep)
 
+    rep.detect_paths = {p for m in models for p in m["paths"]}
+
+    # Kong `fallbacks` become priority groups on the LEGACY AgentgatewayBackend
+    # surface (emit_backends), but the canonical AgentgatewayModel surface gets
+    # nothing: emit_models never writes `virtualModel`, because turning an
+    # ordered Kong fallback chain into weighted targets means inventing weights
+    # Kong never stated. Record it rather than guess -- FR-4.4 is a MUST, and
+    # without this entry the omission is invisible.
     for r in kept:
-        if not r.upstream_url:
-            continue
-        parts = split_base_url(r.upstream_url)
-        if parts and parts[1] in PRIVATE_CA_HOSTS:
-            rep.private_ca_hosts[parts[1]] = rep.private_ca_hosts.get(parts[1], 0) + 1
+        fbs = r.cfg.get("fallbacks")
+        if isinstance(fbs, list) and fbs:
+            rep.loss("Kong `fallbacks` are not reproduced on the canonical surface",
+                     "`%s` / `%s` -- %d fallback target(s) survive on the legacy "
+                     "`AgentgatewayBackend` as priority groups, but the "
+                     "`AgentgatewayModel` that serves the same traffic by body "
+                     "`model` has no `virtualModel` and therefore no failover. "
+                     "`virtualModel.weighted.targets[]` needs weights; a Kong "
+                     "fallback chain states order, not weight, so the generator "
+                     "refuses to invent them."
+                     % (r.route, r.plugin, len(fbs)))
+
+    # Every upstream the emitted config can dial, INCLUDING fallback providers
+    # -- emit_provider_block gives those `tls: {}` too, so a private-CA host
+    # reachable only as a fallback would otherwise go unreported.
+    def _urls(row):
+        yield row.upstream_url
+        fbs = row.cfg.get("fallbacks")
+        if isinstance(fbs, list):
+            for f in fbs:
+                if not isinstance(f, dict):
+                    continue
+                mdl = f.get("model")
+                opts = mdl.get("options") if isinstance(mdl, dict) else None
+                if isinstance(opts, dict):
+                    yield opts.get("upstream_url")
+
+    for r in kept:
+        for url in _urls(r):
+            if not url:
+                continue
+            parts = split_base_url(url)
+            if parts and parts[1] in PRIVATE_CA_HOSTS:
+                rep.private_ca_hosts[parts[1]] = rep.private_ca_hosts.get(parts[1], 0) + 1
+    rep.stale_private_ca = sorted(PRIVATE_CA_HOSTS - set(rep.private_ca_hosts))
 
     creds = Credentials()
     os.makedirs(args.out_dir, exist_ok=True)
