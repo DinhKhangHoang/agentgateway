@@ -708,3 +708,71 @@ paperwork loss and becomes the next thing worth closing.
 Not verified: that Kong currently serves this model 200 via its fallback. That
 needs a tenant key for `user-11377-maas-v2`, which this run did not have. Stated
 as the hypothesis the evidence supports, not as measured fact.
+
+### GLM-5.2 → ModelArts failover — 2026-08-27, and why a priority group is not failover
+
+Follow-on from the handshake check above, which left the failover gap as "the
+next thing worth closing". Testing it turned up a generator bug first, then a
+platform fact.
+
+**The bug.** `emit_backends` read `b.rows[0].cfg["fallbacks"]` only. A backend
+groups every route_type sharing an upstream, and Kong states `fallbacks` per
+*plugin*, so on `legacy-z-ai-glm-5-2` the chain lived on the chat and responses
+rows while `rows[0]` — the messages plugin, first by route name — declared none:
+
+```
+[0] …glm-5.2-messages-model  | llm/v1/messages  | fallbacks=0
+[1] …glm-5.2-model           | llm/v1/chat      | fallbacks=1 -> modelarts
+[2] …glm-5.2-responses-model | llm/v1/responses | fallbacks=1 -> modelarts
+```
+
+The ModelArts group was dropped silently while `report.md` claimed it survived.
+Fixed in `pick_fallback_chain()`, which scans every row and judges agreement on
+the four fields an emitted group can carry (provider, model name,
+`upstream_url`, `auth`). Comparing whole dicts was too strict: the two live
+chains name the same target but the responses one also sets
+`responses_upstream_format`, which has no agentgateway equivalent and is already
+reported under unsupported features. Three legacy backends gained their group —
+`z-ai/glm-5.2` and both `deepseek-v4` variants. Three tests, each verified to
+fail with the defect reintroduced.
+
+**The platform fact.** With the group deployed, the fallback still never fired.
+Three requests to `POST /z-ai/glm-5.2/v1/chat/completions`, same key, same body,
+only the config differing:
+
+| # | config | result |
+|---|---|---|
+| A | provider `health` + route `traffic.retry` | **400 from ModelArts** — `ModelArts.81002 Failed to get the authorization header` |
+| B | `traffic.retry` alone | 503, nginx page from the primary |
+| C | as generated — priority group only | 503, nginx page from the primary |
+
+Access log for A, verbatim — note the endpoint and the fallback's own model
+override, neither of which the primary group could produce:
+
+```
+route=user-11377-maas-v2-agw/legacy-ai-03
+  endpoint=api-ap-southeast-1.modelarts-maas.com:443
+  http.path=/z-ai/glm-5.2/v1/chat/completions http.status=400
+  gen_ai.request.model=glm-5.2 retry.attempt=1 duration=301ms
+```
+
+So **a lower-priority `spec.ai.groups` entry is not failover.** Priority orders
+the pool; it does not react to a bad response. Reaching the second group takes
+both knobs, and B is what proves each is load-bearing: retry alone re-dials the
+same group, because `http/health.rs` applies no eviction when no health policy
+is configured, and without eviction there is nothing to make the retry choose
+differently. Both fields exist in the CRDs — `Health` on a provider's
+`policies`, `Retry` under `AgentgatewayPolicy.spec.traffic` — and the generator
+emits neither. `out/report.md` now says this under "Kong `fallbacks` do not fail
+over on either surface"; the older wording, which claimed the fallbacks
+"survive … as priority groups", was measurably misleading.
+
+This is the same shape as the Kong lesson: in-request failover on an HTTP
+*status* is never free from a load balancer, on either gateway.
+
+The ceiling on A: the pilot's ModelArts credential is a `REPLACE_ME` shell, so
+`ModelArts.81002` is the expected terminus. It proves the request reached
+ModelArts, not that a completion came back.
+
+Test knobs were removed and `ALLOWED_MODELS` restored; the accepted key hash was
+never touched.

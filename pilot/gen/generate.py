@@ -1437,12 +1437,19 @@ def main():
     for r in kept:
         fbs = r.cfg.get("fallbacks")
         if isinstance(fbs, list) and fbs:
-            rep.loss("Kong `fallbacks` are not reproduced on the canonical surface",
-                     "`%s` / `%s` -- %d fallback target(s) survive on the legacy "
-                     "`AgentgatewayBackend` as priority groups, but the "
-                     "`AgentgatewayModel` that serves the same traffic by body "
-                     "`model` has no `virtualModel` and therefore no failover. "
-                     "`virtualModel.weighted.targets[]` needs weights; a Kong "
+            rep.loss("Kong `fallbacks` do not fail over on either surface",
+                     "`%s` / `%s` -- %d fallback target(s) become lower-priority "
+                     "`spec.ai.groups` on the legacy `AgentgatewayBackend`, but a "
+                     "priority group is NOT failover: measured on the dev pilot "
+                     "2026-08-27, a 503 from the primary is returned to the client "
+                     "and the second group is never dialled. Reaching it takes two "
+                     "things this generator does not emit -- a provider `health` "
+                     "policy (`unhealthyCondition` + `eviction`) to mark the failed "
+                     "group unhealthy, and a route `traffic.retry` to supply the "
+                     "second attempt. With both added by hand the same request did "
+                     "reach the fallback. On the canonical surface there is not "
+                     "even a group: `emit_models` writes no `virtualModel`, because "
+                     "`virtualModel.weighted.targets[]` needs weights and a Kong "
                      "fallback chain states order, not weight, so the generator "
                      "refuses to invent them."
                      % (r.route, r.plugin, len(fbs)))
