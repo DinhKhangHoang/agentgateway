@@ -341,3 +341,90 @@ def test_backend_providers_honour_the_flag():
     out = g.emit_backends(backends, creds, "ns", g.Report(), "All")
     assert "insecureSkipVerify: All" in out
     assert "tls: {}" not in out
+
+
+# --------------------------------------------------------------------------
+# Kong `fallbacks` on the legacy surface: which row declares them
+# --------------------------------------------------------------------------
+
+MODELARTS = "https://api-ap-southeast-1.modelarts-maas.com/v2/chat/completions"
+SELFHOST = "https://49.213.86.184.nip.io/v1/maas/zai-org/glm-5.2/v1/chat/completions"
+
+
+def _glm_cfg(route_type, upstream, fallback_url=None):
+    cfg = {"route_type": route_type,
+           "model": {"provider": "openai", "name": "zai-org/GLM-5.2-FP8",
+                     "options": {"upstream_url": upstream}}}
+    if fallback_url:
+        cfg["fallbacks"] = [{"model": {"provider": "openai", "name": "glm-5.2",
+                                       "options": {"upstream_url": fallback_url}}}]
+    return cfg
+
+
+def _glm_rows(chat_fallback=MODELARTS, responses_fallback=MODELARTS):
+    # The live shape: three plugins share one upstream, and the messages plugin
+    # -- which sorts first -- is the one WITHOUT a fallback.
+    return [
+        # Route and plugin names copied from the live surface, because the
+        # ordering is the whole point: rows sort by route name, and
+        # `...-messages-model-route` sorts before `...-model-route`, so the row
+        # WITHOUT a fallback lands at rows[0].
+        row(P + r"z-ai/glm-5\.2/v1/messages$",
+            _glm_cfg("llm/v1/messages", SELFHOST),
+            route="glm-5.2-messages-model-route", plugin="glm-5.2-messages-model"),
+        row(P + r"z-ai/glm-5\.2/v1/chat/completions$",
+            _glm_cfg("llm/v1/chat", SELFHOST, chat_fallback),
+            route="glm-5.2-model-route", plugin="glm-5.2-model"),
+        row(P + r"z-ai/glm-5\.2/v1/responses$",
+            _glm_cfg("llm/v1/responses", SELFHOST, responses_fallback),
+            route="glm-5.2-responses-model-route", plugin="glm-5.2-responses-model"),
+    ]
+
+
+def test_a_fallback_declared_on_a_later_row_still_becomes_a_priority_group():
+    # The defect this pins: emit_backends read rows[0] only, and rows[0] here
+    # is the messages plugin with no fallbacks -- so ModelArts vanished while
+    # report.md kept claiming it survived on the legacy backend.
+    rep, backends, _ = build(_glm_rows())
+    # Precondition: without this the test would pass even with the defect.
+    assert len(backends) == 1 and len(backends[0].rows) == 3
+    assert not backends[0].rows[0].cfg.get("fallbacks"), \
+        "fixture no longer reproduces the live row order; the test proves nothing"
+    out = g.emit_backends(backends, g.Credentials(), "ns", rep)
+    assert "api-ap-southeast-1.modelarts-maas.com" in out
+    assert "Kong fallback #1 -> lower-priority group." in out
+
+
+def test_rows_disagreeing_on_the_chain_emit_no_fallback_and_say_so():
+    # `spec.ai.groups` is one ordered list per backend, so two different chains
+    # cannot both be honoured. Refuse rather than silently pick one.
+    rep, backends, _ = build(_glm_rows(responses_fallback="https://other.example/v1/chat/completions"))
+    out = g.emit_backends(backends, g.Credentials(), "ns", rep)
+    assert "modelarts-maas.com" not in out
+    assert "other.example" not in out
+    heading = "Rows sharing a backend declare DIFFERENT Kong fallback chains"
+    assert heading in rep.losses
+    assert "glm-5.2-model" in rep.losses[heading][0]
+    assert "glm-5.2-responses-model" in rep.losses[heading][0]
+
+
+
+def test_chains_differing_only_by_an_unconsumable_knob_still_emit():
+    # The live GLM-5.2 shape: the chat and responses plugins name the SAME
+    # ModelArts target, but the responses one also sets
+    # `responses_upstream_format`. Comparing whole dicts called those two
+    # chains different and emitted neither -- a silent failover loss dressed up
+    # as a conflict. The knob has no agentgateway equivalent and is already
+    # reported under unsupported features, so it must not veto the chain.
+    rows = _glm_rows()
+    fb = rows[2].cfg["fallbacks"][0]
+    fb["model"]["options"]["responses_upstream_format"] = "chat"
+    rep, backends, _ = build(rows)
+    chats = [r for r in backends[0].rows if r.cfg["route_type"] == "llm/v1/chat"]
+    assert chats and "responses_upstream_format" not in \
+        chats[0].cfg["fallbacks"][0]["model"]["options"], \
+        "fixture no longer differs between the two chains; the test proves nothing"
+    out = g.emit_backends(backends, g.Credentials(), "ns", rep)
+    assert "api-ap-southeast-1.modelarts-maas.com" in out
+    assert "Rows sharing a backend declare DIFFERENT Kong fallback chains" \
+        not in rep.losses
