@@ -776,3 +776,99 @@ ModelArts, not that a completion came back.
 
 Test knobs were removed and `ALLOWED_MODELS` restored; the accepted key hash was
 never touched.
+
+### Health + retry, tested against a working fallback — 2026-08-27
+
+The earlier failover runs all ended at `ModelArts.81002` (the fallback held a
+`REPLACE_ME` credential), so they proved the request *reached* the fallback and
+nothing more. `maas-cred-01` and `maas-cred-13` now hold the real credentials
+from the Kong plugins (installed verbatim, `Bearer ` prefix intact, sha256
+matched against the Kong source), so the test can be run to a real completion.
+
+Setup: a throwaway `AgentgatewayModel` at `virtualModel.failover` priority 0
+pointing at `https://49.213.86.184/...` — the ingress raw IP, which has no
+server for that Host and answers a plain nginx `404` HTML page. Never dialled
+before, so its health starts clean and the failure is discovered *in-request*
+rather than by a stale eviction. ModelArts sits at priority 1. Health condition
+`response.code == 404`, retry codes include 404.
+
+| run | knobs | client sees |
+|---|---|---|
+| A1, A2 | health + retry | **`200`, real completion, `usage.total_tokens` 73/77** — log: `endpoint=…modelarts…` `retry.attempt=1` |
+| B1, B3 | health only | `404` nginx HTML, 24ms, no `retry.attempt` field |
+| B2 | health only | `200` — arrived inside B1's 1s eviction window, so priority 0 was skipped |
+| C1–C3 | retry only | `404` 3/3, `retry.attempt=2` on `endpoint=49.213.86.184` — both attempts re-dialled the *same* dead target |
+
+So the two knobs are not redundant and neither is sufficient:
+
+* **retry alone** supplies a second attempt but no reason to choose a different
+  target, so it re-dials the failed one. `attempt=2` with the dead endpoint is
+  the signature.
+* **health alone** evicts the target *after* the fact. The request that
+  discovers the failure is returned to the client as an error; only requests
+  arriving inside the eviction window are saved (B2). With `eviction.duration:
+  1s` that is a small window and 2 of 3 requests failed.
+* **both** gives what Kong's `fallbacks` gives: the failing request itself lands
+  on the fallback and returns a real completion.
+
+### `/v1/messages` does not fail over on a non-JSON error body
+
+Under the same both-knobs config, chat and responses failed over to a `200`;
+`/v1/messages` returned `503 processing failed: failed to parse response:
+expected value at line 1 column 1` in 24ms with no `retry.attempt`. An earlier
+note in this session guessed that health state was not shared across route
+types. That guess was wrong. The cause is in
+`crates/agentgateway/src/llm/mod.rs:639`, `ChatTranslation::error`:
+
+```rust
+ChatFormat::OpenAICompletions => match format {
+    ChatErrorFormat::OpenAI => match self.input {
+        InputFormat::Completions => Ok(bytes.clone()),   // passthrough
+        InputFormat::Messages    => conversion::completions::from_messages::translate_error(bytes, status),
+        InputFormat::Responses   => Ok(bytes.clone()),   // passthrough
+```
+
+For a Completions or Responses client the upstream error body is passed through
+untouched, so the `404` survives to health classification and retry. For a
+Messages client it is JSON-parsed to be reshaped into an Anthropic error; an
+nginx HTML page fails that parse, `process_response` returns
+`AIError::ResponseParsing`, and the whole exchange becomes a gateway-internal
+`503`. The upstream status is destroyed before either knob can see it, so
+neither `unhealthyCondition` nor `traffic.retry` engages — the Anthropic surface
+has no failover against any upstream that can emit a non-JSON error body
+(proxy 502/503/504 pages, WAF blocks, LB errors). Kong's ai-proxy has no
+equivalent gap: its `failover_on` branches on the status code before touching
+the body.
+
+### Three client shapes against a chat-only upstream
+
+Both GLM targets are `provider: Custom` with `custom.formats: [{type:
+Completions}]`. That is agentgateway's equivalent of Kong's
+`responses_upstream_format: chat`, and unlike Kong's knob it covers Messages as
+well: `crates/llm/src/openai.rs::path_suffix` sends `RouteType::Responses` to
+`/responses`, which the ModelArts and self-hosted endpoints do not serve
+(`APIG.0101 The API does not exist`). Declaring only `Completions` makes
+`CHAT_TRANSLATIONS` negotiate every client shape down to `/chat/completions`.
+Verified: chat `200`, messages `200` (`stop_reason: end_turn`), responses `200`.
+Cost: `gen_ai.provider.name` is now `custom` instead of `openai` in telemetry.
+`Provider::provider_override` exists in `crates/llm/src/custom.rs` but is not
+exposed in `CustomProviderSettings`
+(`controller/api/v1alpha1/agentgateway/agentgateway_backend_types.go:323`), so
+there is no way to restore the label from the CRD today.
+
+### Generator follow-ups this opens
+
+* The loss entry's closing claim — that the canonical surface cannot carry a
+  Kong fallback chain because `virtualModel.weighted.targets[]` would need
+  invented weights — is wrong and still uncorrected in `generate.py`.
+  `virtualModel.failover.targets[].priority` takes order and no weights, which
+  is exactly what a Kong chain states. The generator should emit
+  `virtualModel.failover` plus a provider `health` policy and a route
+  `traffic.retry`; emitting the chain without both knobs produces config that
+  looks like failover and is not.
+* Live drift a regenerate would wipe: the four canonical GLM resources, the
+  `glm-failover-test-retry` policy, and `ALLOWED_MODELS=z-ai/glm-5.2` on
+  `registry-stub` (original six-model value in the session scratchpad).
+* `glm-failover-test-retry` targets the whole Gateway, so it replays request
+  bodies on 5xx for every route. Scope it to the GLM route before the model
+  gate is reopened.
