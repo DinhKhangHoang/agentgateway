@@ -368,7 +368,9 @@ gen_ai.request.model=deepseek-v4-pro gen_ai.request.max_tokens=8 duration=185ms
 Two independent signals that `Detect` actually took effect on that path:
 
 1. The `gen_ai.*` fields appear. Under `Passthrough` (Fix 1's line, same path,
-   same body) they are absent — the request is now parsed and metered.
+   same body) they are absent — the request is now parsed as an LLM request
+   rather than relayed. Parsing is what metering needs; it is not itself a
+   measurement of tokens (see the payoff section below).
 2. `gen_ai.request.model=deepseek-v4-pro`, and the upstream error changed from
    *"you passed deepseek-v4-pro-direct"* to DeepSeek's own *"completions api is
    only available when using beta api"*. The CEL transformation ran, so the body
@@ -442,9 +444,9 @@ indistinguishable from an ext-auth denial.
 |---|---|---|
 | `z-ai/glm-5.2` → `/v1/chat/completions` | 503 `invalid peer certificate: UnknownIssuer` | routed; TLS gap |
 | `qwen/qwen3-reranker-8b` → `/v1/rerank` | 503 `invalid peer certificate: CaUsedAsEndEntity` | routed; TLS gap |
-| `Qwen2-0.5B` → `/v1/completions` | 503, `endpoint=58.84.3.29.nip.io:80` | **routed and metered** |
+| `Qwen2-0.5B` → `/v1/completions` | 503, `endpoint=58.84.3.29.nip.io:80` | **routed and parsed as LLM** |
 | `GreenNode/GreenMind-Medium-14B-R1` → `/v1/completions` | 503, upstream nginx error page | routed to upstream |
-| `gemini/gemini-2.5-pro` → `/v1/generateContent` | 404 from `generativelanguage.googleapis.com:443` | **routed and metered**; Google's 404 |
+| `gemini/gemini-2.5-pro` → `/v1/generateContent` | 404 from `generativelanguage.googleapis.com:443` | **routed and parsed as LLM**; Google's 404 |
 | legacy `/z-ai/glm-5.2/v1/chat/completions` | 503 `UnknownIssuer` | legacy HTTPRoute + rewrite work |
 | `glm-5.2` (bare) | 404 `Model not found` | **correct** — withheld on purpose (two vendors) |
 | `qwen/qwen3-embedding-8b` | 404 `Model not found` | **correct** — legacy-surface-only model |
@@ -455,7 +457,7 @@ Two of the 404s look like failures and are not. Both models are absent from the
 canonical surface *by design* and both are documented in `out/report.md`; the
 control proves the router, not ext-auth, produced them.
 
-### The payoff: both non-built-in paths are now metered
+### The payoff: both non-built-in paths are now parsed as LLM requests
 
 This is what the two fork fixes bought. Access log, verbatim:
 
@@ -470,15 +472,37 @@ http.path=/v1/generateContent http.status=404 protocol=llm
 ```
 
 Before `policies.routes` existed, both paths resolved through the `"*"` wildcard
-to `Passthrough`, which reports no token usage — `out/report.md` had to record
-every request on them as unmetered, a direct FR-7.1 miss. The `gen_ai.*` fields
-are that gap closing. `retry.attempt=1` on the first line additionally shows the
-retry policy is live on a `Detect` path.
+to `Passthrough`, which never parses a body and so can never report token usage.
+`out/report.md` had to record every request on them as structurally unmeterable,
+a direct FR-7.1 miss. The `gen_ai.request.*` fields are that structural gap
+closing. `retry.attempt=1` on the first line additionally shows the retry policy
+is live on a `Detect` path.
 
-The cost is real and now enumerated: `Detect` cannot run prompt guard, so the 18
-models opened this way are listed under "Models that cannot carry guardrails" in
-`out/report.md`. That section could previously only say `(none)`, because no CRD
-field could reach `Detect` at all.
+**Read the claim narrowly.** Neither line carries `gen_ai.usage.input_tokens` or
+`gen_ai.usage.output_tokens`, and both requests *failed* — `http.status=503` and
+`http.status=404`. That is expected: the pilot's provider Secrets hold
+`REPLACE_ME` shells, so no request in this run could reach a successful upstream
+response, and usage is only known once one returns. What is proven is that the
+paths are **parsed as LLM requests instead of relayed opaquely** — the necessary
+precondition for metering, and the thing the fork fixes were for. Measuring
+actual token counts needs real credentials and is not done here.
+
+**Coverage caveat on the deployed surface.** At the time of this run the
+generator emitted `policies.routes` only on models that opened an extra path
+themselves — 18 of the 158 deployed. Because `spec.match.paths` is unioned
+listener-wide but `policies.routes` is per-model, the other 140 were *reachable*
+on these two paths while still resolving them through the built-in table's
+`("*", Passthrough)`. So the gap is closed for the models under test, not for
+the deployed surface as a whole. Fixed in the generator afterwards (`f94ab0c4`
+— all 162 models now carry the full route table); **the cluster still carries
+the 18-model version until the regenerated `models.yaml` is re-applied.**
+
+The cost is real and now enumerated: prompt guard is skipped on any request
+whose *resolved route type* is `Detect`, and the route table is shared by every
+model on the listener — so the exposure is both non-built-in paths for all 162
+models, not the 18 that opened them. `out/report.md` lists it under "Paths on
+which guardrails silently do not run". That section could previously only say
+`(none)`, because no CRD field could reach `Detect` at all.
 
 ### The one blocker: agentgateway verifies upstream certificates and Kong does not
 
