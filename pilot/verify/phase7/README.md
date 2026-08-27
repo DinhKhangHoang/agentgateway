@@ -648,3 +648,63 @@ regenerates without `--insecure-upstream-tls All` and re-applies silently
 restores verification and re-breaks all 35 models. The generated `report.md`
 states which way the flag went — read its TLS paragraph before applying a tree
 you did not generate yourself.
+
+### The handshake check — 2026-08-27, and what it found instead
+
+`registry-stub`'s `ALLOWED_MODELS` was widened to admit `z-ai/glm-5.2` for the
+run and restored afterwards; the accepted key hash was never touched, so the
+gateway was never open. Key from `secret/pilot-test-apikey`.
+
+```
+POST https://116.118.88.175.nip.io/v1/chat/completions   {"model":"z-ai/glm-5.2",…}
+-> HTTP 503 in 0.31 s, body = an nginx default-backend error page
+```
+
+Access log for that request, verbatim:
+
+```
+endpoint=49.213.86.184.nip.io:443 http.path=/v1/chat/completions http.status=503
+  protocol=llm gen_ai.operation.name=chat gen_ai.provider.name=openai
+  gen_ai.request.model=zai-org/GLM-5.2-FP8 gen_ai.request.max_tokens=4
+  retry.attempt=1 duration=241ms
+```
+
+**The TLS gap is closed.** The evidence is what is *absent*: yesterday the same
+model on the same path logged
+`error="upstream call failed: Connect: invalid peer certificate: UnknownIssuer"`.
+That field is gone, the request spent 241 ms, and the body is an HTTP response
+authored by the upstream — none of which is reachable without a completed
+handshake. Agentgateway does not serve nginx error pages.
+
+**But the primary upstream is not serving the model.** Independent corroboration,
+from outside the cluster and outside the gateway:
+
+```
+$ curl -sk https://49.213.86.184.nip.io/v1/maas/zai-org/glm-5.2/v1/chat/completions -d …
+HTTP 503   # byte-identical nginx page
+$ curl -s  https://49.213.86.184.nip.io/          # no -k
+HTTP 000   # chain does not verify, as measured
+$ openssl s_client … | openssl x509 -noout -subject -issuer
+subject=O = Acme Co, CN = Kubernetes Ingress Controller Fake Certificate
+issuer =O = Acme Co, CN = Kubernetes Ingress Controller Fake Certificate
+```
+
+That is the ingress-controller default: a self-signed placeholder certificate
+and a default-backend 503. It explains both halves at once — why the chain never
+verified, and why the endpoint answers 503 to *anyone*, with or without
+credentials. So this 503 is **not** the `REPLACE_ME` secret and not the gateway;
+the `zai-org/glm-5.2` arm of that host has no ingress rule behind it.
+
+**The consequence is the failover gap, not the TLS one.** Kong's
+`11377-maas-no-delete-glm-5.2-model` carries a ModelArts fallback
+(`api-ap-southeast-1.modelarts-maas.com`) for exactly this model. If the
+self-hosted primary has been answering 503, Kong has been failing over to it and
+clients never saw the outage. The pilot's canonical surface has no `virtualModel`
+and therefore no failover — already recorded in `out/report.md` under "Kong
+`fallbacks` are not reproduced on the canonical surface" — so the same upstream
+state that Kong absorbs is client-visible here. That entry stops being a
+paperwork loss and becomes the next thing worth closing.
+
+Not verified: that Kong currently serves this model 200 via its fallback. That
+needs a tenant key for `user-11377-maas-v2`, which this run did not have. Stated
+as the hypothesis the evidence supports, not as measured fact.
