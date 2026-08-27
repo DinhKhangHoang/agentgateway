@@ -497,12 +497,22 @@ the deployed surface as a whole. Fixed in the generator afterwards (`f94ab0c4`
 — all 162 models now carry the full route table); **the cluster still carries
 the 18-model version until the regenerated `models.yaml` is re-applied.**
 
-The cost is real and now enumerated: prompt guard is skipped on any request
-whose *resolved route type* is `Detect`, and the route table is shared by every
-model on the listener — so the exposure is both non-built-in paths for all 162
-models, not the 18 that opened them. `out/report.md` lists it under "Paths on
-which guardrails silently do not run". That section could previously only say
-`(none)`, because no CRD field could reach `Detect` at all.
+Prompt guard does not run on a request whose *resolved route type* is
+`Detect`, and the route table is shared by the whole listener, so that applies
+to both non-built-in paths for all 162 models rather than the 18 that opened
+them. `out/report.md` lists it under "Paths on which guardrails silently do not
+run" — a section that could previously only say `(none)`, because no CRD field
+could reach `Detect` at all.
+
+**It is not a cost against the alternative, though.** The only other route type
+these two paths can resolve to is `Passthrough`, and the `Passthrough` arm in
+`httpproxy.rs` returns before any LLM policy runs — so the guard does not run
+there either, and nothing is metered. `Detect` is strictly better on both. Six
+of the built-in route types already skip the guard for the same reason
+(`Embeddings`, `Rerank`, `Realtime`, `CountTokens`, and the four `Detect`
+entries the built-in table ships). The section is a trap to know about — a
+tenant guardrail configured for a model on one of these paths is accepted and
+silently never runs — not a loss against Kong.
 
 ### The one blocker: agentgateway verifies upstream certificates and Kong does not
 

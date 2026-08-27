@@ -1108,6 +1108,23 @@ def emit_report(rep, ns):
     L.append("normally on `/v1/chat/completions` and every other non-Detect path.")
     L.append("On the paths below the guard is skipped with no warning and no error.")
     L.append("")
+    L.append("**This is not a regression against the alternative.** The only other")
+    L.append("route type these paths can resolve to is `Passthrough` (the built-in")
+    L.append("table's `\"*\"` wildcard), and `Passthrough` returns from the proxy")
+    L.append("BEFORE any LLM policy runs (`httpproxy.rs`, the")
+    L.append("`RouteType::Passthrough | RouteType::Realtime` arm: \"We do not need LLM")
+    L.append("policies nor token-based rate limits\"), so the guard does not run there")
+    L.append("either -- and nothing is metered. `Detect` is strictly better on both")
+    L.append("counts. Nor is a guard-less route type unusual: `supports_prompt_guard()`")
+    L.append("is already false for `Embeddings`, `Rerank`, `Realtime`, `CountTokens`")
+    L.append("and the four `Detect` entries the BUILT-IN table ships")
+    L.append("(`/v1/images/*`, `/v1/responses/compact`). Prompt guard only ever runs")
+    L.append("on `Completions`, `Messages` and `Responses`.")
+    L.append("")
+    L.append("What this section is for: if a tenant guardrail is ever configured for")
+    L.append("a model on one of these paths, it will be accepted and silently never")
+    L.append("run. That is the trap worth knowing -- not a loss against Kong.")
+    L.append("")
     if rep.detect_paths:
         for path in sorted(rep.detect_paths):
             L.append("- `%s` -- mapped to `Detect`; affects all %d emitted models,"
@@ -1139,8 +1156,10 @@ def emit_report(rep, ns):
     L.append("  in this generator (all %d entries) must gain it too, or every model"
              % len(DEFAULT_ROUTE_TABLE))
     L.append("  loses it silently.")
-    L.append("  The cost of `Detect` is that prompt guard cannot run on those paths --")
-    L.append("  see \"Models that cannot carry guardrails\" above.")
+    L.append("  `Detect` does not run prompt guard on those paths -- but neither")
+    L.append("  does the `Passthrough` they would otherwise resolve to, which also")
+    L.append("  meters nothing. See the guardrail section above for why this is a")
+    L.append("  trap to know rather than a cost to weigh.")
     if rep.private_ca_hosts:
         L.append("- **Upstream TLS verification is not disabled, and %d upstream host%s"
                  % (len(rep.private_ca_hosts),

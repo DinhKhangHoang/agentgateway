@@ -106,13 +106,21 @@ both paths where they were absent under `Passthrough`
 requests are *parsed*, which is the precondition for metering; measuring actual
 token counts needs a successful upstream response and real credentials.
 
-**The cost, which the generator must report:** `Detect`'s
-`supports_prompt_guard()` is false and its `get_messages()` is
-`unimplemented!()`, so prompt guard silently does not run. The check is against
-the *resolved route type*, and the table is shared by the whole listener — so
-opening these paths disables guardrails on them for **every** model on the
-listener, not only the ones that asked. `report.md` records this under
-`## Paths on which guardrails silently do not run`.
+**What the generator must report:** `Detect`'s `supports_prompt_guard()` is
+false and its `get_messages()` is `unimplemented!()`, so prompt guard silently
+does not run. The check is against the *resolved route type* and the table is
+shared by the whole listener, so it applies to these paths for **every** model,
+not only the ones that opened them. `report.md` records it under `## Paths on
+which guardrails silently do not run`.
+
+This is a trap to know, not a cost to weigh against keeping the paths closed.
+The alternative route type for them is `Passthrough`, whose arm in
+`httpproxy.rs` returns before any LLM policy runs — the guard does not run
+there either, and nothing is metered. Prompt guard only ever runs on
+`Completions`, `Messages` and `Responses`; `Embeddings`, `Rerank`, `Realtime`,
+`CountTokens` and the built-in table's own four `Detect` entries all skip it.
+The trap is a tenant guardrail configured for a model on one of these paths:
+accepted, and silently never run.
 
 ## The default table is fragile — a fixed bug worth remembering
 
