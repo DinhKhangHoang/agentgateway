@@ -217,6 +217,18 @@ func TestModelRouteAIPolicyRoutes(t *testing.T) {
 			"no ai fields": {
 				Health: &agentgateway.Health{UnhealthyCondition: new(agentgateway.CELExpression("response.code >= 500"))},
 			},
+			// A non-nil but empty map must be treated as "no routes", not as
+			// "an empty route table". The distinction is load-bearing on the
+			// Rust side: an AI policy whose routes map is empty inherits
+			// default_route_types(), while one that is present and non-empty
+			// REPLACES it. Emitting an AI policy here would be harmless today
+			// only by accident, and the guard is a `len() == 0` check that is
+			// easy to lose in a refactor.
+			"non-nil empty routes": {Routes: map[string]agentgateway.RouteType{}},
+			"non-nil empty transformations and routes": {
+				Transformations: []agentgateway.FieldTransformation{},
+				Routes:          map[string]agentgateway.RouteType{},
+			},
 		} {
 			routePolicy, err := translateModelRouteAIPolicy(RouteContext{}, "default", policies)
 			if err != nil {

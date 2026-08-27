@@ -48,6 +48,25 @@ spec:
     transformations:
     - field: model
       expression: '"gpt-5-mini-transformed"'
+    # This model is a target of both the weighted `fast` and the failover
+    # `resilient` virtual models below, so the golden output pins where a
+    # target's `routes` end up in each shape:
+    #
+    #   weighted -- resolved by model name, so the routes ride on this
+    #     model's OWN modelRoute.aiPolicy (`default/gpt-5-mini.llm`).
+    #   failover -- a synthetic backend, so the routes are copied INLINE onto
+    #     just this provider inside `default/resilient/failover.llm`, while
+    #     the sibling `openai-models` provider gets none.
+    #
+    # The failover shape is the one to watch. `spec.policies.routes` REPLACES
+    # the built-in path->RouteType table rather than merging with it, so the
+    # partial table below leaves priority 0 resolving only /v1/completions and
+    # `*` while priority 1 keeps all 13 defaults -- two attempts of the same
+    # request can parse the same path as different route types. That is
+    # working as designed; it is recorded here so a change to it is visible.
+    routes:
+      /v1/completions: Detect
+      '*': Passthrough
 ---
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayModel
@@ -155,6 +174,9 @@ output:
         - providers:
           - inlinePolicies:
             - ai:
+                routes:
+                  '*': PASSTHROUGH
+                  /v1/completions: DETECT
                 transformations:
                   model: '"gpt-5-mini-transformed"'
             name: gpt-5-mini
@@ -209,6 +231,9 @@ output:
   resource:
     modelRoute:
       aiPolicy:
+        routes:
+          '*': PASSTHROUGH
+          /v1/completions: DETECT
         transformations:
           model: '"gpt-5-mini-transformed"'
       concreteModel:
