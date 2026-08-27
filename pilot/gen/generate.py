@@ -773,11 +773,15 @@ def emit_models(models, creds, ns, gw_name, gw_ns):
            "# emitted as an exact match, plus a bare-name CR wherever that name is",
            "# unambiguous. See out/report.md for why `*/<model>` is NOT used.",
            "#",
-           "# Models opening a non-built-in path also carry `policies.routes`,",
-           "# which REPLACES the built-in table wholesale -- so the whole default",
-           "# table is restated alongside the new entry. An AgentgatewayPolicy",
-           "# still cannot target a model; ModelPolicies.routes is the only",
-           "# surface. See pilot/gen/README.md."]
+           "# EVERY model carries the same `policies.routes`, not only the ones",
+           "# that opened a non-built-in path: `spec.match.paths` is unioned",
+           "# across the listener but `policies.routes` is per-model, so a model",
+           "# without the table is still reachable on an opened path and resolves",
+           "# it through (\"*\", Passthrough) -- routed but never parsed. The table",
+           "# REPLACES the built-in one wholesale rather than merging, so all 13",
+           "# defaults are restated alongside the added entries. An",
+           "# AgentgatewayPolicy still cannot target a model; ModelPolicies.routes",
+           "# is the only surface. See pilot/gen/README.md."]
     # Listener-wide union of every non-built-in path any model opens.
     opened = sorted({p for m in models for p in m["paths"]})
     for m in models:

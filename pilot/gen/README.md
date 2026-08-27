@@ -3,6 +3,18 @@
 Translates the live MaaS Kong surface into agentgateway CRs. It is a translator,
 not a one-off script: the same tool must run against prod later.
 
+```
+python3 -m pytest test_generate.py -q          # no cluster needed
+python3 generate.py --check-default-table ~/agentgateway
+python3 generate.py --kubeconfig … --namespace user-11377-maas-v2 --out-dir out
+```
+
+`test_generate.py` builds `Row` objects from the two live path shapes and runs
+`classify` → `group` → `emit_models` in-process; only `extract()` touches a
+cluster. Each test names the behaviour it pins, and the two that guard past
+defects — the per-model route table and the recursive feature scan — were
+checked by reintroducing each defect and watching them fail.
+
 ## Route-type mapping — the surface exists, because we added it
 
 Kong's `route_type` selects a wire format. Agentgateway's equivalent is
