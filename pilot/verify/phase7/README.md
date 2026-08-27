@@ -594,3 +594,57 @@ private-CA gap — unchanged, and still the one blocker.
 
 Scope, unchanged from yesterday: provider Secrets are `REPLACE_ME` shells, so
 this is a routing and parsing result. No token counts were measured.
+
+---
+
+## Upstream TLS verification disabled on the 5 private-CA hosts — 2026-08-27
+
+The one blocker recorded on 2026-08-26 is closed by decision, not by fix:
+`--insecure-upstream-tls All` (generator commit `92d5fb87`) is now the mode the
+pilot runs in. `All` rather than `caCertificateRefs` because it is
+bug-compatible with Kong's ai-proxy, which does not verify at all — so it adds
+no exposure the current production path does not already have. **This is the
+pilot's posture, explicitly not prod's.**
+
+Regenerated from live Kong `user-11377-maas-v2` and applied to
+`user-11377-maas-v2-agw`. Server dry-run clean beforehand; nothing created,
+nothing deleted.
+
+| File | Applied | configured | unchanged |
+|---|---|---|---|
+| `models.yaml` (minus the 4 withheld collisions) | 158 | **35** | 123 |
+| `backends.yaml` | 92 | **18** | 74 |
+
+35 models is exactly the set whose `baseURL` host is in `PRIVATE_CA_HOSTS`; the
+18 backend CRs carry 19 affected providers. Read back from the API server: 164
+models in the namespace, **35** with `policies.tls.insecureSkipVerify: All`, and
+no other model touched. Of the GLM-5.2 arms only `m-z-ai-glm-5-2` is affected —
+the thirdparty and ksp arms use public CAs.
+
+Controller: no error or translation lines in the 3 minutes after the push.
+Dataplane `maas-v2-agw-9ff989c7f-9n5wn`: no log lines at all in 6 minutes, pod
+30 h old, no restart — config arrived over xDS.
+
+### What is NOT verified: the handshake
+
+**No request was made.** `registry-stub`'s `ALLOWED_MODELS` currently admits
+only `gemini-2.5-flash`, `gpt-4o`, `claude-sonnet-4-0` and the three
+`deepseek-v4-pro*` names — all hand-written pilot CRs on public-CA providers,
+none of them on a private-CA host. Proving `invalid peer certificate:
+UnknownIssuer` is gone needs the same procedure the 2026-08-26 and 08-27 checks
+used: widen `ALLOWED_MODELS` for the run, make the request, restore it. That was
+not done here, so the claim on record is **"the policy is deployed"**, not
+**"the handshake succeeds"**. The dataplane exposes only `metrics:15020` — no
+config-dump endpoint — so there is no read-only substitute.
+
+Provider Secrets are still `REPLACE_ME` shells, so even a successful handshake
+returns an upstream auth failure rather than a completion. The next measurable
+step remains real credentials.
+
+### Operational trap
+
+`pilot/gen/out/` is gitignored, and the flag is **off by default**. Anyone who
+regenerates without `--insecure-upstream-tls All` and re-applies silently
+restores verification and re-breaks all 35 models. The generated `report.md`
+states which way the flag went — read its TLS paragraph before applying a tree
+you did not generate yourself.
