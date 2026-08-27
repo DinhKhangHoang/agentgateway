@@ -524,3 +524,63 @@ back with `rollout undo`; the deployment is 4/4 on the original ReplicaSet. The
 same Docker Hub reachability problem aborted the dataplane image build twice.
 **Do not restart that deployment without first confirming the nodes can pull
 `redis:7-alpine`.**
+
+---
+
+## Route tables re-applied to all 158 models — 2026-08-27
+
+The 2026-08-26 deploy carried `spec.policies.routes` on only 18 models, because
+the generator emitted the table only where a model opened an extra path itself.
+`spec.match.paths` is unioned across the listener and `policies.routes` is not,
+so the other 140 were reachable on `/v1/completions` and `/v1/generateContent`
+while still resolving them through `("*", Passthrough)`. Generator fixed in
+`f94ab0c4`; this is the re-apply.
+
+```
+kubectl apply -f <models.yaml minus the 4 withheld collisions>   -> 158 configured
+```
+
+Server dry-run clean beforehand, no controller translation errors after. Live
+state, read back from the API server:
+
+| | before | after |
+|---|---|---|
+| `AgentgatewayModel` in namespace | 164 | 164 |
+| carrying `spec.policies.routes` | 17 | **158** |
+| distinct route tables among them | 1 | 1 |
+
+The 6 without a table are the hand-written pilot CRs, which the generator does
+not own. "17" rather than 18 because one of the 18 generated is
+`m-deepseek-v4-pro`, still withheld as a collision.
+
+### Check: a model that had no table before now resolves Detect
+
+`z-ai/glm-5.2` was in the 140. `ALLOWED_MODELS` on `registry-stub` was widened
+to admit it for the run and restored afterwards; the accepted key hash was not
+touched.
+
+```
+http.path=/v1/completions      http.status=503 protocol=llm
+  endpoint=49.213.86.184.nip.io:443 gen_ai.operation.name=chat
+  gen_ai.provider.name=openai gen_ai.request.model=zai-org/GLM-5.2-FP8
+  gen_ai.request.max_tokens=4 retry.attempt=1
+  error="upstream call failed: Connect: invalid peer certificate: UnknownIssuer"
+
+http.path=/v1/chat/completions http.status=503 protocol=llm   (same fields)
+```
+
+Three things read off the `/v1/completions` line, none of which were true for
+this model yesterday:
+
+1. `gen_ai.*` is present at all — the request is parsed, not relayed. Under
+   `Passthrough` these fields are absent.
+2. `gen_ai.request.model=zai-org/GLM-5.2-FP8`, not the `z-ai/glm-5.2` that was
+   sent. The model transformation ran, which only a parsing route type does.
+3. `retry.attempt=1` — the retry policy is live on the path.
+
+Both arms return the same 503 and the same error, so the status proves nothing
+here; the evidence is the fields on the line. The 503 itself is the known
+private-CA gap — unchanged, and still the one blocker.
+
+Scope, unchanged from yesterday: provider Secrets are `REPLACE_ME` shells, so
+this is a routing and parsing result. No token counts were measured.
