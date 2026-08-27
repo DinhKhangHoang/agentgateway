@@ -13,8 +13,12 @@ It is a translator, not a one-off: namespace, tenant and model list all come
 from the cluster. Standard library only; `kubectl` is shelled out to for reads.
 Reads only -- nothing is ever applied, patched or deleted.
 
-Everything that cannot be reproduced faithfully is REFUSED and recorded in
-out/report.md. Nothing is invented.
+Nothing is invented. Everything that cannot be reproduced faithfully is
+recorded in out/report.md -- either REFUSED (the row is not emitted at all,
+where emitting it would be wrong: an unparsable route, a colliding identity)
+or emitted with the feature DROPPED and logged as a loss (web search, Kong
+fallbacks on the canonical surface), where refusing would take a working model
+offline. The report says which of the two happened for every item.
 """
 
 import argparse
@@ -62,6 +66,73 @@ DEFAULT_ROUTE_TABLE = [
     ("/v2/rerank", "Rerank"),
     ("*", "Passthrough"),
 ]
+
+# `spec.policies.routes` REPLACES the built-in table -- `merge_llm_policies`
+# (crates/agentgateway/src/store/binds.rs:493) takes the preferred map WHOLE
+# when it is non-empty, it does not merge. So the mirror above must stay exact:
+# an entry that drifts out of it is not "missing", it is DELETED from every
+# model this generator emits. `--check-default-table` reads the fork's
+# `default_route_types()` and refuses to run if the two disagree.
+_DEFAULT_TABLE_SRC = "crates/agentgateway/src/llm/model_router.rs"
+
+
+def parse_fork_default_table(agentgateway_src):
+    """Extract `default_route_types()`'s map from the fork's Rust source.
+
+    Deliberately literal: it reads the `strng::new("path"), RouteType::X`
+    pairs out of the function body's text. A refactor that moves the table
+    elsewhere breaks this parse LOUDLY, which is the point -- a silent
+    "0 entries found, nothing differs" would defeat the check, so an empty
+    parse is an error.
+    """
+    path = os.path.join(agentgateway_src, _DEFAULT_TABLE_SRC)
+    try:
+        src = open(path, encoding="utf-8").read()
+    except OSError as e:
+        raise SystemExit("--check-default-table: cannot read %s (%s)" % (path, e))
+
+    m = re.search(r"pub fn default_route_types\(\)[^{]*\{(.*?)\n\}", src, re.S)
+    if not m:
+        raise SystemExit("--check-default-table: could not find "
+                         "`default_route_types()` in %s -- it was moved or "
+                         "renamed; update the parser before trusting the "
+                         "generated route tables." % path)
+
+    pairs = re.findall(
+        r'strng::new\(\s*"([^"]+)"\s*\)\s*,\s*(?:llm::)?RouteType::(\w+)',
+        m.group(1))
+    if not pairs:
+        raise SystemExit("--check-default-table: found the function but parsed "
+                         "0 entries from it -- the parser is stale, not the "
+                         "table.")
+    return pairs
+
+
+def check_default_table(agentgateway_src):
+    fork = parse_fork_default_table(agentgateway_src)
+    if fork == DEFAULT_ROUTE_TABLE:
+        print("default route table matches the fork: %d entries, same order"
+              % len(fork))
+        return
+
+    ours, theirs = dict(DEFAULT_ROUTE_TABLE), dict(fork)
+    lines = ["DEFAULT_ROUTE_TABLE has drifted from %s." % _DEFAULT_TABLE_SRC, ""]
+    for path in sorted(set(theirs) - set(ours)):
+        lines.append("  MISSING here    %-28s %s  (would be DELETED from every "
+                     "emitted model)" % (path, theirs[path]))
+    for path in sorted(set(ours) - set(theirs)):
+        lines.append("  EXTRA here      %-28s %s  (no longer in the fork)"
+                     % (path, ours[path]))
+    for path in sorted(set(ours) & set(theirs)):
+        if ours[path] != theirs[path]:
+            lines.append("  TYPE differs    %-28s ours=%s fork=%s"
+                         % (path, ours[path], theirs[path]))
+    if set(ours) == set(theirs):
+        lines.append("  ORDER differs -- harmless to agentgateway (the map is "
+                     "sorted at load) but keep them aligned so this check stays "
+                     "a clean equality.")
+    raise SystemExit("\n".join(lines))
+
 
 # Route type for each path the built-in table does not name. `Detect` forwards
 # the body untranslated regardless of dialect -- `detect::Request` looks its
@@ -1151,15 +1222,33 @@ def emit_report(rep, ns):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--kubeconfig", required=True)
-    ap.add_argument("--namespace", required=True,
+    ap.add_argument("--check-default-table", metavar="AGENTGATEWAY_SRC",
+                    default=None,
+                    help="path to an agentgateway checkout; verify "
+                         "DEFAULT_ROUTE_TABLE still matches its "
+                         "default_route_types() and exit. Run this whenever "
+                         "the fork is rebased -- the emitted table REPLACES "
+                         "the built-in one, so a stale mirror silently deletes "
+                         "route types.")
+    ap.add_argument("--kubeconfig", required=False)
+    ap.add_argument("--namespace", required=False,
                     help="Kong namespace to read (READ-ONLY)")
-    ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--out-dir", required=False)
     ap.add_argument("--target-namespace", default=None,
                     help="namespace the generated CRs go in (default: <namespace>-agw)")
     ap.add_argument("--gateway-name", default="maas-v2-agw")
     ap.add_argument("--gateway-namespace", default=None)
     args = ap.parse_args()
+
+    if args.check_default_table:
+        check_default_table(args.check_default_table)
+        return
+
+    missing = [f for f in ("kubeconfig", "namespace", "out_dir")
+               if not getattr(args, f)]
+    if missing:
+        ap.error("the following arguments are required: "
+                 + ", ".join("--" + f.replace("_", "-") for f in missing))
 
     target_ns = args.target_namespace or (args.namespace + "-agw")
     rep = Report()

@@ -43,8 +43,20 @@ merged with `default_route_types()`
 resolves *only* what it lists, and everything else falls to whatever `"*"` it
 declared. So the generator never emits a partial table: `DEFAULT_ROUTE_TABLE`
 mirrors all 13 built-in entries verbatim, and the extra paths are added on top.
-Keeping that mirror honest is a maintenance obligation — if the fork's default
-table changes, this one has to change with it.
+
+Keeping that mirror honest is enforced, not remembered:
+
+```
+python3 generate.py --check-default-table /path/to/agentgateway
+```
+
+parses `default_route_types()` out of the fork's Rust source and exits non-zero
+on any difference, naming each one — an entry present upstream and missing here
+is reported as *"would be DELETED from every emitted model"*, because under
+replacement semantics that is exactly what a stale mirror does. Run it after
+every rebase of the fork. A moved or renamed function, or a parse that yields
+zero entries, is also an error: a checker that silently finds nothing and
+reports "no drift" would be worse than no checker.
 
 **`match.paths` is listener-wide but `policies.routes` is per-model.**
 `Store::rebuild_model_router` (`crates/agentgateway/src/store/binds.rs:810-817`)
