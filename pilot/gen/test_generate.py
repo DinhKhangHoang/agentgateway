@@ -51,9 +51,9 @@ def build(rows):
     return rep, backends, models
 
 
-def emitted(models, rep=None):
+def emitted(models, rep=None, insecure_tls=None):
     creds = g.Credentials()
-    return g.emit_models(models, creds, "ns", "gw", "gwns")
+    return g.emit_models(models, creds, "ns", "gw", "gwns", insecure_tls)
 
 
 # --------------------------------------------------------------------------
@@ -285,3 +285,59 @@ def test_drift_detector_reports_a_missing_checkout(tmp_path):
     p = _run_check(str(tmp_path / "nope"))
     assert p.returncode != 0
     assert "cannot read" in p.stdout + p.stderr
+
+
+# --------------------------------------------------------------------------
+# upstream TLS: --insecure-upstream-tls is opt-in and host-scoped
+# --------------------------------------------------------------------------
+
+# One host from the measured set, and one that verifies fine today.
+PRIVATE_CA_URL = "https://49.213.86.184.nip.io/v1/maas/zai-org/glm-5.2/v1/chat/completions"
+PUBLIC_CA_URL = "https://api.deepseek.com/v1/chat/completions"
+
+
+def _model_with_upstream(url, name="glm-5.2", vendor="z-ai"):
+    cfg = chat_cfg(name)
+    cfg["model"]["options"] = {"upstream_url": url}
+    path = P + vendor + "/" + name.replace(".", r"\.") + "/v1/chat/completions$"
+    _, backends, models = build([row(path, cfg)])
+    return backends, models
+
+
+def test_no_tls_stanza_is_emitted_unless_the_flag_is_given():
+    # The default must stay byte-identical to what is deployed: agentgateway
+    # verifies unless told otherwise, and that default is the secure one.
+    _, models = _model_with_upstream(PRIVATE_CA_URL)
+    assert "insecureSkipVerify" not in emitted(models)
+
+
+def test_flag_disables_verification_only_for_measured_private_ca_hosts():
+    _, models = _model_with_upstream(PRIVATE_CA_URL)
+    out = emitted(models, insecure_tls="All")
+    assert "    tls:" in out
+    assert "      insecureSkipVerify: All" in out
+
+
+def test_flag_leaves_a_publicly_verifiable_host_verifying():
+    # A blanket disable would also cover api.deepseek.com, which handshakes
+    # fine -- and would then stop reporting if that ever changed.
+    _, models = _model_with_upstream(PUBLIC_CA_URL, name="deepseek-v4", vendor="deepseek")
+    assert "insecureSkipVerify" not in emitted(models, insecure_tls="All")
+
+
+def test_backend_providers_keep_bare_tls_when_the_flag_is_off():
+    # `tls: {}` still has to be emitted for an https host override, or the
+    # gateway speaks plaintext to :443. The flag replaces it, never removes it.
+    backends, _ = _model_with_upstream(PRIVATE_CA_URL)
+    creds = g.Credentials()
+    out = g.emit_backends(backends, creds, "ns", g.Report())
+    assert "tls: {}" in out
+    assert "insecureSkipVerify" not in out
+
+
+def test_backend_providers_honour_the_flag():
+    backends, _ = _model_with_upstream(PRIVATE_CA_URL)
+    creds = g.Credentials()
+    out = g.emit_backends(backends, creds, "ns", g.Report(), "All")
+    assert "insecureSkipVerify: All" in out
+    assert "tls: {}" not in out

@@ -162,6 +162,47 @@ Suffix precedence within a map is pinned by
 `crates/agentgateway/src/llm/policy/tests.rs`: a longer key beats both the `"*"`
 wildcard and its own shorter suffixes, independent of insertion order.
 
+## Upstream TLS — `--insecure-upstream-tls`
+
+Off by default, and the default is the secure one: agentgateway originates TLS
+*and verifies*, so the emitted config verifies too. Kong's ai-proxy does not
+verify at all, which is why five self-hosted `*.nip.io` MaaS endpoints work
+there and fail at connect here.
+
+```
+python3 generate.py --kubeconfig … --namespace … --out-dir out \
+        --insecure-upstream-tls All
+```
+
+emits `policies.tls.insecureSkipVerify: All` on every `AgentgatewayModel` and
+every backend provider whose host is in `PRIVATE_CA_HOSTS` — 35 models and 19
+providers on the dev-v2 surface. Nothing else changes: a public-CA host keeps
+`tls: {}` on the legacy surface and no `tls` stanza on the canonical one.
+
+Three properties worth stating, because each is a decision:
+
+- **Scoped to the measured set, not to every https upstream.** A blanket
+  disable would also cover `api.openai.com`, which handshakes fine today — and
+  would then stop telling us if that ever changed.
+- **`All` is bug-compatible with production, not secure.** It adds no exposure
+  the current Kong path does not already have, which is what makes it
+  defensible *for the pilot*. It is not the answer for prod: that is
+  `policies.tls.caCertificateRefs` naming a ConfigMap with the private CA.
+- **`Hostname` addresses neither measured failure.** It trusts the chain and
+  ignores only hostname/SAN mismatch, but the observed errors are
+  `UnknownIssuer` (untrusted chain) and `CaUsedAsEndEntity` (a CA certificate
+  served as a leaf). The choice is exposed because a future host may genuinely
+  have a SAN mismatch; the report says plainly that it will not help these.
+
+One asymmetry the correct remedy does not escape: `caCertificateRefs` cannot
+fix a host returning `CaUsedAsEndEntity` either, because trusting the CA does
+not make that certificate valid as an end-entity. On the dev-v2 surface that is
+`122.201.15.117.nip.io` (7 rows) — it needs its certificate fixed, whichever
+path is taken.
+
+The report records whichever way the flag went, so the posture is never
+implicit in a generated tree.
+
 ## The guardrail trap, now that Detect is reachable
 
 `Detect` **disables prompt guard**, and the generator now emits `Detect`, so
