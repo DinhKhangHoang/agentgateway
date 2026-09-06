@@ -2185,3 +2185,177 @@ fn fixed_providers_classify_by_family() {
 		CacheTokenConvention::InputIncludesCache,
 	);
 }
+
+/// An upstream error body that is not JSON must still reach the client in the
+/// client's own error shape, with the upstream status intact.
+///
+/// Regression, measured on the dev pilot 2026-09-04: a `/v1/messages` request
+/// whose upstream answered a plain nginx `404` HTML page came back as
+/// `503 processing failed: failed to parse response`. `translate_error` parses
+/// the error body to reshape it, the parse failed, and the resulting
+/// `AIError::ResponseParsing` became `ProxyError::Processing` -- which is a
+/// 503, is not `is_retryable()`, and is what the health policy's
+/// `unhealthyCondition` is then evaluated against. So one un-parseable byte
+/// costs the client a correct error body AND costs the route both halves of
+/// failover: retry sees an `Err` it will not replay, and health never sees the
+/// real upstream code. Only the two passthrough arms of `ChatTranslation::error`
+/// (`Completions`/`Responses` against an OpenAI-shaped upstream) were immune.
+#[test]
+fn non_json_upstream_error_synthesizes_messages_error() {
+	let provider = custom_provider(custom::ProviderFormat::Completions);
+	let mut req = llm_request_with_tokens(None);
+	req.input_format = InputFormat::Messages;
+	req.request_model = "glm-5.2".into();
+
+	let error = Bytes::from_static(
+		b"<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n",
+	);
+	let translated = provider
+		.process_error(&req, ::http::StatusCode::NOT_FOUND, &error)
+		.expect("a non-JSON upstream error must not fail the exchange");
+	let body: Value = serde_json::from_slice(&translated).expect("synthesized error should be JSON");
+
+	assert_eq!(body["type"], json!("error"));
+	assert_eq!(body["error"]["type"], json!("not_found_error"));
+	let message = body["error"]["message"].as_str().unwrap_or_default();
+	assert!(
+		message.contains("404 Not Found"),
+		"synthesized message should carry the upstream body so the failure is diagnosable, got: {message}",
+	);
+}
+
+/// The same for the Google error arm, which a Completions client reaches
+/// through a Gemini or Vertex backend. `parse_google_error` was strict for the
+/// same reason and had the same consequence.
+#[test]
+fn non_json_upstream_error_synthesizes_completions_error() {
+	let provider = AIProvider::Gemini(gemini::Provider { model: None });
+	let mut req = llm_request_with_tokens(None);
+	req.input_format = InputFormat::Completions;
+	req.request_model = "gemini-2.5-pro".into();
+
+	let error = Bytes::from_static(b"upstream connect error or disconnect/reset before headers");
+	let translated = provider
+		.process_error(&req, ::http::StatusCode::BAD_GATEWAY, &error)
+		.expect("a non-JSON upstream error must not fail the exchange");
+	let body: Value = serde_json::from_slice(&translated).expect("synthesized error should be JSON");
+
+	assert_eq!(body["error"]["type"], json!("api_error"));
+	let message = body["error"]["message"].as_str().unwrap_or_default();
+	assert!(
+		message.contains("upstream connect error"),
+		"synthesized message should carry the upstream body, got: {message}",
+	);
+}
+
+/// A well-formed upstream error must still be translated, not synthesized --
+/// the fallback may not swallow the upstream's own `type` and `message`.
+#[test]
+fn json_upstream_error_is_still_translated_not_synthesized() {
+	let provider = custom_provider(custom::ProviderFormat::Completions);
+	let mut req = llm_request_with_tokens(None);
+	req.input_format = InputFormat::Messages;
+
+	let error = Bytes::from_static(
+		br#"{"error":{"message":"model not found","type":"model_error","param":null,"code":404}}"#,
+	);
+	let translated = provider
+		.process_error(&req, ::http::StatusCode::NOT_FOUND, &error)
+		.expect("well-formed error should translate");
+	let body: Value = serde_json::from_slice(&translated).expect("translated error should be JSON");
+
+	assert_eq!(body["error"]["type"], json!("model_error"));
+	assert_eq!(body["error"]["message"], json!("model not found"));
+}
+
+/// The property failover actually depends on: `process_response` must return
+/// `Ok` with the upstream status preserved, so `should_retry` can match it
+/// against `traffic.retry.codes` and the health policy's `unhealthyCondition`
+/// can see the real code.
+#[tokio::test]
+async fn non_json_upstream_error_preserves_status_for_retry_and_health() {
+	use crate::proxy::httpproxy::PolicyClient;
+	use crate::test_helpers::proxymock::setup_proxy_test;
+
+	let provider = custom_provider(custom::ProviderFormat::Completions);
+	let mut req = llm_request_with_tokens(None);
+	req.input_format = InputFormat::Messages;
+	req.streaming = false;
+
+	let body = Body::from(
+		b"<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n</body>\r\n</html>\r\n"
+			.to_vec(),
+	);
+	let mut resp = Response::new(body);
+	*resp.status_mut() = ::http::StatusCode::NOT_FOUND;
+	resp
+		.headers_mut()
+		.insert(::http::header::CONTENT_TYPE, "text/html".parse().unwrap());
+
+	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
+	let result = provider
+		.process_response(
+			client,
+			req,
+			LLMResponsePolicies::default(),
+			None,
+			AsyncLog::default(),
+			llm::LogContentFields::default(),
+			None,
+			resp,
+		)
+		.await
+		.expect("process_response must not fail the exchange on a non-JSON error body");
+
+	assert_eq!(
+		result.status(),
+		::http::StatusCode::NOT_FOUND,
+		"the upstream status must survive; retry and health are both evaluated against it",
+	);
+
+	let result_body = result.collect().await.unwrap().to_bytes();
+	let parsed: Value =
+		serde_json::from_slice(&result_body).expect("synthesized error should be valid JSON");
+	assert_eq!(parsed["type"], json!("error"));
+}
+
+/// `unparseable_upstream_body` lives in `agent_llm::conversion`; its tests live
+/// here because `cargo test -p agent-llm` does not build on this branch (stale
+/// `golden_tests.rs`), so an in-crate test module would never run.
+mod unparseable_upstream_body {
+	use agent_llm::conversion::unparseable_upstream_body;
+	use bytes::Bytes;
+
+	#[test]
+	fn collapses_whitespace_of_an_html_error_page() {
+		let body = Bytes::from_static(
+			b"<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n</body>\r\n</html>\r\n",
+		);
+		assert_eq!(
+			unparseable_upstream_body(&body),
+			"<html> <head><title>404 Not Found</title></head> <body> </body> </html>"
+		);
+	}
+
+	#[test]
+	fn caps_a_large_error_page() {
+		let body = Bytes::from(vec![b'x'; 4096]);
+		let out = unparseable_upstream_body(&body);
+		assert!(out.ends_with("... (truncated)"), "got: {out}");
+		assert_eq!(out.chars().filter(|c| *c == 'x').count(), 512);
+	}
+
+	#[test]
+	fn describes_an_empty_body() {
+		assert_eq!(
+			unparseable_upstream_body(&Bytes::new()),
+			"upstream returned an empty error body"
+		);
+	}
+
+	#[test]
+	fn does_not_panic_on_invalid_utf8() {
+		let body = Bytes::from_static(&[0xff, 0xfe, b'o', b'k']);
+		assert!(unparseable_upstream_body(&body).contains("ok"));
+	}
+}

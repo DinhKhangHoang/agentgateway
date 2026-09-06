@@ -47,15 +47,29 @@ pub(crate) fn parse_chat_completion_error(
 
 /// Translate a Google error response into an OpenAI Chat Completions error response.
 pub fn translate_google_error(bytes: &Bytes) -> Result<Bytes, crate::AIError> {
-	let res = parse_google_error(bytes)?;
-	let m = types::completions::typed::ChatCompletionErrorResponse {
-		event_id: None,
-		error: types::completions::typed::ChatCompletionError {
-			r#type: Some(google_error_type(&res.error).to_string()),
-			message: res.error.message.clone(),
-			param: None,
-			code: res.error.status.clone().map(serde_json::Value::String),
+	// Same contract as `from_messages::translate_error`: a body that is not a
+	// Google error object -- a proxy's HTML page, say -- is carried through as
+	// text rather than failing the exchange and taking the upstream status with it.
+	let m = match parse_google_error(bytes) {
+		Ok(res) => types::completions::typed::ChatCompletionErrorResponse {
 			event_id: None,
+			error: types::completions::typed::ChatCompletionError {
+				r#type: Some(google_error_type(&res.error).to_string()),
+				message: res.error.message.clone(),
+				param: None,
+				code: res.error.status.clone().map(serde_json::Value::String),
+				event_id: None,
+			},
+		},
+		Err(_) => types::completions::typed::ChatCompletionErrorResponse {
+			event_id: None,
+			error: types::completions::typed::ChatCompletionError {
+				r#type: Some("api_error".to_string()),
+				message: crate::conversion::unparseable_upstream_body(bytes),
+				param: None,
+				code: None,
+				event_id: None,
+			},
 		},
 	};
 	Ok(Bytes::from(
@@ -655,12 +669,26 @@ pub mod from_messages {
 	}
 
 	pub fn translate_error(bytes: &Bytes, status: ::http::StatusCode) -> Result<Bytes, AIError> {
-		let res = super::parse_chat_completion_error(bytes)?;
+		// An unparseable body must not fail the exchange: that produced a gateway
+		// 503, which is not retryable and hides the upstream status from a health
+		// policy, so a Messages client had no failover at all against any upstream
+		// fronted by something that emits HTML error pages. `translate_anthropic_error`
+		// already parses-or-synthesizes; this is the same contract.
+		let (error_type, message) = match super::parse_chat_completion_error(bytes) {
+			Ok(res) => (
+				normalized_error_type(status, res.error.r#type.as_deref()).to_string(),
+				res.error.message,
+			),
+			Err(_) => (
+				normalized_error_type(status, None).to_string(),
+				crate::conversion::unparseable_upstream_body(bytes),
+			),
+		};
 		let m = messages::MessagesErrorResponse {
 			r#type: "error".to_string(),
 			error: messages::MessagesError {
-				r#type: normalized_error_type(status, res.error.r#type.as_deref()).to_string(),
-				message: res.error.message,
+				r#type: error_type,
+				message,
 			},
 		};
 		Ok(Bytes::from(

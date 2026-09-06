@@ -40,12 +40,23 @@ pub fn translate_anthropic_error(
 
 /// Translate a Google error response into an Anthropic Messages error response.
 pub fn translate_google_error(bytes: &Bytes) -> Result<Bytes, AIError> {
-	let res = super::completions::parse_google_error(bytes)?;
+	// Parse-or-synthesize, as everywhere else on the error path; see
+	// `conversion::unparseable_upstream_body`.
+	let (error_type, message) = match super::completions::parse_google_error(bytes) {
+		Ok(res) => (
+			super::completions::google_error_type(&res.error).to_string(),
+			res.error.message.clone(),
+		),
+		Err(_) => (
+			"api_error".to_string(),
+			crate::conversion::unparseable_upstream_body(bytes),
+		),
+	};
 	let m = messages::MessagesErrorResponse {
 		r#type: "error".to_string(),
 		error: messages::MessagesError {
-			r#type: super::completions::google_error_type(&res.error).to_string(),
-			message: res.error.message.clone(),
+			r#type: error_type,
+			message,
 		},
 	};
 	Ok(Bytes::from(
