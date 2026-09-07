@@ -872,3 +872,45 @@ there is no way to restore the label from the CRD today.
 * `glm-failover-test-retry` targets the whole Gateway, so it replays request
   bodies on 5xx for every route. Scope it to the GLM route before the model
   gate is reopened.
+
+### Patch A deployed — 2026-09-07
+
+The non-JSON-error fix (`~/agentgateway` commit `2f7c880d`,
+`fix(llm): never fail an exchange because an upstream error body is not JSON`)
+is built, pushed, and live on the dev pilot.
+
+- **Image**: `vcr.vngcloud.vn/60108-backend-worker/portal-external/dev/agentgateway:maas-v2-parity-2f7c880`
+  (digest `sha256:bf2099403b…`, 137 MB — identical size to the prior `f83e591c`)
+- **Roll mechanism**: NOT a GatewayConfiguration. The agentgateway controller
+  reads the dataplane image from three env vars on its own Deployment in
+  `agentgateway-system`: `AGW_PROXY_IMAGE_REGISTRY` / `AGW_PROXY_IMAGE_REPOSITORY`
+  / `AGW_PROXY_IMAGE_TAG`. Patching `AGW_PROXY_IMAGE_TAG` restarts the
+  controller, which reconciles the Gateway-owned `maas-v2-agw` Deployment to
+  the new image. Different from KGO dataplanes.
+- **Push credential**: `60108-khanghd` from the cluster's
+  `secret/vcr-registry-secret` in `agentgateway-system` (local docker login has
+  no push rights on this repo). Temp dockerconfig shredded after push.
+
+End-to-end verification, dead raw-IP primary at p0 (returns nginx 404 HTML),
+ModelArts fallback at p1, `health: response.code == 404` + `traffic.retry:
+codes: [404,500,502,503,504]`:
+
+| shape | before patch | after patch |
+|---|---|---|
+| `/v1/chat/completions` | 200 (passthrough arm — always worked) | 200, `retry.attempt=1` on modelarts |
+| `/v1/responses` | 200 (passthrough arm — always worked) | 200, `retry.attempt=1` on modelarts |
+| `/v1/messages` | **503 `failed to parse response: expected value at line 1 column 1`**, no retry | **200, `retry.attempt=1` on modelarts**, `stop_reason: end_turn` |
+
+The `/v1/messages` row is the fix: the same request that laundered the upstream
+404 into a gateway 503 (destroying the status for both retry and health) now
+synthesizes an Anthropic-shaped error from the status + lossy body, preserves
+the 404, and both knobs engage — retry supplies the second attempt, health
+evicts the dead target. Confirmed in the access log:
+`endpoint=api-ap-southeast-1.modelarts-maas.com:443 http.path=/v1/messages
+http.status=200 retry.attempt=1`.
+
+State left: targets restored to `fallback=p0 / primary=p1` (ModelArts first —
+the self-host still serves HTML errors that would exercise the patch on the
+primary path), retry codes back to `[500,502,503,504]`, deadprimary model
+deleted. The `glm-failover-test-retry` policy still targets the whole Gateway
+— scope it to the GLM route before reopening the model gate.
