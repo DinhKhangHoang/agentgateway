@@ -423,3 +423,57 @@ type PromptCachingConfig struct {
 	// +kubebuilder:default=0
 	CacheMessageOffset int `json:"cacheMessageOffset,omitempty"`
 }
+
+// WebSearchConfig configures web-search server-tool augmentation (FR-2.6).
+// When a request's tools[] contains a registered web_search server tool (e.g.
+// Anthropic `web_search_20250305` or OpenAI Responses `web_search_preview`),
+// the gateway reroutes the request to a web-search sidecar that runs the
+// search loop and emits x-ai-ws-* SSE markers, which the gateway reshapes into
+// the client's protocol. Mirrors Kong's model.server_tools_config / legacy
+// model.web_search block.
+type WebSearchConfig struct {
+	// sidecarUrl is the base URL of the web-search sidecar.
+	// The reroute sends requests to `<sidecarUrl>/v1/chat/completions`.
+	// Required to enable hijack; when unset, web_search is a no-op (bypass).
+	// +optional
+	SidecarURL string `json:"sidecarUrl,omitempty"`
+
+	// streaming selects whether the sidecar streams (data: SSE) or buffers
+	// (one JSON body). Defaults to true. When false, a client stream=true is
+	// downgraded to stream=false and the buffered shaper runs.
+	// +optional
+	// +kubebuilder:default=true
+	Streaming bool `json:"streaming,omitempty"`
+
+	// lazyDefer defers same-batch server tool calls to the next turn
+	// (Anthropic parity). Defaults to false. Forwarded to the sidecar via
+	// the x-ai-ws-config.lazy_defer marker.
+	// +optional
+	// +kubebuilder:default=false
+	LazyDefer bool `json:"lazyDefer,omitempty"`
+
+	// clientTools forwards the client's own function tools to the sidecar.
+	// Defaults to true. When false, only server-side web_search runs — a
+	// client tool call can never suspend the loop.
+	// +optional
+	// +kubebuilder:default=true
+	ClientTools bool `json:"clientTools,omitempty"`
+
+	// enabledTools lists server tools enabled on this target ({name, enabled}).
+	// Currently only "web_search" is registered. When empty, configuring
+	// web_search at all implies web_search enabled (legacy shape).
+	// +optional
+	EnabledTools []EnabledServerTool `json:"enabledTools,omitempty"`
+}
+
+// EnabledServerTool is a server tool enabled on a target. Mirrors a
+// model.server_tools[] entry.
+type EnabledServerTool struct {
+	// Registered tool name (e.g. "web_search").
+	Name string `json:"name"`
+
+	// Whether this tool is enabled on the target. Defaults to true when absent.
+	// +optional
+	// +kubebuilder:default=true
+	Enabled bool `json:"enabled,omitempty"`
+}

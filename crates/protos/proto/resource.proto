@@ -1395,6 +1395,35 @@ message BackendPolicySpec {
     map<string, string> model_aliases = 5;
     PromptCaching prompt_caching = 6;
 
+    // WebSearch configures web-search server-tool augmentation: when a request's
+    // tools[] contains a registered web_search server tool, reroute the request
+    // to a web-search sidecar that runs the search loop and emits x-ai-ws-* SSE
+    // markers. Mirrors Kong's model.server_tools_config / model.web_search block.
+    message WebSearch {
+      // sidecar_url is the base URL of the web-search sidecar. The reroute sends
+      // requests to <sidecar_url>/v1/chat/completions. Required to enable hijack.
+      optional string sidecar_url = 1;
+      // Whether the sidecar streams (data: SSE) or buffers (one JSON body).
+      // Defaults to true. When false, client stream=true is downgraded to false.
+      optional bool streaming = 2;
+      // lazy_defer defers same-batch server tool calls to the next turn
+      // (Anthropic parity). Defaults to false.
+      optional bool lazy_defer = 3;
+      // client_tools forwards the client's own function tools to the sidecar.
+      // Defaults to true. When false, only server-side web_search runs.
+      optional bool client_tools = 4;
+      // enabled_tools lists server tools enabled on this target ({name, enabled}).
+      // Currently only "web_search" is registered. When empty, configuring
+      // web_search at all implies web_search enabled (legacy shape).
+      repeated EnabledServerTool enabled_tools = 5;
+
+      message EnabledServerTool {
+        string name = 1;
+        optional bool enabled = 2;
+      }
+    }
+    WebSearch web_search = 9;
+
     // RouteType specifies how incoming requests should be processed
     // based on the URL path.
     enum RouteType {

@@ -2107,6 +2107,14 @@ type BackendAI struct {
 	// +optional
 	PromptCaching *PromptCachingConfig `json:"promptCaching,omitempty"`
 
+	// WebSearch configures web-search server-tool augmentation (FR-2.6).
+	// When a request's tools[] contains a registered web_search server tool,
+	// reroute the request to a web-search sidecar that runs the search loop
+	// and emits x-ai-ws-* SSE markers, which the gateway reshapes into the
+	// client's protocol. Mirrors Kong's model.server_tools_config block.
+	// +optional
+	WebSearch *WebSearchConfig `json:"webSearch,omitempty"`
+
 	// Rules for identifying the type of traffic to handle.
 	// The keys are URL path suffixes matched using ends-with comparison, for
 	// example `"/v1/chat/completions"`.

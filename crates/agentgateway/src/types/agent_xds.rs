@@ -1088,12 +1088,12 @@ fn convert_backend_ai_policy(
 			.collect(),
 		wildcard_patterns: Arc::new(Vec::new()), // Will be populated by compile_model_alias_patterns()
 		prompt_caching: ai.prompt_caching.as_ref().map(convert_prompt_caching),
+		web_search: ai.web_search.as_ref().map(convert_web_search),
 		routes: ai
 			.routes
 			.iter()
 			.map(|(k, v)| (strng::new(k), convert_route_type(*v, diagnostics)))
 			.collect(),
-		web_search: None,
 	};
 
 	// Compile wildcard patterns from model_aliases
@@ -3792,6 +3792,25 @@ fn convert_prompt_caching(
 		cache_tools: pc.cache_tools,
 		min_tokens: pc.min_tokens.map(|t| t as usize),
 		cache_message_offset: pc.cache_message_offset.unwrap_or(0) as usize,
+	}
+}
+
+fn convert_web_search(
+	ws: &proto::agent::backend_policy_spec::ai::WebSearch,
+) -> llm::policy::web_search::WebSearchConfig {
+	llm::policy::web_search::WebSearchConfig {
+		sidecar_url: ws.sidecar_url.clone(),
+		streaming: ws.streaming.unwrap_or(true),
+		lazy_defer: ws.lazy_defer.unwrap_or(false),
+		client_tools: ws.client_tools.unwrap_or(true),
+		enabled_tools: ws
+			.enabled_tools
+			.iter()
+			.map(|t| llm::policy::web_search::EnabledServerTool {
+				name: t.name.clone(),
+				enabled: t.enabled.unwrap_or(true),
+			})
+			.collect(),
 	}
 }
 

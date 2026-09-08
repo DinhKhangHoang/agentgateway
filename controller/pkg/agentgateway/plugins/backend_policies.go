@@ -824,6 +824,25 @@ func translateBackendAI(ctx PolicyCtx, agwPolicy *agentgateway.AgentgatewayPolic
 		}
 	}
 
+	if aiSpec.WebSearch != nil {
+		translatedAIPolicy.WebSearch = &api.BackendPolicySpec_Ai_WebSearch{}
+		if aiSpec.WebSearch.SidecarURL != "" {
+			translatedAIPolicy.WebSearch.SidecarUrl = &aiSpec.WebSearch.SidecarURL
+		}
+		translatedAIPolicy.WebSearch.Streaming = &aiSpec.WebSearch.Streaming
+		translatedAIPolicy.WebSearch.LazyDefer = &aiSpec.WebSearch.LazyDefer
+		translatedAIPolicy.WebSearch.ClientTools = &aiSpec.WebSearch.ClientTools
+		for _, t := range aiSpec.WebSearch.EnabledTools {
+			et := &api.BackendPolicySpec_Ai_WebSearch_EnabledServerTool{
+				Name: t.Name,
+			}
+			enabled := t.Enabled
+			et.Enabled = &enabled
+			translatedAIPolicy.WebSearch.EnabledTools = append(
+				translatedAIPolicy.WebSearch.EnabledTools, et)
+		}
+	}
+
 	if aiSpec.Routes != nil {
 		r := make(map[string]api.BackendPolicySpec_Ai_RouteType)
 		for path, routeType := range aiSpec.Routes {

@@ -19,7 +19,7 @@ use crate::http::auth::{BackendAuth, BackendAuthKind};
 use crate::http::backendtls::{LocalBackendTLS, ResolvedBackendTLS};
 use crate::http::transformation_cel::{LocalTransformationConfig, Transformation};
 use crate::http::{filters, health, retry, timeout, transformation_cel};
-use crate::llm::policy::{PromptCachingConfig, PromptGuard};
+use crate::llm::policy::{PromptCachingConfig, PromptGuard, web_search::WebSearchConfig};
 use crate::llm::{AIBackend, AIProvider, NamedAIProvider, anthropic, copilot, custom, openai};
 use crate::mcp::{FailureMode, McpAuthorization};
 use crate::store::{LocalWorkload, RequestPolicy};
@@ -456,6 +456,10 @@ pub struct LocalLLMProviderDefaults {
 	/// Cache-point insertion for LLM providers that support prompt caching.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	prompt_caching: Option<PromptCachingConfig>,
+	/// Web-search server-tool augmentation (FR-2.6): reroute to the web-search
+	/// sidecar when the request tools[] contains a registered web_search tool.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	web_search: Option<WebSearchConfig>,
 }
 
 #[apply(schema_de!)]
@@ -799,6 +803,9 @@ pub struct LocalLLMModels {
 	/// promptCaching configures cache point insertion for supported LLM providers.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	prompt_caching: Option<PromptCachingConfig>,
+	/// webSearch configures web-search server-tool augmentation (FR-2.6).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	web_search: Option<WebSearchConfig>,
 
 	/// matches specifies the conditions under which this model should be used in addition to matching the model name.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -961,6 +968,7 @@ impl LocalLLMModels {
 			self.health = self.health.take().or(defaults.health);
 			self.backend_tunnel = self.backend_tunnel.take().or(defaults.backend_tunnel);
 			self.prompt_caching = self.prompt_caching.take().or(defaults.prompt_caching);
+			self.web_search = self.web_search.take().or(defaults.web_search);
 		}
 		Ok(())
 	}
@@ -4245,7 +4253,7 @@ async fn convert_llm_config(
 			wildcard_patterns: Arc::new(vec![]),
 			prompt_caching: model_config.prompt_caching.clone(),
 			routes: Default::default(),
-			web_search: None,
+			web_search: model_config.web_search.clone(),
 		})));
 		let resolved_inline_policies = pols.clone();
 		let backend_with_policies = BackendWithPolicies {
