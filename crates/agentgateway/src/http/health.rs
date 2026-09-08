@@ -42,6 +42,59 @@ pub struct Eviction {
 	pub health_threshold: Option<f64>,
 }
 
+/// FR-5.1 active-probe configuration. Drives a background prober (modeled on
+/// the eviction worker, `loadbalancer.rs:751`) that periodically sends a tiny
+/// request to each endpoint and feeds the outcome into the same health/eviction
+/// machinery as real traffic.
+#[apply(schema_ser!)]
+#[derive(Default)]
+pub struct ActiveProbeConfig {
+	/// Interval between probe sweeps across all endpoints. Default 30s when
+	/// unset. Shorter intervals detect failures faster but add load to GPU
+	/// farms; the probe payload is tiny (`max_tokens: 1`) and deduped per
+	/// endpoint, so 30s is a reasonable default for large fleets.
+	#[serde(
+		default,
+		skip_serializing_if = "Option::is_none",
+		with = "serde_dur_option"
+	)]
+	pub interval: Option<Duration>,
+
+	/// Per-probe connect+read timeout. Default 5s when unset. A probe that
+	/// times out is recorded as a failure (same as a real-request timeout).
+	#[serde(
+		default,
+		skip_serializing_if = "Option::is_none",
+		with = "serde_dur_option"
+	)]
+	pub timeout: Option<Duration>,
+
+	/// Number of consecutive probe failures required before the prober evicts
+	/// an endpoint. Default 2 when unset (one blip should not evict; two
+	/// consecutive misses ~60s apart is a strong signal). This is independent
+	/// of `Eviction::consecutive_failures` (which counts real-request
+	/// failures); both feed the same eviction decision.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub consecutive_failures: Option<i32>,
+}
+
+impl ActiveProbeConfig {
+	/// Resolved probe interval (default 30s).
+	pub fn interval_or_default(&self) -> Duration {
+		self.interval.unwrap_or_else(|| Duration::from_secs(30))
+	}
+
+	/// Resolved per-probe timeout (default 5s).
+	pub fn timeout_or_default(&self) -> Duration {
+		self.timeout.unwrap_or_else(|| Duration::from_secs(5))
+	}
+
+	/// Resolved consecutive-failure threshold for probes (default 2).
+	pub fn consecutive_failures_or_default(&self) -> i32 {
+		self.consecutive_failures.unwrap_or(2)
+	}
+}
+
 /// Health policy: determines when a backend is unhealthy and how to evict it.
 ///
 /// Maps to the proto `Health` message containing an `unhealthy_condition` CEL expression
@@ -58,6 +111,17 @@ pub struct Policy {
 	/// Eviction settings. When absent, falls back to defaults.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub eviction: Option<Eviction>,
+
+	/// FR-5.1-5.3 active health probing. When set, a background prober
+	/// periodically sends a tiny request to each endpoint and records the
+	/// outcome via the same `Ewma::record()` + eviction path as real
+	/// traffic — so a dead backend is evicted *before* the next real request
+	/// hits it (proactive, not reactive). When absent, health is purely
+	/// reactive (driven only by real-request outcomes). Modeled on the
+	/// eviction worker (`loadbalancer.rs:751`): a `tokio::task::spawn` loop
+	/// with a generation kill-switch that exits on config reload.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub active_probe: Option<ActiveProbeConfig>,
 }
 
 pub(crate) const DEFAULT_EVICTION_SECS: u64 = 3;
@@ -158,6 +222,34 @@ pub struct LocalEviction {
 	pub health_threshold: Option<f64>,
 }
 
+/// Local/config active-probe sub-policy with durations as strings; mirrors
+/// `ActiveProbeConfig`.
+#[derive(Default)]
+#[apply(schema_de!)]
+pub struct LocalActiveProbeConfig {
+	/// Interval between probe sweeps (e.g. "30s").
+	#[serde(
+		default,
+		skip_serializing_if = "Option::is_none",
+		with = "serde_dur_option"
+	)]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+	pub interval: Option<Duration>,
+
+	/// Per-probe connect+read timeout (e.g. "5s").
+	#[serde(
+		default,
+		skip_serializing_if = "Option::is_none",
+		with = "serde_dur_option"
+	)]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+	pub timeout: Option<Duration>,
+
+	/// Consecutive probe failures before eviction.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub consecutive_failures: Option<i32>,
+}
+
 /// Local/config health policy with CEL as string; converted to Policy by compiling the expression.
 /// Mirrors the proto `Health` message structure.
 #[derive(Default)]
@@ -170,6 +262,9 @@ pub struct LocalHealthPolicy {
 	/// Settings for temporarily removing unhealthy backends.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub eviction: Option<LocalEviction>,
+	/// FR-5.1-5.3 active health probing settings.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub active_probe: Option<LocalActiveProbeConfig>,
 }
 
 impl TryFrom<LocalHealthPolicy> for Policy {
@@ -199,6 +294,12 @@ impl TryFrom<LocalHealthPolicy> for Policy {
 			None => None,
 		};
 
+		let active_probe = local.active_probe.map(|a| ActiveProbeConfig {
+			interval: a.interval,
+			timeout: a.timeout,
+			consecutive_failures: a.consecutive_failures,
+		});
+
 		let unhealthy_expression = match local.unhealthy_expression {
 			Some(s) if !s.trim().is_empty() => Some(Arc::new(Expression::new_strict(&s)?)),
 			_ => None,
@@ -206,6 +307,7 @@ impl TryFrom<LocalHealthPolicy> for Policy {
 		Ok(Policy {
 			unhealthy_expression,
 			eviction,
+			active_probe,
 		})
 	}
 }

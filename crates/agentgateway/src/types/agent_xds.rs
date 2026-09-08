@@ -2282,6 +2282,9 @@ fn convert_health(
 	health::Policy {
 		unhealthy_expression,
 		eviction,
+		// active_probe is configurable only via the local/CRD path today;
+		// the xDS proto `Health` message carries no active-probe fields.
+		active_probe: None,
 	}
 }
 

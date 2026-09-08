@@ -109,6 +109,12 @@ pub struct Store {
 
 	tx: tokio::sync::mpsc::UnboundedSender<BindEvent>,
 	rx: Option<tokio::sync::mpsc::UnboundedReceiver<BindEvent>>,
+
+	/// FR-5.1-5.3 per-backend generation counters for the active health prober.
+	/// Bumped in `insert_backend`/`remove_backend` so a prober spawned on a
+	/// prior reload exits before a new one starts. Read by the prober spawn
+	/// site in `make_backend_call` via `read_binds().prober_generations`.
+	prober_generations: Arc<crate::http::health_prober::ProberGenerationRegistry>,
 }
 
 #[derive(Debug)]
@@ -669,6 +675,7 @@ impl Store {
 			listener_change_rx,
 			tx,
 			rx: Some(rx),
+			prober_generations: Arc::new(Default::default()),
 		}
 	}
 
@@ -1564,6 +1571,12 @@ impl Store {
 		self.backends.get(r).cloned()
 	}
 
+	/// FR-5.1-5.3 prober generation registry. Read by `make_backend_call` to
+	/// dedup spawns and capture a kill-switch generation.
+	pub fn prober_generations(&self) -> &Arc<crate::http::health_prober::ProberGenerationRegistry> {
+		&self.prober_generations
+	}
+
 	#[instrument(
         level = Level::INFO,
         name="remove_bind",
@@ -1594,6 +1607,10 @@ impl Store {
         fields(bind),
     )]
 	pub fn remove_backend(&mut self, backend: BackendKey) {
+		// FR-5.1-5.3: bump so a prober for this backend exits; the Weak it holds
+		// will also go dead once the Arc is dropped below, but the generation
+		// bump fires first (synchronous, before the remove).
+		self.prober_generations.bump(&backend);
 		self.backends.remove(&backend);
 	}
 
@@ -1702,6 +1719,10 @@ impl Store {
 		{
 			preload_tokenizers()
 		}
+		// FR-5.1-5.3: bump the prober generation so any prober spawned for a
+		// prior version of this backend exits before a new one starts. Bumps
+		// even on first insert (no-op if no prober is registered for this key).
+		self.prober_generations.bump(&key);
 		let arc = Arc::new(b);
 		self.backends.insert(key, arc);
 	}

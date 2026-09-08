@@ -2222,6 +2222,42 @@ async fn make_backend_call(
 			.backend_policies
 			.register_cel_expressions(log.cel.ctx());
 	}
+
+	// FR-5.1-5.3: lazily spawn an active health prober for AI backends that
+	// configure `health.activeProbe`. The prober reuses this backend's live
+	// `EndpointSet` (via a Weak) and records probe outcomes through the same
+	// `finish_request` path as real traffic. Dedup via `try_claim_spawn` so
+	// concurrent first-requests don't double-spawn; the kill-switch is a
+	// generation counter bumped by the store on reload.
+	if let Backend::AI(name, _) = backend
+		&& let Some(health_policy) = backend_call.backend_policies.health.as_ref()
+		&& let Some(probe_cfg) = health_policy.active_probe.clone()
+	{
+		let backend_key = name.name.clone();
+		// Clone the Arc<registry> out of the read guard so the borrow ends
+		// before `inputs.clone()` is moved into the prober task.
+		let prober_generations = inputs.stores.read_binds().prober_generations().clone();
+		if let Some((generation, spawned_generation)) =
+			prober_generations.try_claim_spawn(&backend_key)
+		{
+			// Re-fetch the live Arc<BackendWithPolicies> from the store for the
+			// Weak. `backend` here is a borrowed clone (resolve_backend unwrapped
+			// the Arc), so the store is the source of truth for the live handle.
+			if let Some(live) = inputs.stores.read_binds().backend(&backend_key) {
+				prober_generations.mark_in_flight(&backend_key);
+				crate::http::health_prober::spawn(
+					inputs.clone(),
+					backend_key.clone(),
+					std::sync::Arc::downgrade(&live),
+					health_policy.clone(),
+					probe_cfg,
+					generation,
+					spawned_generation,
+					prober_generations,
+				);
+			}
+		}
+	}
 	// Apply auth before LLM request setup, so the providers can assume auth is in standardized header
 	// Apply auth as early as possible so any ext_proc or transformations won't be repeated on retries in case it fails.
 	let backend_info = auth::BackendInfo {
