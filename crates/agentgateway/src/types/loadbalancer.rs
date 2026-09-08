@@ -162,6 +162,26 @@ impl<T> EndpointGroup<T> {
 			self.sampler = build_sampler(&self.active);
 		}
 	}
+
+	/// True if the group has at least one active endpoint that is not currently
+	/// evicted (`evicted_until` is `None`). Used by `EndpointSet::best_bucket`
+	/// to advance to the next priority level as soon as every target at the
+	/// current level has been marked evicted, without waiting for the eviction
+	/// worker to drain its event channel and move the endpoints to `rejected`.
+	///
+	/// The async gap between `EndpointInfo::evict()` setting `evicted_until` and
+	/// the eviction worker moving the endpoint `active → rejected` is the window
+	/// this closes: during it the endpoint is still in `active`, so the old
+	/// `!active.is_empty()` predicate would park on a bucket whose only endpoint
+	/// is already evicted and route a request to it. Formal eviction (move to
+	/// `rejected`) still happens afterwards as before; this just stops
+	/// `best_bucket` from selecting a bucket in that transient state.
+	pub fn has_healthy_active(&self) -> bool {
+		self
+			.active
+			.iter()
+			.any(|(_, ewi)| ewi.info.evicted_until.load().is_none())
+	}
 }
 
 impl<T> Default for EndpointGroup<T> {
@@ -592,15 +612,27 @@ impl<T: Clone + Sync + Send + 'static> EndpointSet<T> {
 	}
 
 	fn best_bucket(&self) -> Arc<EndpointGroup<T>> {
-		// find the first bucket with healthy endpoints
+		// Walk priority buckets in order and pick the first with at least one
+		// active endpoint that is not currently evicted (evicted_until is None).
+		// This honors the virtualModel.failover priority contract — the next
+		// priority is used as soon as every target at the current priority is
+		// evicted — without waiting for the eviction worker to drain its event
+		// channel and move endpoints active → rejected. In that async window an
+		// endpoint is still in `active` with `evicted_until` set; the old
+		// `!active.is_empty()` predicate would park on such a bucket and route
+		// to an already-evicted target.
+		//
+		// If no bucket has a non-evicted active endpoint (total outage), fall
+		// back to the first bucket rather than hard-rejecting — select_fallback
+		// already reuses evicted endpoints as a last resort, and a hard reject
+		// belongs to NoHealthyEndpoints, not here.
 		self
 			.buckets
 			.iter()
 			.find_map(|x| {
 				let b = x.load_full();
-				if !b.active.is_empty() { Some(b) } else { None }
+				if b.has_healthy_active() { Some(b) } else { None }
 			})
-			// TODO: allow selecting across multiple buckets.
 			.unwrap_or_else(|| self.buckets[0].load_full())
 	}
 
@@ -1832,5 +1864,104 @@ mod tests {
 		assert_eq!(r.rank(&wl("_", "_", "_", "nodeA", "clusterA")), Some(2));
 		assert_eq!(r.rank(&wl("_", "_", "_", "nodeB", "clusterA")), Some(1));
 		assert_eq!(r.rank(&wl("_", "_", "_", "nodeA", "clusterB")), Some(0));
+	}
+
+	// --- best_bucket priority advancement ---
+
+	/// `best_bucket` walks priority buckets in order and returns the first with
+	/// a non-evicted active endpoint. With both buckets healthy it returns p0.
+	#[test]
+	fn best_bucket_picks_first_when_healthy() {
+		let eps = EndpointSet::new(vec![
+			vec![("p0".into(), "primary")],
+			vec![("p1".into(), "fallback")],
+		]);
+		let group = eps.best_bucket();
+		assert!(
+			group.active.contains_key(&Strng::from("p0")),
+			"should pick the p0 bucket when it has a non-evicted endpoint"
+		);
+	}
+
+	/// The gap G2 closes: once the only p0 endpoint is marked evicted
+	/// (`evicted_until` set synchronously by `finish_request`), `best_bucket`
+	/// must advance to p1 *before* the eviction worker drains its event channel
+	/// and moves the endpoint `active → rejected`. The old `!active.is_empty()`
+	/// predicate parked on p0 in this window and routed to an evicted target.
+	///
+	/// `evicted_until` is set synchronously inside `finish_request`; the
+	/// `active → rejected` move is async (a spawned `EvictionEvent` send +
+	/// worker processing). This test asserts the synchronous state, so it does
+	/// not yield to the runtime and does not depend on worker timing.
+	#[tokio::test]
+	async fn best_bucket_advances_when_priority_zero_evicted_before_drain() {
+		tokio::time::pause();
+		let p0_key: Strng = "p0".into();
+		let eps = EndpointSet::new(vec![
+			vec![(p0_key.clone(), "primary")],
+			vec![("p1".into(), "fallback")],
+		]);
+
+		// Sanity: p0 is selected first.
+		let p0_group = eps.best_bucket();
+		assert!(p0_group.active.contains_key(&p0_key));
+
+		// Evict the p0 endpoint. finish_request sets evicted_until synchronously
+		// (compare_and_swap on the AtomicOption) and spawns the EvictionEvent
+		// send; the endpoint is still in `active` until the worker processes it.
+		let info = p0_group.active.get(&p0_key).unwrap().info.clone();
+		let handle = eps.start_request(p0_key.clone(), &info);
+		handle.finish_request(
+			false,
+			Duration::from_millis(10),
+			Some(Duration::from_secs(1)),
+			None,
+		);
+
+		// Synchronous assertion: evicted_until is set, endpoint still in active,
+		// yet best_bucket must already advance to p1.
+		let stalled_group = eps.best_bucket();
+		assert!(
+			stalled_group.active.contains_key(&Strng::from("p1")),
+			"best_bucket should advance to p1 once p0's only endpoint is \
+			 evicted, even before the worker moves it to rejected"
+		);
+	}
+
+	/// `has_healthy_active` is false for a group whose only active endpoint has
+	/// `evicted_until` set, true once it is cleared (e.g. on uneviction).
+	#[tokio::test]
+	async fn has_healthy_active_tracks_evicted_until() {
+		tokio::time::pause();
+		let key: Strng = "ep".into();
+		let eps = EndpointSet::new(vec![vec![(key.clone(), "backend")]]);
+
+		let group = eps.best_bucket();
+		assert!(
+			group.has_healthy_active(),
+			"freshly created group with a non-evicted endpoint is healthy"
+		);
+
+		let info = group.active.get(&key).unwrap().info.clone();
+		let handle = eps.start_request(key.clone(), &info);
+		handle.finish_request(
+			false,
+			Duration::from_millis(10),
+			Some(Duration::from_secs(1)),
+			None,
+		);
+
+		// evicted_until is set synchronously; has_healthy_active must reflect it
+		// immediately, before the worker moves the endpoint to rejected.
+		let still_active_group = eps.best_bucket();
+		assert!(
+			still_active_group.active.contains_key(&key),
+			"endpoint should still be in active before the worker drains"
+		);
+		assert!(
+			!still_active_group.has_healthy_active(),
+			"has_healthy_active must be false once the only active endpoint has \
+			 evicted_until set, even before the async move to rejected"
+		);
 	}
 }
