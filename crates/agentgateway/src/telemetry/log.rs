@@ -2355,6 +2355,7 @@ mod tests {
 			params: llm::LLMRequestParams::default(),
 			prompt: None,
 			provider_state: None,
+			web_search: None,
 		};
 		let response = llm::LLMResponse {
 			input_tokens: Some(1_000_000),

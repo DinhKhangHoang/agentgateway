@@ -1700,7 +1700,10 @@ impl AIProvider {
 		// `WebSearchReroute` extension and redirects the connection to the
 		// sidecar — the `web-search-reroute.lua` equivalent. Bypass path
 		// (FR-7.10): no enabled triggers → no header, no extension, request
-		// stays on the normal upstream.
+		// stays on the normal upstream. `ws_ctx` (when set) is carried on the
+		// `LLMRequest` to `process_streaming`, which branches the response-side
+		// marker bridge + reshape.
+		let mut ws_ctx = None;
 		if let Some(p) = policies
 			&& let Some(cfg) = p.web_search.as_ref()
 			&& cfg.web_search_enabled()
@@ -1727,22 +1730,28 @@ impl AIProvider {
 						);
 					}
 				}
-				// Reroute signal: parsed sidecar target + flags. Consumed by
+				// Reroute signal: parsed sidecar target. Consumed by
 				// make_backend_call to swap backend_call.target + force the
-				// /v1/chat/completions path.
+				// /v1/chat/completions path. ws_ctx carries the response-side
+				// flags (streaming kill-switch + client_tools filter) on the
+				// LLMRequest to process_streaming (set here from the same
+				// `WebSearchConfig`, since `WebSearchReroute` is request-side
+				// only and cannot cross into the `agent-llm` crate).
 				if let Some(url) = cfg.sidecar_url.as_deref()
-					&& let Some(reroute) = policy::web_search::WebSearchReroute::from_sidecar_url(
-						url,
-						cfg.streaming,
-						cfg.client_tools,
-					)
+					&& let Some(reroute) =
+						policy::web_search::WebSearchReroute::from_sidecar_url(url)
 				{
+					ws_ctx = Some(agent_llm::WebSearchStreamContext {
+						streaming: cfg.streaming,
+						client_tools: cfg.client_tools,
+					});
 					parts.extensions.insert(reroute);
 				}
 			}
 		}
 
 		let mut llm_info = req.to_llm_request(self.provider(), tokenize)?;
+		llm_info.web_search = ws_ctx;
 		if original_format == InputFormat::Detect {
 			types::detect::amend_request_info(&mut llm_info, parts.uri.path());
 		}
@@ -2290,6 +2299,16 @@ impl AIProvider {
 		let model = req.request_model.clone();
 		let input_format = req.input_format;
 		let bedrock_tool_name_map = bedrock_tool_name_map(&req).cloned();
+		// FR-2.6 web-search: capture the response-side reroute signal before
+		// `req` moves into `llmresp`. `Some` only when `prepare_request`
+		// detected + enabled web_search triggers and injected the
+		// `WebSearchReroute` extension (the request-side target swap). When
+		// `Some`, the stream conversion branches to the sidecar marker bridge
+		// (`conversion::web_search::translate_stream`) instead of the normal
+		// upstream conversion, which also bypasses normal accounting (FR-7.10
+		// `preserve_mode` equivalent — the bridge records usage from the
+		// sidecar's `usage` marker).
+		let ws_ctx = req.web_search;
 		let chat_translation = if input_format.is_chat() {
 			Some(self.chat_translation(input_format, Some(&model))?)
 		} else {
@@ -2375,17 +2394,39 @@ impl AIProvider {
 			)
 		});
 		let translated = if input_format.is_chat() {
-			let translation = chat_translation.expect("chat translation was selected for chat input");
-			translation.stream(
-				resp,
-				ChatStreamContext {
-					buffer_limit: buffer,
-					logger,
-					model: model.to_string(),
-					log_content,
-					tool_name_map: bedrock_tool_name_map,
-				},
-			)
+			if let Some(ctx) = ws_ctx {
+				// FR-2.6 web-search reroute: the connection went to the Go
+				// sidecar, which emits data:-only SSE with web-search markers
+				// (no `event:` field). Branch to the marker bridge, which
+				// classifies each frame and drives the client protocol's event
+				// lifecycle. This bypasses the normal upstream conversion AND
+				// the normal accounting path (FR-7.10: the bridge records usage
+				// from the sidecar's `usage` marker; `logger` is passed in so
+				// usage/cost land on the same `LLMInfo` the normal path would
+				// have used).
+				resp.map(|b| {
+					agent_llm::conversion::web_search::translate_stream(
+						b,
+						buffer,
+						logger,
+						model.to_string(),
+						input_format,
+						ctx,
+					)
+				})
+			} else {
+				let translation = chat_translation.expect("chat translation was selected for chat input");
+				translation.stream(
+					resp,
+					ChatStreamContext {
+						buffer_limit: buffer,
+						logger,
+						model: model.to_string(),
+						log_content,
+						tool_name_map: bedrock_tool_name_map,
+					},
+				)
+			}
 		} else {
 			match (self, input_format) {
 				(AIProvider::Bedrock(_), InputFormat::Detect) => {

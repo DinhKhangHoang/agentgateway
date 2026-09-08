@@ -115,6 +115,7 @@ impl RequestType for Request {
 			params: LLMRequestParams::default(),
 			prompt: Default::default(),
 			provider_state: None,
+			web_search: None,
 		})
 	}
 

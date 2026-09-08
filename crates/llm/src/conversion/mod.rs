@@ -35,6 +35,7 @@ pub mod openai_compat;
 pub mod responses;
 pub mod vertex;
 pub mod vertex_gemini;
+pub mod web_search;
 
 #[cfg(test)]
 mod rerank_tests;

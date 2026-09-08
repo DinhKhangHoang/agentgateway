@@ -223,6 +223,7 @@ impl RequestType for Request {
 			},
 			prompt: Default::default(),
 			provider_state: None,
+			web_search: None,
 		};
 		Ok(llm)
 	}

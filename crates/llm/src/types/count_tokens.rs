@@ -45,6 +45,7 @@ impl RequestType for Request {
 			params: Default::default(),
 			prompt: Default::default(),
 			provider_state: None,
+			web_search: None,
 		})
 	}
 

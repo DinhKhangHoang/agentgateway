@@ -161,6 +161,29 @@ pub struct LLMRequest {
 	pub params: LLMRequestParams,
 	pub prompt: Option<Arc<Vec<SimpleChatCompletionMessage>>>,
 	pub provider_state: Option<ProviderState>,
+	/// FR-2.6 web-search reroute signal for the response-side reshape. Set by
+	/// the gateway's `prepare_request` when web_search triggers are detected
+	/// and enabled, carried through `RequestResult::Success` to
+	/// `process_streaming`, which branches the stream conversion to the
+	/// sidecar marker bridge when `Some`. `None` on the bypass path (FR-7.10)
+	/// and for non-web-search traffic. `LLMRequest` is not serialized, so this
+	/// needs no `#[serde]` guard.
+	pub web_search: Option<WebSearchStreamContext>,
+}
+
+/// Response-side context for a web-search-rerouted stream (FR-2.6). Carried on
+/// `LLMRequest.web_search`. The connection target swap happens on the request
+/// side (agentgateway's `WebSearchReroute`); this carries only what the
+/// response-side marker bridge + reshape needs: whether the sidecar streams
+/// (kill-switch: `false` downgrades to a buffered shaper) and whether the
+/// client's own function tools are forwarded (filters `delta.tool_calls`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WebSearchStreamContext {
+	/// Whether the sidecar streams (`data:` SSE) or buffers one JSON body.
+	/// Mirrors `model.web_search.streaming` (default true).
+	pub streaming: bool,
+	/// Forward the client's own function tools to the sidecar (default true).
+	pub client_tools: bool,
 }
 
 #[derive(Debug, Clone)]

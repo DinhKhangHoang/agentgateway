@@ -36,16 +36,17 @@ use crate::types::agent::Target;
 /// Carried on `http::request::Parts::extensions`; survives the
 /// `Request::from_parts(parts, …)` rebuild in `process_chat_request` and the
 /// LLM snapshot (which does NOT clear extensions), reaching the swap site.
+///
+/// Only the sidecar `target` is needed on the request side (the connection
+/// swap). The response-side flags (`streaming`, `client_tools`) travel on
+/// `LLMRequest.web_search` as a `WebSearchStreamContext` (set in
+/// `prepare_request` from the same `WebSearchConfig`), since `LLMRequest`
+/// lives in the `agent-llm` crate which cannot reference this `Target`-bearing
+/// type.
 #[derive(Clone, Debug)]
 pub struct WebSearchReroute {
 	/// Sidecar connection target (host:port), parsed from `sidecar_url`.
 	pub target: Target,
-	/// Whether the sidecar streams (`data:` SSE) or buffers. When `false`,
-	/// client `stream=true` is downgraded to `false` and the buffered shaper
-	/// runs. Mirrors `model.web_search.streaming` (default true).
-	pub streaming: bool,
-	/// Forward the client's own function tools to the sidecar (default true).
-	pub client_tools: bool,
 }
 
 impl WebSearchReroute {
@@ -54,11 +55,7 @@ impl WebSearchReroute {
 	/// carried here — the reroute always sends to `/v1/chat/completions`
 	/// (the sidecar speaks OpenAI Chat), applied at the swap site. Returns
 	/// `None` on an unparseable URL (treated as bypass — FR-7.10).
-	pub fn from_sidecar_url(
-		sidecar_url: &str,
-		streaming: bool,
-		client_tools: bool,
-	) -> Option<Self> {
+	pub fn from_sidecar_url(sidecar_url: &str) -> Option<Self> {
 		let url = url::Url::parse(sidecar_url).ok()?;
 		let host = url.host_str()?;
 		// `url` accepts `http:///path` with an empty host — reject it (bypass).
@@ -68,8 +65,6 @@ impl WebSearchReroute {
 		let port = url.port_or_known_default().unwrap_or(80);
 		Some(WebSearchReroute {
 			target: Target::from((host, port)),
-			streaming,
-			client_tools,
 		})
 	}
 }
@@ -396,29 +391,26 @@ mod tests {
 
 	#[test]
 	fn from_sidecar_url_parses_host_and_default_port() {
-		let r = WebSearchReroute::from_sidecar_url("http://sidecar.local", true, true)
+		let r = WebSearchReroute::from_sidecar_url("http://sidecar.local")
 			.expect("valid url");
 		assert!(matches!(r.target, crate::types::agent::Target::Hostname(h, 80) if h.as_str() == "sidecar.local"));
-		assert!(r.streaming);
-		assert!(r.client_tools);
 	}
 
 	#[test]
 	fn from_sidecar_url_parses_https_explicit_port() {
-		let r = WebSearchReroute::from_sidecar_url("https://sidecar:8443/path", false, false)
+		let r = WebSearchReroute::from_sidecar_url("https://sidecar:8443/path")
 			.expect("valid url");
 		assert!(matches!(r.target, crate::types::agent::Target::Hostname(h, 8443) if h.as_str() == "sidecar"));
-		assert!(!r.streaming);
 	}
 
 	#[test]
 	fn from_sidecar_url_rejects_invalid() {
 		// Malformed URL → None (bypass path).
-		assert!(WebSearchReroute::from_sidecar_url("not a url", true, true).is_none());
+		assert!(WebSearchReroute::from_sidecar_url("not a url").is_none());
 		// A URL with no host authority (mailto) → None.
-		assert!(WebSearchReroute::from_sidecar_url("mailto:foo@bar", true, true).is_none());
+		assert!(WebSearchReroute::from_sidecar_url("mailto:foo@bar").is_none());
 		// A non-http(s) scheme that url::Url still parses but carries no
 		// network host → None.
-		assert!(WebSearchReroute::from_sidecar_url("file:///tmp/x", true, true).is_none());
+		assert!(WebSearchReroute::from_sidecar_url("file:///tmp/x").is_none());
 	}
 }

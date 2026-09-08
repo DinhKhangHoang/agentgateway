@@ -19,6 +19,7 @@ fn llm_request_with_tokens(input_tokens: Option<u64>) -> LLMRequest {
 		params: Default::default(),
 		prompt: None,
 		provider_state: None,
+		web_search: None,
 	}
 }
 
@@ -307,6 +308,7 @@ async fn streaming_response_produces_exactly_one_report() {
 		params: Default::default(),
 		prompt: None,
 		provider_state: None,
+		web_search: None,
 	};
 
 	let input_bytes = fs::read(fixture_path("response/bedrock/basic.bin")).expect("fixture");
@@ -360,6 +362,7 @@ async fn non_streaming_response_produces_exactly_one_report() {
 		params: Default::default(),
 		prompt: None,
 		provider_state: None,
+		web_search: None,
 	};
 
 	let input_bytes = fs::read(fixture_path("response/completions/basic.json")).expect("fixture");
@@ -1143,6 +1146,7 @@ async fn process_response_routes_streaming_error_to_buffered_path() {
 		params: Default::default(),
 		prompt: None,
 		provider_state: None,
+		web_search: None,
 	};
 
 	let body = Body::from(error_json.as_bytes().to_vec());
@@ -1294,6 +1298,7 @@ async fn process_streaming_bedrock_completions_normalizes_sse_headers_and_done()
 				params: Default::default(),
 				prompt: None,
 				provider_state: None,
+		web_search: None,
 			},
 			LLMResponsePolicies::default(),
 			None,
@@ -1394,6 +1399,7 @@ fn setup_request_custom_path_override_wins_over_format_path() {
 		params: Default::default(),
 		prompt: None,
 		provider_state: None,
+		web_search: None,
 	};
 	let mut req = crate::http::tests_common::request(
 		"https://proxy.example.com/v1/chat/completions?trace=repro",
@@ -1427,6 +1433,7 @@ fn llm_request_for_path(request_model: &str) -> LLMRequest {
 		params: Default::default(),
 		prompt: None,
 		provider_state: None,
+		web_search: None,
 	}
 }
 
@@ -1579,6 +1586,7 @@ async fn bedrock_from_messages_stream_captures_completion() {
 			params: Default::default(),
 			prompt: None,
 			provider_state: None,
+			web_search: None,
 		},
 		response: LLMResponse::default(),
 	};
@@ -1636,6 +1644,7 @@ async fn bedrock_from_messages_stream_skips_completion_when_disabled() {
 			params: Default::default(),
 			prompt: None,
 			provider_state: None,
+			web_search: None,
 		},
 		response: LLMResponse::default(),
 	};
@@ -1690,6 +1699,7 @@ async fn bedrock_from_messages_stream_captures_tool_calls() {
 			params: Default::default(),
 			prompt: None,
 			provider_state: None,
+			web_search: None,
 		},
 		response: LLMResponse::default(),
 	};
@@ -1756,6 +1766,7 @@ async fn messages_passthrough_stream_captures_completion() {
 			params: Default::default(),
 			prompt: None,
 			provider_state: None,
+			web_search: None,
 		},
 		response: LLMResponse::default(),
 	};
@@ -1811,6 +1822,7 @@ async fn messages_passthrough_stream_skips_completion_when_disabled() {
 			params: Default::default(),
 			prompt: None,
 			provider_state: None,
+			web_search: None,
 		},
 		response: LLMResponse::default(),
 	};
@@ -1862,6 +1874,7 @@ async fn messages_passthrough_stream_captures_tool_calls() {
 			params: Default::default(),
 			prompt: None,
 			provider_state: None,
+			web_search: None,
 		},
 		response: LLMResponse::default(),
 	};
@@ -1924,6 +1937,7 @@ async fn responses_passthrough_stream_captures_completion_and_tool_calls() {
 			params: Default::default(),
 			prompt: None,
 			provider_state: None,
+			web_search: None,
 		},
 		response: LLMResponse::default(),
 	};
@@ -1991,6 +2005,7 @@ async fn responses_passthrough_stream_skips_completion_when_disabled() {
 			params: Default::default(),
 			prompt: None,
 			provider_state: None,
+			web_search: None,
 		},
 		response: LLMResponse::default(),
 	};

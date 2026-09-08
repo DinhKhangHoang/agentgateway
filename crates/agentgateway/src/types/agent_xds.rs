@@ -4491,6 +4491,7 @@ mod tests {
 				]
 				.into_iter()
 				.collect(),
+				web_search: None,
 			})),
 		};
 
