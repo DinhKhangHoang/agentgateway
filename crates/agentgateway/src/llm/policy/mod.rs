@@ -31,6 +31,7 @@ mod google_model_armor;
 mod moderation;
 mod pii;
 pub mod streaming_guardrails;
+pub(crate) mod web_search;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
@@ -146,6 +147,13 @@ pub struct Policy {
 	/// Prompt caching settings for providers that support cache markers.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub prompt_caching: Option<PromptCachingConfig>,
+	/// Web-search augmentation (FR-2.6): reroute requests carrying a registered
+	/// server tool to a sidecar that runs the search loop, and reshape the
+	/// sidecar's SSE markers back into the client's protocol. When absent or
+	/// when no server tool is detected, the request uses the normal upstream
+	/// with normal accounting (FR-7.10 bypass path).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub web_search: Option<web_search::WebSearchConfig>,
 	/// Route type overrides selected by request path suffix.
 	#[serde(default, skip_serializing_if = "SortedRoutes::is_empty")]
 	#[cfg_attr(

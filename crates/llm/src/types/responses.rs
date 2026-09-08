@@ -387,6 +387,16 @@ impl RequestType for Request {
 				.collect(),
 		);
 	}
+
+	fn web_search_triggers(&self) -> Vec<crate::web_search::WebSearchTrigger> {
+		// OpenAI Responses carries `tools[]` (including server tools like
+		// `web_search` / `web_search_preview`) inside the flattened `rest`
+		// JSON; the typed `Request` struct only models `input`/`model`/params.
+		let Some(tools) = self.rest.get("tools").and_then(|v| v.as_array()) else {
+			return Vec::new();
+		};
+		crate::web_search::detect(tools)
+	}
 }
 
 fn extract_output_messages(resp: &Response) -> Option<Vec<OutputMessage>> {

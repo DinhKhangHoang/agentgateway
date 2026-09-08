@@ -34,6 +34,7 @@ use crate::http::{
 use crate::llm::{
 	InputFormat, LLMInfo, LLMRequest, LLMResponse, RequestResult, RouteType, model_router,
 };
+use crate::llm::policy::web_search as ws;
 use crate::proxy::tcpproxy::TCPProxy;
 use crate::proxy::{
 	ProxyError, ProxyResponse, ProxyResponseReason, WaypointService, dtrace, resolve_simple_backend,
@@ -2483,14 +2484,34 @@ async fn make_backend_call(
 		};
 	if let Some(llm) = &backend_call.backend_policies.llm_provider {
 		llm.provider.strip_browser_cors_headers(&mut req);
+		// FR-2.6 web-search reroute (target-swap half): if prepare_request
+		// detected enabled web_search triggers, it inserted a `WebSearchReroute`
+		// signal into the request extensions. Swap the connection target to the
+		// sidecar and force the path to `/v1/chat/completions` (the sidecar
+		// speaks OpenAI Chat). Mirrors Kong's `web-search-reroute.lua`
+		// (`kong.service.set_target` + set_path). `apply_auto_hostname` below
+		// then rewrites the Host header to the sidecar — correct for the
+		// reroute. Late backend auth (AWS SigV4) is skipped for the sidecar:
+		// the sidecar is internal and carries its own `x-ai-ws-llm-auth-*`.
+		let ws_reroute = req.extensions().get::<ws::WebSearchReroute>().cloned();
+		if let Some(reroute) = &ws_reroute {
+			backend_call.target = reroute.target.clone();
+			http::modify_req_uri(&mut req, |uri| {
+				uri.path_and_query = Some(PathAndQuery::from_static("/v1/chat/completions"));
+				Ok(())
+			})
+			.map_err(ProxyError::Processing)?;
+		}
 		apply_auto_hostname(&mut req, &backend_call.target)?;
 		// Some auth types (AWS) need to be applied after all request processing
-		auth::apply_late_backend_auth(
-			backend_call.backend_policies.backend_auth.as_ref(),
-			&mut req,
-		)
-		.assert_size::<{ 2 * 1024 }>()
-		.await?;
+		if ws_reroute.is_none() {
+			auth::apply_late_backend_auth(
+				backend_call.backend_policies.backend_auth.as_ref(),
+				&mut req,
+			)
+			.assert_size::<{ 2 * 1024 }>()
+			.await?;
+		}
 	}
 	if let Backend::Internal(_, internal) = backend {
 		apply_internal_path(&mut req, internal).map_err(ProxyError::Processing)?;

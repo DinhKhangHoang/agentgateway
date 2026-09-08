@@ -4245,6 +4245,7 @@ async fn convert_llm_config(
 			wildcard_patterns: Arc::new(vec![]),
 			prompt_caching: model_config.prompt_caching.clone(),
 			routes: Default::default(),
+			web_search: None,
 		})));
 		let resolved_inline_policies = pols.clone();
 		let backend_with_policies = BackendWithPolicies {

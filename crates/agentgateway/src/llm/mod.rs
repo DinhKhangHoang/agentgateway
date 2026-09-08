@@ -1691,6 +1691,57 @@ impl AIProvider {
 			}
 		}
 
+		// FR-2.6 web-search reroute (request-side half): detect registered
+		// web_search server tools in the request `tools[]`, filter to those
+		// enabled on this target, and — when non-empty — inject the sidecar
+		// config header + a per-request reroute signal. Mirrors Kong's
+		// `web-search-prepare.lua` (detect + set `ctx.web_search.hijack`). The
+		// companion target-swap in `make_backend_call` (httpproxy.rs) reads the
+		// `WebSearchReroute` extension and redirects the connection to the
+		// sidecar — the `web-search-reroute.lua` equivalent. Bypass path
+		// (FR-7.10): no enabled triggers → no header, no extension, request
+		// stays on the normal upstream.
+		if let Some(p) = policies
+			&& let Some(cfg) = p.web_search.as_ref()
+			&& cfg.web_search_enabled()
+		{
+			let found = req.web_search_triggers();
+			let selected = cfg.select_enabled(&found);
+			if !selected.is_empty() {
+				let route_type = match original_format {
+					InputFormat::Completions => RouteType::Completions,
+					InputFormat::Messages => RouteType::Messages,
+					InputFormat::Responses => RouteType::Responses,
+					InputFormat::CountTokens => RouteType::AnthropicTokenCount,
+					_ => RouteType::Completions,
+				};
+				// x-ai-ws-config: {tools[], route_type, lazy_defer}. Only
+				// ENABLED tools are forwarded (web-search-prepare.lua:508-518).
+				if let Some(cfg_val) = cfg.ws_config_value(selected.iter().copied(), route_type) {
+					if let Ok(json) = serde_json::to_string(&cfg_val)
+						&& let Ok(hv) = HeaderValue::try_from(json)
+					{
+						parts.headers.insert(
+							HeaderName::from_static("x-ai-ws-config"),
+							hv,
+						);
+					}
+				}
+				// Reroute signal: parsed sidecar target + flags. Consumed by
+				// make_backend_call to swap backend_call.target + force the
+				// /v1/chat/completions path.
+				if let Some(url) = cfg.sidecar_url.as_deref()
+					&& let Some(reroute) = policy::web_search::WebSearchReroute::from_sidecar_url(
+						url,
+						cfg.streaming,
+						cfg.client_tools,
+					)
+				{
+					parts.extensions.insert(reroute);
+				}
+			}
+		}
+
 		let mut llm_info = req.to_llm_request(self.provider(), tokenize)?;
 		if original_format == InputFormat::Detect {
 			types::detect::amend_request_info(&mut llm_info, parts.uri.path());

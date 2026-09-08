@@ -252,6 +252,16 @@ impl RequestType for Request {
 		};
 		self.messages = message_prompts.into_iter().map(Into::into).collect();
 	}
+
+	fn web_search_triggers(&self) -> Vec<crate::web_search::WebSearchTrigger> {
+		// Anthropic carries `tools[]` (including server tools like
+		// `web_search_20250305`) inside the flattened `rest` JSON, since the
+		// typed `Request` struct only models `messages`/`system`/params.
+		let Some(tools) = self.rest.get("tools").and_then(|v| v.as_array()) else {
+			return Vec::new();
+		};
+		crate::web_search::detect(tools)
+	}
 }
 
 pub fn prepend_prompts_helper(

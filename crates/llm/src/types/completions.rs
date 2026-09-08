@@ -387,6 +387,19 @@ impl super::RequestType for Request {
 	fn set_messages(&mut self, messages: Vec<SimpleChatCompletionMessage>) {
 		self.messages = messages.into_iter().map(convert_message).collect();
 	}
+
+	fn web_search_triggers(&self) -> Vec<crate::web_search::WebSearchTrigger> {
+		// OpenAI Chat carries `tools[]` as raw JSON. After normalize-request
+		// rewrites a Responses/Anthropic request to Chat, server tools land
+		// here as entries with `type: "web_search_20250305"` etc. Native
+		// OpenAI chat server tools (`web_search_options`) are a separate field
+		// and do not appear in `tools[]`; the sidecar loop is chat-only and the
+		// Kong contract detects via `tools[].type`, so we mirror that here.
+		self.tools
+			.as_ref()
+			.map(|tools| crate::web_search::detect(tools))
+			.unwrap_or_default()
+	}
 }
 
 fn convert_message(r: SimpleChatCompletionMessage) -> RequestMessage {

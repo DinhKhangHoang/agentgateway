@@ -45,6 +45,19 @@ pub trait RequestType: Send + Sync {
 	fn to_llm_request(&self, provider: Strng, tokenize: bool) -> Result<LLMRequest, AIError>;
 	fn get_messages(&self) -> Vec<SimpleChatCompletionMessage>;
 	fn set_messages(&mut self, messages: Vec<SimpleChatCompletionMessage>);
+
+	/// Web-search server tools detected in this request's `tools[]`.
+	///
+	/// Returns one [`crate::web_search::WebSearchTrigger`] per registered
+	/// server-tool entry (matched on `type`, not `name`), mirroring
+	/// `kong/llm/server_tools/init.lua` `detect()`. The default is empty
+	/// (e.g. `count_tokens` requests carry no tools); the chat/messages/responses
+	/// request types override it to scan their `tools[]`. The policy layer
+	/// (`agentgateway::llm::policy::web_search::WebSearchConfig::select_enabled`)
+	/// filters these to those enabled on the target before hijacking.
+	fn web_search_triggers(&self) -> Vec<crate::web_search::WebSearchTrigger> {
+		Vec::new()
+	}
 }
 
 /// SimpleChatCompletionMessage is a simplified chat message

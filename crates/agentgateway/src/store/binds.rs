@@ -528,6 +528,10 @@ impl LLMRequestPolicies {
 			} else {
 				preferred.routes.clone()
 			},
+			web_search: preferred
+				.web_search
+				.clone()
+				.or_else(|| fallback.web_search.clone()),
 		})
 	}
 }

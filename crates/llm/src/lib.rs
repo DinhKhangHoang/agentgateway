@@ -20,6 +20,7 @@ pub mod parse;
 pub mod tokenizer;
 pub mod types;
 pub mod vertex;
+pub mod web_search;
 
 #[cfg(test)]
 mod golden_tests;
