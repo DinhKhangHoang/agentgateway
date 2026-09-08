@@ -1509,6 +1509,32 @@ message BackendPolicySpec {
     // This default lowers the backend's health score but does not trigger eviction on its own.
     string unhealthy_condition = 1;
     Eviction eviction = 2;
+    // FR-5.1-5.3 active health probing. Drives a background prober (modeled on
+    // the eviction worker, `loadbalancer.rs:751`) that periodically sends a
+    // tiny request to each endpoint and feeds the outcome into the same
+    // health/eviction machinery as real traffic — so a dead backend is evicted
+    // *before* the next real request hits it (proactive, not reactive).
+    // When unset, health is purely reactive (driven only by real-request
+    // outcomes). The prober is deduped per endpoint and carries a generation
+    // kill-switch so it exits on config reload.
+    ActiveProbe active_probe = 3;
+  }
+  // FR-5.1 active health probing configuration. Populated on `Health.active_probe`.
+  message ActiveProbe {
+    // Interval between probe sweeps across all endpoints. Default 30s when
+    // unset. Shorter intervals detect failures faster but add load to GPU
+    // farms; the probe payload is tiny (`max_tokens: 1`) and deduped per
+    // endpoint, so 30s is a reasonable default for large fleets.
+    google.protobuf.Duration interval = 1;
+    // Per-probe connect+read timeout. Default 5s when unset. A probe that
+    // times out is recorded as a failure (same as a real-request timeout).
+    google.protobuf.Duration timeout = 2;
+    // Number of consecutive probe failures required before the prober evicts
+    // an endpoint. Default 2 when unset (one blip should not evict; two
+    // consecutive misses ~60s apart is a strong signal). This is independent
+    // of `Eviction.consecutive_failures` (which counts real-request
+    // failures); both feed the same eviction decision.
+    optional int32 consecutive_failures = 3;
   }
   message BackendTLS {
     enum VerificationMode {
