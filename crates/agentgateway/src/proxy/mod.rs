@@ -367,6 +367,27 @@ impl ProxyError {
 			}
 		}
 
+		// FR-4.8: on a self-generated 503 (no healthy endpoints left after the
+		// soft-degrade fallback exhausted even the evicted set), advertise how
+		// long the client should wait before retrying. The value mirrors the
+		// health policy's base eviction duration (`health::DEFAULT_EVICTION_SECS`)
+		// — the same window after which an evicted endpoint re-enters the active
+		// pool, so a client that honors this header naturally lands on a
+		// recovered backend. We don't have the concrete policy in scope here
+		// (NoHealthyEndpoints is raised from several sites, not all AI-routed),
+		// so the configured default is the best signal available; operators who
+		// set a longer `eviction.duration` get a conservative (shorter) hint,
+		// which is safe — the only cost is a premature retry that re-503s.
+		// gRPC callers see `grpc-status: UNAVAILABLE` on an HTTP 200 body and
+		// back off via `traffic.retry` (FR-4.4), so `Retry-After` is omitted on
+		// that path (it is not valid on a 200).
+		if !is_grpc_request && matches!(self, ProxyError::NoHealthyEndpoints) {
+			let secs = crate::http::health::DEFAULT_EVICTION_SECS;
+			if let Ok(hv) = HeaderValue::try_from(secs.to_string()) {
+				rb = rb.header(hyper::header::RETRY_AFTER, hv);
+			}
+		}
+
 		if let Some(grpc_status) = grpc_status {
 			return rb
 				.status(StatusCode::OK)
@@ -548,6 +569,9 @@ mod tests {
 			response.headers().get("grpc-message").unwrap(),
 			"no%20healthy%20backends"
 		);
+		// gRPC callers back off via traffic.retry (FR-4.4), not Retry-After;
+		// the body is HTTP 200, on which Retry-After is not valid.
+		assert!(response.headers().get(hyper::header::RETRY_AFTER).is_none());
 	}
 
 	#[test]
@@ -560,6 +584,36 @@ mod tests {
 			"text/plain"
 		);
 		assert!(response.headers().get("grpc-status").is_none());
+	}
+
+	#[test]
+	fn http_no_healthy_endpoints_carries_retry_after() {
+		// FR-4.8: the self-generated 503 (reject gate after the soft-degrade
+		// fallback exhausted even the evicted set) advertises a Retry-After
+		// matching the health policy's base eviction duration, so a client
+		// that honors it lands on a recovered backend.
+		let response = ProxyError::NoHealthyEndpoints.into_response_with_grpc(false);
+
+		assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+		let retry_after = response
+			.headers()
+			.get(hyper::header::RETRY_AFTER)
+			.expect("Retry-After header on NoHealthyEndpoints 503");
+		assert_eq!(
+			retry_after.to_str().unwrap(),
+			crate::http::health::DEFAULT_EVICTION_SECS.to_string()
+		);
+	}
+
+	#[test]
+	fn http_retry_after_scoped_to_no_healthy_endpoints() {
+		// Other SERVICE_UNAVAILABLE causes (e.g. DNS resolution failure) must
+		// not inherit the NoHealthyEndpoints Retry-After — the eviction window
+		// only describes endpoint health, not upstream call/DNS failures.
+		let dns_failed = ProxyError::DnsResolution.into_response_with_grpc(false);
+
+		assert_eq!(dns_failed.status(), StatusCode::SERVICE_UNAVAILABLE);
+		assert!(dns_failed.headers().get(hyper::header::RETRY_AFTER).is_none());
 	}
 
 	#[test]

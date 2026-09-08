@@ -60,7 +60,7 @@ pub struct Policy {
 	pub eviction: Option<Eviction>,
 }
 
-const DEFAULT_EVICTION_SECS: u64 = 3;
+pub(crate) const DEFAULT_EVICTION_SECS: u64 = 3;
 
 impl Policy {
 	pub fn register_expressions(&self, ctx: &mut ContextBuilder) {
