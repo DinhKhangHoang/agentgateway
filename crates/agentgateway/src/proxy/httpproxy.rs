@@ -2229,11 +2229,14 @@ async fn make_backend_call(
 	// `finish_request` path as real traffic. Dedup via `try_claim_spawn` so
 	// concurrent first-requests don't double-spawn; the kill-switch is a
 	// generation counter bumped by the store on reload.
-	if let Backend::AI(name, _) = backend
+	if let Backend::AI(_, _) = backend
 		&& let Some(health_policy) = backend_call.backend_policies.health.as_ref()
 		&& let Some(probe_cfg) = health_policy.active_probe.clone()
 	{
-		let backend_key = name.name.clone();
+		// Store key is `Backend::name()` = "{namespace}/{name}" (agent.rs:1655).
+		// Using `name.name` alone omits the namespace prefix and misses the lookup
+		// for LLM-listener backends (namespace ""), so the prober never spawned.
+		let backend_key = backend.name();
 		// Clone the Arc<registry> out of the read guard so the borrow ends
 		// before `inputs.clone()` is moved into the prober task.
 		let prober_generations = inputs.stores.read_binds().prober_generations().clone();
