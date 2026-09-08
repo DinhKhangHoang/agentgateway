@@ -94,7 +94,11 @@ where
 		if let Some(data) = &data
 			&& data.as_ref() == b"[DONE]"
 		{
-			return f(SseJsonEvent::Done)
+			// Emit the translator's terminal events, then the raw [DONE]
+			// terminator (matching `json_transform`'s [DONE] handling at
+			// line 62-66). Without this, every `json_transform_multi` caller
+			// would silently lose the [DONE] frame the client expects.
+			let mut out: Vec<Bytes> = f(SseJsonEvent::Done)
 				.into_iter()
 				.filter_map(|(event_name, item)| {
 					let json_bytes = serde_json::to_vec(&item).ok()?;
@@ -104,6 +108,11 @@ where
 					))
 				})
 				.collect();
+			out.push(crate::parse::encode_sse_event(
+				"",
+				Bytes::from_static(b"[DONE]"),
+			));
+			return out;
 		}
 		let Some(data) = data else {
 			return vec![];

@@ -109,9 +109,11 @@ fn classify(frame: &Value) -> Marker {
 	if frame.get("x-ai-ws-tool-round").is_some() {
 		return Marker::ToolRound(frame.get("x-ai-ws-tool-round").cloned().unwrap_or(Value::Null));
 	}
-	// usage-only trailing frame: choices is empty/array and usage present
-	if frame.get("usage").is_some() {
-		return Marker::Usage(frame.clone());
+	// usage-only trailing frame: choices is empty/array and usage present.
+	// Carry just the `usage` object (not the whole frame) so `record_usage`
+	// and the per-protocol usage mappers can read its fields directly.
+	if let Some(usage) = frame.get("usage").cloned() {
+		return Marker::Usage(usage);
 	}
 	// in-stream error
 	if let Some(err) = frame.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str())
@@ -168,7 +170,10 @@ fn chat_shaper(
 			match ev {
 				parse::sse::SseJsonEvent::Done => {
 					// FR-7.10 fallback: no usage marker AND text emitted AND not
-					// yet accounted → ceil(text_chars/4) token estimate.
+					// yet accounted → ceil(text_chars/4) token estimate. The
+					// raw [DONE] terminator is emitted by `json_transform_multi`
+					// itself (see parse/sse.rs Done arm), so the closure returns
+					// no events here.
 					if !accounted && text_chars > 0 {
 						let est = ((text_chars as f64) / 4.0).ceil() as u64;
 						log.update(|r| {
@@ -177,7 +182,7 @@ fn chat_shaper(
 						});
 						accounted = true;
 					}
-					vec![("", Value::String("[DONE]".to_string()))]
+					vec![]
 				},
 				parse::sse::SseJsonEvent::Data(Ok(frame)) => match classify(&frame) {
 					Marker::TextDelta(t) => {

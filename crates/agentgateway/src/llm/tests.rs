@@ -2334,6 +2334,365 @@ async fn non_json_upstream_error_preserves_status_for_retry_and_health() {
 	assert_eq!(parsed["type"], json!("error"));
 }
 
+// ---------------------------------------------------------------------------
+// G3 web-search sidecar marker bridge (FR-2.6) — probes P13/P16/P17.
+//
+// These tests exercise `agent_llm::conversion::web_search::translate_stream`,
+// the response-side reshape of a sidecar SSE stream into the client's own
+// protocol. They live here (not in agent-llm's own test module) because the
+// real log-capture harness — `AmendOnDrop` + `test_helpers::policy_client()` —
+// is agentgateway-crate; agent-llm's `StreamingUsageGuard::default()` is a
+// Noop that silently discards all `update()` calls, so a P17 metering
+// assertion run there would pass vacuously.
+// ---------------------------------------------------------------------------
+
+/// Build a sidecar SSE body from a sequence of `data:` JSON payloads (each
+/// already a JSON string) + a trailing `[DONE]`. Matches the sidecar contract
+/// (data:-only, no `event:` field).
+fn sidecar_sse(frames: &[&str]) -> Body {
+	let mut out = String::new();
+	for f in frames {
+		out.push_str("data: ");
+		out.push_str(f);
+		out.push_str("\n\n");
+	}
+	out.push_str("data: [DONE]\n\n");
+	Body::from(out.into_bytes())
+}
+
+/// Standard log-capture harness: an `AsyncLog` + `AmendOnDrop` logger wired to
+/// a no-op policy client, with `llmresp` stored. Returns `(log2, logger)` so
+/// the caller can drain the body then `log2.take()` the final `LLMInfo`.
+fn ws_log_harness(input_format: InputFormat) -> (AsyncLog<llm::LLMInfo>, agent_llm::StreamingUsageGuard) {
+	let log = AsyncLog::default();
+	let log2 = log.clone();
+	let llmresp = LLMInfo {
+		request: LLMRequest {
+			input_tokens: None,
+			input_format,
+			cache_convention: CacheTokenConvention::pending(),
+			request_model: "test-model".into(),
+			provider: "test-provider".into(),
+			streaming: true,
+			params: Default::default(),
+			prompt: None,
+			provider_state: None,
+			web_search: Some(WebSearchStreamContext {
+				streaming: true,
+				client_tools: true,
+			}),
+		},
+		response: LLMResponse::default(),
+	};
+	log.store(Some(llmresp));
+	let logger = AmendOnDrop::new(
+		log,
+		LLMResponsePolicies::default(),
+		None,
+		None,
+		crate::test_helpers::policy_client(),
+	)
+	.into_llm();
+	(log2, logger)
+}
+
+const WS_TEXT_DELTA: &str =
+	r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"hello world"}}]}"#;
+const WS_TOOL_ROUND: &str =
+	r#"{"x-ai-ws-tool-round":{"tool_use_id":"t1","tool_name":"web_search","input":{"query":"rust async"}}}"#;
+const WS_USAGE: &str =
+	r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":2}}}"#;
+const WS_PROVENANCE: &str =
+	r#"{"x-ai-ws-provenance":{"rounds":[],"citations":[{"n":1,"url":"https://rust-lang.org","title":"Rust"}],"route_type":"llm/v1/chat"}}"#;
+const WS_IN_STREAM_ERROR: &str = r#"{"error":{"message":"sidecar blew up"}}"#;
+
+/// P13: augmentation transparency — a rerouted stream reshapes text deltas +
+/// tool-round markers + provenance into the client's protocol without dropping
+/// the assistant text, and the tool-round (executed server-side) is invisible
+/// to the chat client (dropped, not emitted as a broken chunk).
+#[tokio::test]
+async fn p13_chat_shaper_augmentation_is_transparent() {
+	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_TOOL_ROUND, WS_USAGE, WS_PROVENANCE]);
+	let (log2, logger) = ws_log_harness(InputFormat::Completions);
+	let body = agent_llm::conversion::web_search::translate_stream(
+		body,
+		1024 * 1024,
+		logger,
+		"test-model".to_string(),
+		InputFormat::Completions,
+		WebSearchStreamContext {
+			streaming: true,
+			client_tools: true,
+		},
+	);
+	let out = body.collect().await.unwrap().to_bytes();
+	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
+
+	// The assistant text survives the reshape.
+	assert!(
+		text.contains("hello world"),
+		"chat shaper must pass the text delta through; got:\n{text}"
+	);
+	// The executed tool-round marker is NOT forwarded to the chat client
+	// (it would arrive as a malformed chunk the client can't classify).
+	assert!(
+		!text.contains("x-ai-ws-tool-round"),
+		"chat shaper must drop executed tool-round markers; got:\n{text}"
+	);
+	// Provenance surfaces as a sources delta.content.
+	assert!(
+		text.contains("rust-lang.org"),
+		"chat shaper must emit provenance sources; got:\n{text}"
+	);
+	// Chat frames are data:-only (no `event:` field — the sidecar speaks chat,
+	// and the chat client expects chat-shaped SSE).
+	assert!(
+		!text.contains("event: "),
+		"chat shaper must not emit SSE event: fields; got:\n{text}"
+	);
+	// Stream terminates with [DONE].
+	assert!(
+		text.ends_with("data: [DONE]\n\n"),
+		"chat shaper must end with [DONE]; got:\n{text}"
+	);
+	// P17 (usage marker path): the sidecar's usage was recorded.
+	let info = log2.take().expect("log should have LLMInfo");
+	assert_eq!(info.response.input_tokens, Some(10));
+	assert_eq!(info.response.output_tokens, Some(5));
+	assert_eq!(info.response.total_tokens, Some(15));
+	assert_eq!(info.response.cached_input_tokens, Some(3));
+	assert_eq!(info.response.reasoning_tokens, Some(2));
+}
+
+/// P13 (Anthropic): the messages shaper drives the full Anthropic event
+/// lifecycle — `message_start`, text content-block lifecycle, and a terminal
+/// `message_delta`+`message_stop` — from sidecar markers.
+#[tokio::test]
+async fn p13_messages_shaper_drives_anthropic_lifecycle() {
+	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_USAGE, WS_PROVENANCE]);
+	let (log2, logger) = ws_log_harness(InputFormat::Messages);
+	let body = agent_llm::conversion::web_search::translate_stream(
+		body,
+		1024 * 1024,
+		logger,
+		"test-model".to_string(),
+		InputFormat::Messages,
+		WebSearchStreamContext {
+			streaming: true,
+			client_tools: true,
+		},
+	);
+	let out = body.collect().await.unwrap().to_bytes();
+	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
+
+	assert!(
+		text.contains("event: message_start\ndata: "),
+		"messages shaper must open with message_start; got:\n{text}"
+	);
+	assert!(
+		text.contains("event: content_block_start\ndata: "),
+		"messages shaper must open a text content block; got:\n{text}"
+	);
+	assert!(
+		text.contains("\"text\":\"hello world\""),
+		"messages shaper must emit the text delta; got:\n{text}"
+	);
+	assert!(
+		text.contains("event: content_block_stop\ndata: "),
+		"messages shaper must close the text block; got:\n{text}"
+	);
+	assert!(
+		text.contains("event: message_delta\ndata: "),
+		"messages shaper must emit the terminal message_delta; got:\n{text}"
+	);
+	assert!(
+		text.contains("event: message_stop\ndata: "),
+		"messages shaper must emit message_stop; got:\n{text}"
+	);
+	// Citations from provenance ride on a citations_delta.
+	assert!(
+		text.contains("citations_delta"),
+		"messages shaper must emit citations_delta from provenance; got:\n{text}"
+	);
+	// P17: usage recorded on the LLMInfo. Anthropic input_tokens = prompt -
+	// cached (OpenAI prompt_tokens INCLUDES cached; Anthropic reports
+	// non-cached + a separate cache_read_input_tokens).
+	let info = log2.take().expect("log should have LLMInfo");
+	assert_eq!(info.response.input_tokens, Some(10));
+	assert_eq!(info.response.output_tokens, Some(5));
+	assert_eq!(info.response.total_tokens, Some(15));
+}
+
+/// P16: an in-stream sidecar error (`{"error":{"message":...}}`) is surfaced
+/// per protocol, never laundered into an empty success. Chat emits an error
+/// frame; Responses emits `response.failed`; Messages surfaces it via the
+/// terminal stop_reason (no clean `end_turn`).
+#[tokio::test]
+async fn p16_in_stream_error_is_surfaced_not_laundered() {
+	// Chat: the error frame is forwarded, then [DONE].
+	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_IN_STREAM_ERROR]);
+	let (_log2, logger) = ws_log_harness(InputFormat::Completions);
+	let body = agent_llm::conversion::web_search::translate_stream(
+		body,
+		1024 * 1024,
+		logger,
+		"test-model".to_string(),
+		InputFormat::Completions,
+		WebSearchStreamContext {
+			streaming: true,
+			client_tools: true,
+		},
+	);
+	let out = body.collect().await.unwrap().to_bytes();
+	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
+	assert!(
+		text.contains(r#""error":{"message":"sidecar blew up"}"#),
+		"chat shaper must surface the in-stream error frame; got:\n{text}"
+	);
+
+	// Responses: the in-stream error becomes a response.failed terminal event.
+	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_IN_STREAM_ERROR]);
+	let (_log2, logger) = ws_log_harness(InputFormat::Responses);
+	let body = agent_llm::conversion::web_search::translate_stream(
+		body,
+		1024 * 1024,
+		logger,
+		"test-model".to_string(),
+		InputFormat::Responses,
+		WebSearchStreamContext {
+			streaming: true,
+			client_tools: true,
+		},
+	);
+	let out = body.collect().await.unwrap().to_bytes();
+	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
+	assert!(
+		text.contains("response.failed"),
+		"responses shaper must emit response.failed for an in-stream error; got:\n{text}"
+	);
+	assert!(
+		text.contains("sidecar blew up"),
+		"responses shaper must carry the error message; got:\n{text}"
+	);
+
+	// Messages: the in-stream error surfaces as a terminal message_delta with
+	// stop_reason absent (not a clean end_turn). The stream still closes with
+	// message_stop (no empty success).
+	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_IN_STREAM_ERROR]);
+	let (_log2, logger) = ws_log_harness(InputFormat::Messages);
+	let body = agent_llm::conversion::web_search::translate_stream(
+		body,
+		1024 * 1024,
+		logger,
+		"test-model".to_string(),
+		InputFormat::Messages,
+		WebSearchStreamContext {
+			streaming: true,
+			client_tools: true,
+		},
+	);
+	let out = body.collect().await.unwrap().to_bytes();
+	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
+	assert!(
+		text.contains("event: message_delta\ndata: "),
+		"messages shaper must still emit a terminal message_delta on error; got:\n{text}"
+	);
+	assert!(
+		text.contains("\"stop_reason\":null"),
+		"messages shaper must surface the in-stream error as stop_reason=null (not end_turn); got:\n{text}"
+	);
+	assert!(
+		!text.contains("\"stop_reason\":\"end_turn\""),
+		"messages shaper must NOT launder an in-stream error into a clean end_turn; got:\n{text}"
+	);
+}
+
+/// P17: metering on the bypass-equivalent path. When the sidecar sends text
+/// deltas but NO `usage` marker, the bridge falls back to ceil(text_chars/4)
+/// for output_tokens. When the `usage` marker IS present, it is authoritative.
+/// (The true bypass path — web_search configured but not triggered — never
+/// reaches this bridge; that path keeps normal upstream accounting. This test
+/// covers the bridge's own metering for the no-usage-marker case.)
+#[tokio::test]
+async fn p17_metering_usage_marker_and_eof_fallback() {
+	// Authoritative: usage marker present → exact tokens recorded.
+	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_USAGE]);
+	let (log2, logger) = ws_log_harness(InputFormat::Completions);
+	let body = agent_llm::conversion::web_search::translate_stream(
+		body,
+		1024 * 1024,
+		logger,
+		"test-model".to_string(),
+		InputFormat::Completions,
+		WebSearchStreamContext {
+			streaming: true,
+			client_tools: true,
+		},
+	);
+	let _ = body.collect().await.unwrap();
+	let info = log2.take().expect("log should have LLMInfo");
+	assert_eq!(
+		info.response.output_tokens,
+		Some(5),
+		"usage marker must be authoritative for output_tokens"
+	);
+
+	// Fallback: no usage marker, text present → ceil(text_chars/4).
+	// "hello world" = 11 chars → ceil(11/4) = 3.
+	let body = sidecar_sse(&[WS_TEXT_DELTA]);
+	let (log2, logger) = ws_log_harness(InputFormat::Completions);
+	let body = agent_llm::conversion::web_search::translate_stream(
+		body,
+		1024 * 1024,
+		logger,
+		"test-model".to_string(),
+		InputFormat::Completions,
+		WebSearchStreamContext {
+			streaming: true,
+			client_tools: true,
+		},
+	);
+	let _ = body.collect().await.unwrap();
+	let info = log2.take().expect("log should have LLMInfo");
+	assert_eq!(
+		info.response.output_tokens,
+		Some(3),
+		"EOF fallback must estimate output_tokens = ceil(text_chars/4) = 3 for 11 chars"
+	);
+}
+
+/// P13 (client_tools filter): when `client_tools=false`, the sidecar's
+/// forwarded client tool-call suspension signal is stripped (the client asked
+/// us not to forward its own function tools).
+#[tokio::test]
+async fn p13_client_tools_false_strips_forwarded_tool_calls() {
+	let tool_call_frame = r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#;
+	let body = sidecar_sse(&[WS_TEXT_DELTA, tool_call_frame, WS_USAGE]);
+	let (_log2, logger) = ws_log_harness(InputFormat::Completions);
+	let body = agent_llm::conversion::web_search::translate_stream(
+		body,
+		1024 * 1024,
+		logger,
+		"test-model".to_string(),
+		InputFormat::Completions,
+		WebSearchStreamContext {
+			streaming: true,
+			client_tools: false,
+		},
+	);
+	let out = body.collect().await.unwrap().to_bytes();
+	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
+	assert!(
+		!text.contains("tool_calls"),
+		"client_tools=false must strip the forwarded tool-call suspension; got:\n{text}"
+	);
+	// The text delta still passes through.
+	assert!(
+		text.contains("hello world"),
+		"text must still pass through with client_tools=false; got:\n{text}"
+	);
+}
+
 /// `unparseable_upstream_body` lives in `agent_llm::conversion`; its tests live
 /// here because `cargo test -p agent-llm` does not build on this branch (stale
 /// `golden_tests.rs`), so an in-crate test module would never run.
