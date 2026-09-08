@@ -53,7 +53,7 @@ def build(rows):
 
 def emitted(models, rep=None, insecure_tls=None):
     creds = g.Credentials()
-    return g.emit_models(models, creds, "ns", "gw", "gwns", insecure_tls)
+    return g.emit_models(models, creds, "ns", "gw", "gwns", rep or g.Report(), insecure_tls)
 
 
 # --------------------------------------------------------------------------
@@ -428,3 +428,109 @@ def test_chains_differing_only_by_an_unconsumable_knob_still_emit():
     assert "api-ap-southeast-1.modelarts-maas.com" in out
     assert "Rows sharing a backend declare DIFFERENT Kong fallback chains" \
         not in rep.losses
+
+
+# --------------------------------------------------------------------------
+# canonical surface (AgentgatewayModel) failover emission -- G1
+# --------------------------------------------------------------------------
+
+def test_canonical_model_with_a_fallback_chain_emits_virtualmodel_failover():
+    # The defect this pins: emit_models emitted a flat `spec.provider` for every
+    # model and NEVER wrote `virtualModel`, so a model with a Kong `fallbacks`
+    # chain was silently single-target on the canonical surface. The original
+    # rationale ("virtualModel.weighted.targets[] needs weights") was false --
+    # `virtualModel.failover.targets[].priority` takes order, not weight.
+    rep, _, models = build(_glm_rows())
+    # The prefixed match only (the bare-name variant is a second model).
+    glms = [m for m in models if m["match"] == "z-ai/glm-5.2"]
+    assert glms, "fixture no longer produces a prefixed GLM canonical model"
+    out = emitted(glms, rep)
+    assert "virtualModel:" in out, "no virtualModel emitted for a failover model"
+    assert "failover:" in out
+    # primary is priority 0, fallback increments -- NOT the live inversion.
+    assert "priority: 0" in out
+    assert "priority: 1" in out
+    # the public virtual model carries the client-facing match, not a target's.
+    assert "z-ai/glm-5.2" in out
+    assert "visibility: Public" in out
+    # concrete target CRs are Internal and carry the health policy (knob 1).
+    assert "visibility: Internal" in out
+    assert "health:" in out
+    assert "unhealthyCondition:" in out
+    assert "consecutiveFailures: 1" in out
+
+
+def test_canonical_failover_primary_is_priority_zero_not_the_live_inversion():
+    # The live hand-applied GLM failover has the targets INVERTED: fallback=p0,
+    # primary=p1. The CRD says lower values are preferred, so that routes to the
+    # fallback first. The generator must NOT reproduce the inversion: primary
+    # (Kong's first target, the model's own provider) is priority 0.
+    rep, _, models = build(_glm_rows())
+    glms = [m for m in models if m["match"] == "z-ai/glm-5.2"]
+    out = emitted(glms, rep)
+    docs = [d for d in out.split("\n---\n") if "virtualModel:" in d]
+    assert len(docs) == 1, "exactly one public virtual model per failover model"
+    virt = docs[0]
+    # The primary concrete target name appears with priority 0; the fallback
+    # with priority 1. Assert by ordering: the first target block is priority 0
+    # and names the primary.
+    assert "priority: 0" in virt
+    primary_name = glms[0]["name"] + "-primary"
+    assert primary_name in virt, "primary target %r not referenced by the virtual model" % primary_name
+    # The primary's priority-0 line must precede the fallback's priority-1 line.
+    assert virt.index("priority: 0") < virt.index("priority: 1")
+
+
+def test_canonical_failover_emits_concrete_targets_for_each_fallback():
+    rep, _, models = build(_glm_rows())
+    glms = [m for m in models if m["match"] == "z-ai/glm-5.2"]
+    out = emitted(glms, rep)
+    docs = [d for d in out.split("\n---\n") if "kind: AgentgatewayModel" in d]
+    # one public virtual + one primary concrete + one fallback concrete = 3
+    assert sum("virtualModel:" in d for d in docs) == 1
+    assert sum("visibility: Internal" in d for d in docs) == 2, \
+        "expected a concrete target CR for the primary and for each fallback"
+    # the fallback target carries the ModelArts base URL.
+    assert any("api-ap-southeast-1.modelarts-maas.com" in d for d in docs), \
+        "fallback concrete target not emitted with its upstream base"
+
+
+def test_emit_failover_policies_emits_one_gateway_wide_retry_policy():
+    rep, _, models = build(_glm_rows())
+    glms = [m for m in models if m["match"] == "z-ai/glm-5.2"]
+    pol = g.emit_failover_policies(glms, "ns", "gw", rep)
+    pol_text = "\n".join(pol) if isinstance(pol, list) else pol
+    assert "kind: AgentgatewayPolicy" in pol_text
+    assert "traffic:" in pol_text and "retry:" in pol_text
+    assert "attempts: %d" % g.RETRY_ATTEMPTS in pol_text
+    assert "maxReplayBytes: " in pol_text
+    assert "kind: Gateway" in pol_text, "retry policy targets the Gateway, not a model"
+    # exactly one policy per Gateway, even with multiple failover models.
+    n = pol_text.count("kind: AgentgatewayPolicy")
+    assert n == 1
+
+
+def test_canonical_model_without_a_fallback_chain_still_emits_flat_provider():
+    # Non-failover models are unchanged: one Public concrete model, no virtualModel.
+    rep, _, models = build([row(P + r"openai/gpt-4o/v1/chat/completions\$",
+                                 chat_cfg("gpt-4o"))])
+    out = emitted(models, rep)
+    assert "virtualModel:" not in out
+    assert "visibility: Public" in out
+    assert "provider: OpenAI" in out
+
+
+def test_canonical_rows_disagreeing_on_the_chain_emit_no_failover_and_say_so():
+    # model_fallback_chain records the disagreement on the rep passed to
+    # emit_models, so the emit call must use the SAME rep the test inspects.
+    rep, _, models = build(_glm_rows(responses_fallback="https://other.example/v1/chat/completions"))
+    glms = [m for m in models if m["match"] == "z-ai/glm-5.2"]
+    out = emitted(glms, rep)
+    assert "virtualModel:" not in out, \
+        "disagreeing chains must not emit a failover virtual model"
+    # emitted() builds its own rep when none is passed -- pass build()'s rep so
+    # the disagreement it records is the one inspected here.
+    out_same_rep = g.emit_models(glms, g.Credentials(), "ns", "gw", "gwns", rep)
+    assert "Rows sharing a canonical model declare DIFFERENT Kong fallback chains" in rep.losses
+    # a flat concrete model is still emitted so the model is reachable (no failover).
+    assert "kind: AgentgatewayModel" in out_same_rep
