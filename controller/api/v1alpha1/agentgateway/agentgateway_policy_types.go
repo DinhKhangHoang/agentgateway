@@ -299,6 +299,14 @@ type Health struct {
 	// Settings for evicting unhealthy backends.
 	// +optional
 	Eviction *BackendEviction `json:"eviction,omitempty"`
+
+	// FR-5.1-5.3 active health probe settings. Drives a background prober
+	// that periodically sends a tiny request to each endpoint and feeds the
+	// outcome into the same health/eviction machinery as real traffic — so a
+	// dead backend is evicted before the next real request hits it. When
+	// unset, health is purely reactive (real-request outcomes only).
+	// +optional
+	ActiveProbe *BackendActiveProbe `json:"activeProbe,omitempty"`
 }
 
 // Settings for evicting unhealthy backends.
@@ -345,6 +353,43 @@ type BackendEviction struct {
 	// +kubebuilder:validation:Maximum=100
 	// +optional
 	HealthThreshold *int32 `json:"healthThreshold,omitempty"`
+}
+
+// Settings for active health probing of backends. Drives a background prober
+// (modeled on the eviction worker) that periodically sends a tiny request to
+// each endpoint and records the outcome via the same health/eviction path as
+// real traffic, so a dead backend is evicted proactively. The prober is
+// deduped per endpoint and carries a generation kill-switch that exits on
+// config reload.
+type BackendActiveProbe struct {
+	// Interval between probe sweeps across all endpoints. Default 30s when
+	// unset. Shorter intervals detect failures faster but add load; the probe
+	// payload is tiny (`max_tokens: 1`) and deduped per endpoint.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:XValidation:rule="matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')",message="invalid duration value"
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('1s')",message="probeInterval must be at least 1 second"
+	// +kubebuilder:default="30s"
+	// +optional
+	Interval *metav1.Duration `json:"interval,omitempty"`
+
+	// Per-probe connect+read timeout. Default 5s when unset. A probe that
+	// times out is recorded as a failure (same as a real-request timeout).
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:XValidation:rule="matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')",message="invalid duration value"
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('1s')",message="probeTimeout must be at least 1 second"
+	// +kubebuilder:default="5s"
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// Number of consecutive probe failures required before the prober evicts
+	// an endpoint. Default 2 when unset. This is independent of
+	// `BackendEviction.consecutiveFailures` (which counts real-request
+	// failures); both feed the same eviction decision.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ConsecutiveFailures *int32 `json:"consecutiveFailures,omitempty"`
 }
 
 // +kubebuilder:validation:AtLeastOneFieldSet

@@ -2282,9 +2282,11 @@ fn convert_health(
 	health::Policy {
 		unhealthy_expression,
 		eviction,
-		// active_probe is configurable only via the local/CRD path today;
-		// the xDS proto `Health` message carries no active-probe fields.
-		active_probe: None,
+		active_probe: h.active_probe.as_ref().map(|ap| health::ActiveProbeConfig {
+			interval: ap.interval.map(convert_duration),
+			timeout: ap.timeout.map(convert_duration),
+			consecutive_failures: ap.consecutive_failures,
+		}),
 	}
 }
 
@@ -5423,5 +5425,38 @@ mod tests {
 
 		assert_eq!(metrics.add.len(), 0);
 		Ok(())
+	}
+
+	#[test]
+	fn convert_health_active_probe() {
+		use crate::types::proto::agent::backend_policy_spec::{ActiveProbe, Health};
+		let mut diag = Diagnostics::default();
+		let h = Health {
+			unhealthy_condition: String::new(),
+			eviction: None,
+			active_probe: Some(ActiveProbe {
+				interval: Some(prost_types::Duration { seconds: 60, nanos: 0 }),
+				timeout: Some(prost_types::Duration { seconds: 10, nanos: 0 }),
+				consecutive_failures: Some(3),
+			}),
+		};
+		let p = convert_health(&h, &mut diag);
+		let ap = p.active_probe.expect("active_probe should be set");
+		assert_eq!(ap.interval, Some(Duration::from_secs(60)));
+		assert_eq!(ap.timeout, Some(Duration::from_secs(10)));
+		assert_eq!(ap.consecutive_failures, Some(3));
+	}
+
+	#[test]
+	fn convert_health_active_probe_unset() {
+		use crate::types::proto::agent::backend_policy_spec::Health;
+		let mut diag = Diagnostics::default();
+		let h = Health {
+			unhealthy_condition: String::new(),
+			eviction: None,
+			active_probe: None,
+		};
+		let p = convert_health(&h, &mut diag);
+		assert!(p.active_probe.is_none());
 	}
 }

@@ -329,6 +329,23 @@ func translateBackendHealthPolicy(policy *agentgateway.AgentgatewayPolicy) (*api
 		}
 	}
 
+	var activeProbeProto *api.BackendPolicySpec_ActiveProbe
+	if healthPolicy.ActiveProbe != nil {
+		var intervalPB *durationpb.Duration
+		if healthPolicy.ActiveProbe.Interval != nil {
+			intervalPB = durationpb.New(healthPolicy.ActiveProbe.Interval.Duration)
+		}
+		var timeoutPB *durationpb.Duration
+		if healthPolicy.ActiveProbe.Timeout != nil {
+			timeoutPB = durationpb.New(healthPolicy.ActiveProbe.Timeout.Duration)
+		}
+		activeProbeProto = &api.BackendPolicySpec_ActiveProbe{
+			Interval:            intervalPB,
+			Timeout:             timeoutPB,
+			ConsecutiveFailures: healthPolicy.ActiveProbe.ConsecutiveFailures,
+		}
+	}
+
 	var unhealthyCondition string
 	if healthPolicy.UnhealthyCondition != nil {
 		unhealthyCondition = *castCELPtr(healthPolicy.UnhealthyCondition, func(expr agentgateway.CELExpression) {
@@ -339,6 +356,7 @@ func translateBackendHealthPolicy(policy *agentgateway.AgentgatewayPolicy) (*api
 	p := &api.BackendPolicySpec_Health{
 		UnhealthyCondition: unhealthyCondition,
 		Eviction:           evictionProto,
+		ActiveProbe:        activeProbeProto,
 	}
 	evictPolicy := &api.Policy{
 		Key:  policy.Namespace + "/" + policy.Name + healthPolicySuffix,

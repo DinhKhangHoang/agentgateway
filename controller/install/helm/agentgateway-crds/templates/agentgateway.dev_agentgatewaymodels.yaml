@@ -1536,6 +1536,49 @@ spec:
                     description: Health checking and eviction behavior for this model
                       provider.
                     properties:
+                      activeProbe:
+                        description: |-
+                          FR-5.1-5.3 active health probe settings. Drives a background prober
+                          that periodically sends a tiny request to each endpoint and feeds the
+                          outcome into the same health/eviction machinery as real traffic — so a
+                          dead backend is evicted before the next real request hits it. When
+                          unset, health is purely reactive (real-request outcomes only).
+                        properties:
+                          consecutiveFailures:
+                            description: |-
+                              Number of consecutive probe failures required before the prober evicts
+                              an endpoint. Default 2 when unset. This is independent of
+                              `BackendEviction.consecutiveFailures` (which counts real-request
+                              failures); both feed the same eviction decision.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          interval:
+                            default: 30s
+                            description: |-
+                              Interval between probe sweeps across all endpoints. Default 30s when
+                              unset. Shorter intervals detect failures faster but add load; the probe
+                              payload is tiny (`max_tokens: 1`) and deduped per endpoint.
+                            maxLength: 32
+                            type: string
+                            x-kubernetes-validations:
+                            - message: invalid duration value
+                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                            - message: probeInterval must be at least 1 second
+                              rule: duration(self) >= duration('1s')
+                          timeout:
+                            default: 5s
+                            description: |-
+                              Per-probe connect+read timeout. Default 5s when unset. A probe that
+                              times out is recorded as a failure (same as a real-request timeout).
+                            maxLength: 32
+                            type: string
+                            x-kubernetes-validations:
+                            - message: invalid duration value
+                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                            - message: probeTimeout must be at least 1 second
+                              rule: duration(self) >= duration('1s')
+                        type: object
                       eviction:
                         description: Settings for evicting unhealthy backends.
                         properties:
