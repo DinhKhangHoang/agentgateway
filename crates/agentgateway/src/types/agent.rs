@@ -1247,6 +1247,13 @@ pub struct RouteBackend {
 	// Inline policies ("filters") of the route backend
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub inline_policies: Vec<BackendTrafficPolicy>,
+	// Store key the backend was fetched under (`RouteBackendTarget::Backend(key)`),
+	// used by the prober spawn gate. xDS-ingested backends are keyed by the proto
+	// `.key` (3-segment `ns/name/targetName`), NOT by `Backend::name()` (2-seg).
+	// `None` when the backend wasn't fetched from the store (local-config path
+	// keys by `name()`, so the spawn gate falls back to `backend.name()`).
+	#[serde(skip)]
+	pub store_key: Option<BackendKey>,
 }
 
 #[allow(unused)]

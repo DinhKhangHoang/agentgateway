@@ -1351,6 +1351,7 @@ impl HTTPProxy {
 			MustSnapshot::new(&mut req_opt),
 			Some(log),
 			response_policies,
+			selected_backend.store_key.as_ref(),
 		)
 		.assert_size::<{ 7 * 1024 }>();
 
@@ -1420,11 +1421,19 @@ fn resolve_backend(b: RouteBackendReference, pi: &ProxyInputs) -> Result<RouteBa
 		.target
 		.as_backend_reference()
 		.ok_or(ProxyError::InvalidBackendType)?;
+	// Capture the store key the backend was fetched under. On the xDS path this
+	// is `BackendReference::Backend(proto.key)` (3-seg), which is what
+	// `insert_xds_backend` keys `self.backends` + `prober_generations` by.
+	let store_key = match &backend_ref {
+		BackendReference::Backend(key) => Some(key.clone()),
+		_ => None,
+	};
 	let backend = super::resolve_backend(&backend_ref, pi)?;
 	Ok(RouteBackend {
 		weight: b.weight,
 		backend,
 		inline_policies: b.inline_policies,
+		store_key,
 	})
 }
 
@@ -1965,11 +1974,27 @@ async fn make_backend_call(
 	mut req: MustSnapshot<'_>,
 	mut log: Option<&mut RequestLog>,
 	response_policies: &mut ResponsePolicies,
+	// Store key the backend was fetched under (from `RouteBackendTarget::Backend(key)`),
+	// used by the prober spawn gate to look up the live `Arc<BackendWithPolicies>`.
+	// `Backend::name()` is NOT the store key on the xDS path (`insert_xds_backend` keys by
+	// the proto `.key` = `ns/name/targetName`, a 3-segment key, while `name()` is 2-seg
+	// `ns/name`). `None` for call sites that hand-build a `Backend` with no store entry
+	// (e.g. `internal_call_with_policies`), where no prober can spawn anyway.
+	backend_store_key: Option<&BackendKey>,
 ) -> Result<Response, ProxyResponse> {
 	if let Backend::LLMRouter(_, router) = backend {
 		let resolved = match router.resolve(&mut req).await {
 			model_router::ResolveResult::DirectResponse(resp) => return Ok(resp),
 			model_router::ResolveResult::Backend(resolved) => resolved,
+		};
+		// Extract the store key the concrete backend was registered under, so
+		// the recursive call's prober spawn gate looks it up by the right key.
+		// `resolved.backend.target` is `RouteBackendTarget::Backend(key)` on the
+		// xDS path (set from `BackendReference::Backend(proto.key)`). Clone it
+		// out so the borrow on `resolved.backend` ends before we move it below.
+		let resolved_store_key = match &resolved.backend.target {
+			RouteBackendTarget::Backend(key) => Some(key.clone()),
+			_ => None,
 		};
 		let selected_backend = resolve_backend(resolved.backend, inputs.as_ref())?;
 		let concrete_policies = get_backend_policies(
@@ -1990,6 +2015,7 @@ async fn make_backend_call(
 			req,
 			log,
 			response_policies,
+			resolved_store_key.as_ref(),
 		))
 		.await;
 	}
@@ -2233,10 +2259,14 @@ async fn make_backend_call(
 		&& let Some(health_policy) = backend_call.backend_policies.health.as_ref()
 		&& let Some(probe_cfg) = health_policy.active_probe.clone()
 	{
-		// Store key is `Backend::name()` = "{namespace}/{name}" (agent.rs:1655).
-		// Using `name.name` alone omits the namespace prefix and misses the lookup
-		// for LLM-listener backends (namespace ""), so the prober never spawned.
-		let backend_key = backend.name();
+		// Store key: prefer the key the backend was fetched under (the xDS proto
+		// `.key`, a 3-segment `ns/name/targetName`), since `insert_xds_backend`
+		// keys `self.backends` + `prober_generations` by that — NOT by
+		// `Backend::name()` (2-seg `ns/name`). Fall back to `backend.name()`
+		// for the local-config path (`insert_bind` keys by `name()`).
+		let backend_key = backend_store_key
+			.cloned()
+			.unwrap_or_else(|| backend.name());
 		// Clone the Arc<registry> out of the read guard so the borrow ends
 		// before `inputs.clone()` is moved into the prober task.
 		let prober_generations = inputs.stores.read_binds().prober_generations().clone();
@@ -4166,6 +4196,8 @@ impl PolicyClient {
 					// As such, we ensure we ONLY call this with Simple backend type which cannot be MCP/LLM
 					None,
 					&mut Default::default(),
+					// No store key: the backend is hand-built, not fetched from the store.
+					None,
 				)
 				.assert_size::<{ 7 * 1024 }>(),
 			)
