@@ -2074,7 +2074,7 @@ async fn make_backend_call(
 				strategy: BalanceStrategy::P2c,
 				route: RouteIdentifier::default(),
 			};
-			let (provider, handle) = match ai.select_provider(&SelectionContext::none()) {
+			let (provider, handle) = match ai.select_provider(&SelectionContext::none(), None) {
 				Some(v) => {
 					inputs.metrics.balance_picks.get_or_create(&balance_labels).inc();
 					v

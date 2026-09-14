@@ -72,6 +72,7 @@ impl AIBackend {
 	pub fn select_provider(
 		&self,
 		ctx: &SelectionContext<'_>,
+		selection_state: Option<&crate::store::SelectionState>,
 	) -> Option<(Arc<NamedAIProvider>, ActiveHandle)> {
 		let iter = self.providers.iter();
 		let index = iter.index();
@@ -89,8 +90,9 @@ impl AIBackend {
 					index.get_index(idx).expect("index already checked");
 				(endpoint.clone(), info)
 			})
-			.max_by(|(_, a), (_, b)| {
-				composed_score(&*a, ctx).total_cmp(&composed_score(&*b, ctx))
+			.max_by(|(ep_a, a), (ep_b, b)| {
+				composed_score(ep_a.name.as_str(), &*a, ctx, selection_state)
+					.total_cmp(&composed_score(ep_b.name.as_str(), &*b, ctx, selection_state))
 			});
 		let (ep, ep_info) = best?;
 		let handle = self.providers.start_request(ep.name.clone(), ep_info);
