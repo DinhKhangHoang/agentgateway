@@ -1519,6 +1519,22 @@ message BackendPolicySpec {
     // kill-switch so it exits on config reload.
     ActiveProbe active_probe = 3;
   }
+  // G6: sticky affinity policy.
+  message Sticky {
+    // CEL expression resolving to the affinity key. Defaults to api-key sha256.
+    string key = 1;
+    // How long a pin survives after last use. Default 10m.
+    google.protobuf.Duration ttl = 2;
+  }
+  // G7: capacity caps policy.
+  message Capacity {
+    // Max concurrent in-flight requests per endpoint.
+    optional int32 inflight_cap = 1;
+    // Per-endpoint tokens-per-minute budget.
+    optional int64 tpm_per_minute = 2;
+    // Hold-rejected duration. Default 3s.
+    google.protobuf.Duration cooldown = 3;
+  }
   // FR-5.1 active health probing configuration. Populated on `Health.active_probe`.
   message ActiveProbe {
     // Interval between probe sweeps across all endpoints. Default 30s when
@@ -1703,6 +1719,8 @@ message BackendPolicySpec {
     BackendTunnel backend_tunnel = 16;
     TrafficPolicySpec.ExternalAuth ext_authz = 17;
     McpGuardrails mcp_guardrails = 18;
+    Sticky sticky = 19;
+    Capacity capacity = 20;
   }
 }
 

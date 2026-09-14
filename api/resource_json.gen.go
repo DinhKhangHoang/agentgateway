@@ -1524,6 +1524,28 @@ func (this *BackendPolicySpec_Health) UnmarshalJSON(b []byte) error {
 	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
 }
 
+// MarshalJSON is a custom marshaler for BackendPolicySpec_Sticky
+func (this *BackendPolicySpec_Sticky) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_Sticky
+func (this *BackendPolicySpec_Sticky) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for BackendPolicySpec_Capacity
+func (this *BackendPolicySpec_Capacity) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_Capacity
+func (this *BackendPolicySpec_Capacity) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
 // MarshalJSON is a custom marshaler for BackendPolicySpec_ActiveProbe
 func (this *BackendPolicySpec_ActiveProbe) MarshalJSON() ([]byte, error) {
 	str, err := ResourceMarshaler.MarshalToString(this)

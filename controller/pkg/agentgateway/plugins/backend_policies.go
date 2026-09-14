@@ -37,6 +37,8 @@ const (
 	mcpAuthenticationPolicySuffix = ":mcp-authentication"
 	mcpGuardrailsPolicySuffix     = ":mcp-guardrails"
 	healthPolicySuffix            = ":health"
+	stickyPolicySuffix            = ":sticky"
+	capacityPolicySuffix          = ":capacity"
 )
 
 func translateAwsSessionTags(tags []agentgateway.AwsSessionTag) []*api.AwsSessionTag {
@@ -177,6 +179,14 @@ func translateBackendPolicyToAgw(
 
 	if s := backend.Health; s != nil {
 		appendPolicy("backendHealth")(translateBackendHealthPolicy(policy))
+	}
+
+	if s := backend.Sticky; s != nil {
+		appendPolicy("backendSticky")(translateBackendStickyPolicy(policy))
+	}
+
+	if s := backend.Capacity; s != nil {
+		appendPolicy("backendCapacity")(translateBackendCapacityPolicy(policy))
 	}
 
 	if s := backend.Transformation; s != nil {
@@ -371,6 +381,66 @@ func translateBackendHealthPolicy(policy *agentgateway.AgentgatewayPolicy) (*api
 	}
 
 	return evictPolicy, errors.Join(errs...)
+}
+
+func translateBackendStickyPolicy(policy *agentgateway.AgentgatewayPolicy) (*api.Policy, error) {
+	var errs []error
+
+	sp := policy.Spec.Backend.Sticky
+
+	var key string
+	if sp.Key != nil {
+		key = *castCELPtr(sp.Key, func(expr agentgateway.CELExpression) {
+			errs = append(errs, fmt.Errorf("backend sticky key is not a valid CEL expression: %s", expr))
+		})
+	}
+
+	var ttlPB *durationpb.Duration
+	if sp.TTL != nil {
+		ttlPB = durationpb.New(sp.TTL.Duration)
+	}
+
+	p := &api.BackendPolicySpec_Sticky{
+		Key: key,
+		Ttl: ttlPB,
+	}
+	return &api.Policy{
+		Key:  policy.Namespace + "/" + policy.Name + stickyPolicySuffix,
+		Name: TypedResourceName(wellknown.AgentgatewayPolicyGVK.Kind, policy),
+		Kind: &api.Policy_Backend{
+			Backend: &api.BackendPolicySpec{
+				Kind: &api.BackendPolicySpec_Sticky_{
+					Sticky: p,
+				},
+			},
+		},
+	}, errors.Join(errs...)
+}
+
+func translateBackendCapacityPolicy(policy *agentgateway.AgentgatewayPolicy) (*api.Policy, error) {
+	cp := policy.Spec.Backend.Capacity
+
+	var cooldownPB *durationpb.Duration
+	if cp.Cooldown != nil {
+		cooldownPB = durationpb.New(cp.Cooldown.Duration)
+	}
+
+	p := &api.BackendPolicySpec_Capacity{
+		InflightCap:   cp.InflightCap,
+		TpmPerMinute:  cp.TpmPerMinute,
+		Cooldown:      cooldownPB,
+	}
+	return &api.Policy{
+		Key:  policy.Namespace + "/" + policy.Name + capacityPolicySuffix,
+		Name: TypedResourceName(wellknown.AgentgatewayPolicyGVK.Kind, policy),
+		Kind: &api.Policy_Backend{
+			Backend: &api.BackendPolicySpec{
+				Kind: &api.BackendPolicySpec_Capacity_{
+					Capacity: p,
+				},
+			},
+		},
+	}, nil
 }
 
 func translateBackendTCP(ctx PolicyCtx, policy *agentgateway.AgentgatewayPolicy, name string) (*api.Policy, error) {

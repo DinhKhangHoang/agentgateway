@@ -2256,6 +2256,15 @@ fn backend_policy_from_proto(
 			BackendTrafficPolicy::RequestMirror(mirrors)
 		},
 		Some(bps::Kind::Health(h)) => BackendTrafficPolicy::Health(convert_health(h, diagnostics)),
+		Some(bps::Kind::Sticky(s)) => BackendTrafficPolicy::Sticky(http::sticky::Policy {
+			key: (!s.key.is_empty()).then(|| Strng::from(s.key.as_str())),
+			ttl: s.ttl.clone().map(convert_duration),
+		}),
+		Some(bps::Kind::Capacity(c)) => BackendTrafficPolicy::Capacity(http::capacity::Policy {
+			inflight_cap: c.inflight_cap,
+			tpm_per_minute: c.tpm_per_minute,
+			cooldown: c.cooldown.clone().map(convert_duration),
+		}),
 		None => return Err(ProtoError::MissingRequiredField),
 	})
 }

@@ -309,6 +309,45 @@ type Health struct {
 	ActiveProbe *BackendActiveProbe `json:"activeProbe,omitempty"`
 }
 
+// Sticky configures soft api-key→backend affinity for prompt-cache hit rate.
+type Sticky struct {
+	// CEL expression resolving to the affinity key. Defaults to the request's
+	// api-key sha256 when unset.
+	// +optional
+	Key *CELExpression `json:"key,omitempty"`
+
+	// How long a pin survives after last use. Default 10m.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:XValidation:rule="matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')",message="invalid duration value"
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('1s')",message="ttl must be at least 1 second"
+	// +optional
+	TTL *metav1.Duration `json:"ttl,omitempty"`
+}
+
+// Capacity configures per-endpoint inflight + TPM hard caps.
+// When all endpoints are over cap, the gateway returns 503 + Retry-After.
+type Capacity struct {
+	// Max concurrent in-flight requests per endpoint.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	InflightCap *int32 `json:"inflightCap,omitempty"`
+
+	// Per-endpoint tokens-per-minute budget. Pre-debited at select,
+	// trued-up on completion.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	TpmPerMinute *int64 `json:"tpmPerMinute,omitempty"`
+
+	// Hold-rejected duration. Default 3s (reuses Retry-After).
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:XValidation:rule="matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')",message="invalid duration value"
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('1s')",message="cooldown must be at least 1 second"
+	// +optional
+	Cooldown *metav1.Duration `json:"cooldown,omitempty"`
+}
+
 // Settings for evicting unhealthy backends.
 type BackendEviction struct {
 	// Base time a backend should be evicted after being marked unhealthy.
@@ -432,6 +471,14 @@ type BackendFull struct {
 	// Settings for passive and active health checking.
 	// +optional
 	Health *Health `json:"health,omitempty"`
+
+	// G6: soft api-key→backend affinity for prompt-cache hit rate.
+	// +optional
+	Sticky *Sticky `json:"sticky,omitempty"`
+
+	// G7: per-endpoint inflight + TPM hard caps.
+	// +optional
+	Capacity *Capacity `json:"capacity,omitempty"`
 
 	// External authentication configuration for requests
 	// sent to this backend.
