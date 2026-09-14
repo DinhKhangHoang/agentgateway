@@ -57,6 +57,7 @@ protos = { path = "crates/protos" }
 atomic_float = { version = "1.1.0", features = ["serde"] }
 anyhow = "1.0"
 arc-swap = "1.9"
+dashmap = "6.2"
 arcstr = { version = "1.2", features = ["serde"] }
 assert_matches = "1.5.0"
 async-openai = { version = "0.41", default-features = false, features = ["chat-completion-types", "moderation-types", "response-types", "realtime-types"] }

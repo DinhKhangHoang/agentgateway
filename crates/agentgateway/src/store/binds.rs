@@ -115,6 +115,8 @@ pub struct Store {
 	/// prior reload exits before a new one starts. Read by the prober spawn
 	/// site in `make_backend_call` via `read_binds().prober_generations`.
 	prober_generations: Arc<crate::http::health_prober::ProberGenerationRegistry>,
+	/// G6/G7 per-pod selection state (sticky pins + TPM counters).
+	selection_state: Arc<crate::store::SelectionState>,
 }
 
 #[derive(Debug)]
@@ -676,6 +678,7 @@ impl Store {
 			tx,
 			rx: Some(rx),
 			prober_generations: Arc::new(Default::default()),
+			selection_state: Arc::new(Default::default()),
 		}
 	}
 
@@ -1575,6 +1578,11 @@ impl Store {
 	/// dedup spawns and capture a kill-switch generation.
 	pub fn prober_generations(&self) -> &Arc<crate::http::health_prober::ProberGenerationRegistry> {
 		&self.prober_generations
+	}
+
+	/// G6/G7 per-pod selection state (sticky pins + TPM counters).
+	pub fn selection_state(&self) -> &Arc<crate::store::SelectionState> {
+		&self.selection_state
 	}
 
 	#[instrument(

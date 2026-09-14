@@ -29,6 +29,7 @@ agent-xds.workspace = true
 agent-pool.workspace = true
 anyhow.workspace = true
 arc-swap.workspace = true
+dashmap.workspace = true
 async-compression.workspace = true
 async-openai.workspace = true
 async-trait.workspace = true
