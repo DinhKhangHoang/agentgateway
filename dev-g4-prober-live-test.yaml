@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: g4-prober-test-key
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app.kubernetes.io/name: g4-prober-test
+type: Opaque
+stringData:
+  key: "sk-g4-prober-dead-upstream-test"
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayModel
+metadata:
+  name: g4-prober-dead-upstream
+  namespace: user-11377-maas-v2-agw
+  labels:
+    app.kubernetes.io/name: g4-prober-test
+spec:
+  match:
+    model: g4-prober-dead-upstream
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: maas-v2-agw
+  provider: OpenAI
+  baseURL: "http://192.0.2.1:9"
+  visibility: Public
+  policies:
+    auth:
+      secretRef:
+        name: g4-prober-test-key
+        key: key
+    health:
+      unhealthyCondition: "response.code >= 500 || response.code == 0"
+      eviction:
+        duration: 30s
+        consecutiveFailures: 2
+        healthThreshold: 50
+        restoreHealth: 100
+      activeProbe:
+        interval: 2s
+        timeout: 1s
+        consecutiveFailures: 2

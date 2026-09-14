@@ -1,0 +1,29 @@
+# G4 runtime pre-check: local-config prober verify (zero image roll)
+# Path: LocalHealthPolicy TryFrom (health.rs:270) -> bypasses convert_health.
+# Dead upstream = 127.0.0.1:9 (discard port, connection refused) -> prober fails every sweep.
+# consecutiveFailures: 2 -> evict after 2 probe failures.
+# interval: 2s -> fast enough to observe eviction within ~10s.
+config:
+  readinessAddr: 127.0.0.1:19001
+  statsAddr: 127.0.0.1:19002
+
+llm:
+  port: 4000
+  models:
+  - name: dead-upstream
+    provider: openai
+    params:
+      model: gpt-3.5-turbo
+      apiKey: "sk-dead-upstream-test-key"
+      baseUrl: "http://127.0.0.1:9"
+    health:
+      unhealthyExpression: "response.code >= 500 || response.code == 0"
+      eviction:
+        duration: 30s
+        consecutiveFailures: 2
+        healthThreshold: 0.5
+        restoreHealth: 1.0
+      activeProbe:
+        interval: 2s
+        timeout: 1s
+        consecutiveFailures: 2

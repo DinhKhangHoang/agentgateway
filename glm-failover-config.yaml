@@ -1,0 +1,154 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+#
+# Port of the Kong ai-proxy GLM-5.2 failover config to agentgateway.
+# Web search (Tavily sidecar) is intentionally OMITTED — no agentgateway
+# equivalent exists. Do not treat this as functionally equivalent to the Kong
+# route until that gap is resolved.
+#
+# Kong -> agentgateway mapping:
+#   model                  -> llm.providers[glm-primary]   (priority 0)
+#   fallbacks[0]           -> llm.providers[glm-modelarts]  (priority 1)
+#   fallbacks[1]           -> llm.providers[glm-tencent]    (priority 2)
+#   failover_on            -> route retry.codes
+#   failover_cooldown: 60  -> defaults.health.eviction.duration: 60s
+#   read/write/connect_timeout -> defaults.timeout (per provider)
+#   route_type llm/v1/chat -> custom provider formats[].type: completions
+#   upstream_url           -> params.baseUrl + formats[].path
+#
+# Auth values are inline here to mirror the Kong config verbatim. Prefer an
+# env-var reference or SecretFromFile before this goes anywhere shared.
+#
+# GOTCHA: env substitution runs over the RAW FILE TEXT before YAML parsing, so a
+# dollar-prefixed name is expanded even inside a comment — an undefined one is a
+# hard startup failure ("error looking key '...' up"). Do not write example
+# env-var references anywhere in this file, comments included.
+
+config:
+  readinessAddr: 127.0.0.1:19001
+  statsAddr: 127.0.0.1:19002
+
+# Kong failover_on: [429, 500, 502, 503, 504].
+#
+# NOTE: `retry` is NOT available under `llm.policies` (that only carries
+# auth/guardrail/ratelimit). The LLM listener builds its route implicitly as
+# `internal/llm:request` (see crates/agentgateway/src/types/local.rs:4386-4409),
+# so retry has to be attached from the top-level `policies[]` array by name.
+# UNVERIFIED: that this target name is accepted for the implicit LLM route —
+# validate with `agentgateway --validate` (or equivalent) before relying on it.
+policies:
+- name:
+    name: llm-failover-retry
+    namespace: default
+  target:
+    route:
+      name: "llm:request"
+      namespace: internal
+  policy:
+    retry:
+      attempts: 3            # 1 initial + 2 retries; covers all 3 tiers
+      codes: [429, 500, 502, 503, 504]
+      backoff: 500ms
+
+frontendPolicies:
+  http:
+    # Kong max_request_body_size: 50000000
+    maxBufferSize: 50000000
+
+llm:
+  port: 4000
+
+  providers:
+  # ---- primary: Kong `model` ------------------------------------------------
+  # zai-org/GLM-5.2-FP8 @ https://49.213.86.184.nip.io/v1/maas/zai-org/glm-5.2/v1/chat/completions
+  - name: glm-primary
+    provider:
+      custom:
+        formats:
+        - type: completions
+          path: /v1/maas/zai-org/glm-5.2/v1/chat/completions
+    params:
+      baseUrl: https://49.213.86.184.nip.io
+      model: zai-org/GLM-5.2-FP8
+    defaults:
+      auth:
+        key:
+          value: Basic dWxsbS11c2VyOm15cGFzc3dvcmQxMjM=
+          location:
+            header:
+              name: Authorization
+      health:
+        eviction:
+          duration: 60s          # Kong failover_cooldown: 60
+          consecutiveFailures: 1 # Kong benches on the first failing response
+
+  # ---- fallback 1: Kong `fallbacks[0]` — Huawei ModelArts MaaS -------------
+  - name: glm-modelarts
+    provider:
+      custom:
+        formats:
+        - type: completions
+          path: /v2/chat/completions
+    params:
+      baseUrl: https://api-ap-southeast-1.modelarts-maas.com
+      model: glm-5.2
+    defaults:
+      auth:
+        key:
+          value: >-
+            Bearer zIGJm_T-zY9Y8cO3ieeNwJ4s1Vq0EHZceXGceiR1YqO-QMgBQ8mJqUP23d5A05eFO0yKubOJNwz7Cu7LmUbklg
+          location:
+            header:
+              name: Authorization
+      health:
+        eviction:
+          duration: 60s
+          consecutiveFailures: 1
+
+  # ---- fallback 2: Kong `fallbacks[1]` — Tencent TokenHub ------------------
+  - name: glm-tencent
+    provider:
+      custom:
+        formats:
+        - type: completions
+          path: /v1/chat/completions
+    params:
+      baseUrl: https://tokenhub-intl.tencentcloudmaas.com
+      model: glm-5.2
+    defaults:
+      auth:
+        key:
+          value: Bearer sk-iS7B8RhA7zU1AMMDguBSHfaGGQvzVfFPuzyKSD2H8e3q1rt5
+          location:
+            header:
+              name: Authorization
+      health:
+        eviction:
+          duration: 60s
+          consecutiveFailures: 1
+
+  models:
+  - name: glm-primary
+    provider:
+      reference: glm-primary
+  - name: glm-modelarts
+    provider:
+      reference: glm-modelarts
+  - name: glm-tencent
+    provider:
+      reference: glm-tencent
+
+  # Clients request `glm-5.2`; priority tiers are tried lowest-first.
+  # Within a tier, the best provider is picked by a composite health+latency
+  # score. When every provider in a tier is degraded, traffic moves to the
+  # next tier. (schema: LocalLLMVirtualModelRouting.failover)
+  virtualModels:
+  - name: glm-5.2
+    routing:
+      failover:
+        targets:
+        - model: glm-primary
+          priority: 0
+        - model: glm-modelarts
+          priority: 1
+        - model: glm-tencent
+          priority: 2

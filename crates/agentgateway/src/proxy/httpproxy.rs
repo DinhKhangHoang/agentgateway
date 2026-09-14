@@ -2076,7 +2076,16 @@ async fn make_backend_call(
 				strategy: BalanceStrategy::P2c,
 				route: RouteIdentifier::default(),
 			};
-			let (provider, handle) = match ai.select_provider(&SelectionContext::none(), None, None) {
+			// G6/G7: wire selection_state + capacity policy.
+			// inflight cap works now; TPM needs input_tokens (not yet available
+			// pre-dispatch); sticky needs api-key sha256 (threaded in a follow-up).
+			// References are inlined (no owned locals) to keep the async fn body
+			// under the assert_size limit.
+			let (provider, handle) = match ai.select_provider(
+				&SelectionContext::none(),
+				Some(inputs.stores.read_binds().selection_state().as_ref()),
+				policies.capacity.as_ref(),
+			) {
 				Some(v) => {
 					inputs.metrics.balance_picks.get_or_create(&balance_labels).inc();
 					v
