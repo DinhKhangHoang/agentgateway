@@ -1360,7 +1360,7 @@ impl HTTPProxy {
 			response_policies,
 			selected_backend.store_key.as_ref(),
 		)
-		.assert_size::<{ 7 * 1024 }>();
+		.assert_size::<{ 8 * 1024 }>();
 
 		// Setup timeout
 		let call_result = if let Some(timeout) = timeout {
@@ -2076,13 +2076,22 @@ async fn make_backend_call(
 				strategy: BalanceStrategy::P2c,
 				route: RouteIdentifier::default(),
 			};
-			// G6/G7: wire selection_state + capacity policy.
-			// inflight cap works now; TPM needs input_tokens (not yet available
-			// pre-dispatch); sticky needs api-key sha256 (threaded in a follow-up).
-			// References are inlined (no owned locals) to keep the async fn body
-			// under the assert_size limit.
+			// G6/G7: build SelectionContext from api-key sha256 + input_tokens.
+			let key = policies.sticky.as_ref().and_then(|_| {
+				req.extensions().get::<crate::http::apikey::Claims>()
+					.map(|c| c.key.sha256())
+			});
+			let ctx = SelectionContext {
+				key: key.as_ref().map(|h| h.as_str()),
+				input_tokens: policies.capacity.as_ref().and_then(|_| {
+					log.as_ref()
+						.and_then(|l| l.llm_request.as_ref())
+						.and_then(|r| r.input_tokens)
+						.map(|t| t as u32)
+				}),
+			};
 			let (provider, handle) = match ai.select_provider(
-				&SelectionContext::none(),
+				&ctx,
 				Some(inputs.stores.read_binds().selection_state().as_ref()),
 				policies.capacity.as_ref(),
 			) {
@@ -2095,6 +2104,25 @@ async fn make_backend_call(
 					return Err(ProxyError::NoHealthyEndpoints.into());
 				}
 			};
+			// G6/G7: store selection info for pin-on-success + TPM true-up.
+			log.add(|l| {
+				l.selection_key = ctx.key.map(|s| s.to_string());
+				l.selection_endpoint = Some(provider.name.clone());
+			});
+			// G7: TPM pre-debit on the selected endpoint.
+			if let (Some(cap), Some(tokens), Some(state)) = (
+				policies.capacity.as_ref(),
+				ctx.input_tokens,
+				Some(inputs.stores.read_binds().selection_state().as_ref()),
+			) {
+				if let Some(tpm_cap) = cap.tpm_per_minute {
+					let entry = state.tpm.entry(provider.name.clone()).or_insert_with(|| {
+						crate::store::TpmCounter::new(std::time::Instant::now())
+					});
+					let (total, _over) = entry.check_and_debit(tokens as u64, tpm_cap as u64, std::time::Instant::now());
+					log.add(|l| l.selection_pre_debited = Some(total));
+				}
+			}
 			log.add(move |l| l.request_handle = Some(handle));
 			let sub_backend_name = BackendTargetRef::Backend {
 				name: n.name.as_ref(),
@@ -2197,7 +2225,7 @@ async fn make_backend_call(
 				&inputs,
 				policy_client.clone(),
 				&simple,
-				policies,
+				policies.clone(),
 				&mut req,
 				&mut log,
 				response_policies,
@@ -2211,7 +2239,7 @@ async fn make_backend_call(
 				&inputs,
 				policy_client.clone(),
 				&simple,
-				policies,
+				policies.clone(),
 				&mut req,
 				&mut log,
 				response_policies,
@@ -2225,7 +2253,7 @@ async fn make_backend_call(
 				&inputs,
 				policy_client.clone(),
 				&simple,
-				policies,
+				policies.clone(),
 				&mut req,
 				&mut log,
 				response_policies,
@@ -2242,11 +2270,11 @@ async fn make_backend_call(
 			);
 		},
 		Backend::Dynamic(_, _) => {
-			let backend_call = BackendCall::from_shared(target_from_request(&req)?, policies);
+			let backend_call = BackendCall::from_shared(target_from_request(&req)?, policies.clone());
 			(backend_call, None)
 		},
 		Backend::Internal(_, _) => (
-			BackendCall::from_shared(Target::Hostname("internal".into(), 80), policies),
+			BackendCall::from_shared(Target::Hostname("internal".into(), 80), policies.clone()),
 			None,
 		),
 		Backend::MCP(name, backend) => {
@@ -2701,6 +2729,25 @@ async fn make_backend_call(
 		),
 	});
 	let mut resp = resp?;
+	// G6: pin-on-success — write api-key→endpoint pin for sticky affinity.
+	if resp.status().is_success() {
+		if let Some(log) = log.as_ref() {
+			if let (Some(key), Some(endpoint)) = (&log.selection_key, &log.selection_endpoint) {
+				if let Some(sticky) = policies.sticky.as_ref() {
+					let ttl = sticky.ttl.unwrap_or(std::time::Duration::from_secs(600));
+					let binds = inputs.stores.read_binds();
+					let state = binds.selection_state();
+					state.pins.insert(
+						Strng::from(key.as_str()),
+						crate::store::PinEntry {
+							backend_name: endpoint.clone(),
+							expires_at: std::time::Instant::now() + ttl,
+						},
+					);
+				}
+			}
+		}
+	}
 	if let Some(log) = log.as_ref() {
 		resp
 			.extensions_mut()
@@ -4247,7 +4294,7 @@ impl PolicyClient {
 					// No store key: the backend is hand-built, not fetched from the store.
 					None,
 				)
-				.assert_size::<{ 7 * 1024 }>(),
+				.assert_size::<{ 8 * 1024 }>(),
 			)
 			.await
 			.map_err(ProxyResponse::downcast)

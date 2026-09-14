@@ -941,6 +941,9 @@ impl RequestLog {
 			response_snapshot: None,
 			source_context: None,
 			response_bytes: 0,
+			selection_key: None,
+			selection_endpoint: None,
+			selection_pre_debited: None,
 		}
 	}
 
@@ -1117,6 +1120,13 @@ pub struct RequestLog {
 	pub source_context: Option<cel::SourceContext>,
 
 	pub response_bytes: u64,
+
+	/// G6: api-key sha256 hex for sticky pin write on success.
+	pub selection_key: Option<String>,
+	/// G6/G7: selected endpoint name for pin write + TPM true-up.
+	pub selection_endpoint: Option<Strng>,
+	/// G7: pre-debited TPM tokens for true-up on finish_request.
+	pub selection_pre_debited: Option<u64>,
 }
 
 impl Drop for DropOnLog {

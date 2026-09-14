@@ -115,6 +115,11 @@ impl APIKeyHash {
 		APIKeyHash(hex::encode(digest))
 	}
 
+	/// Returns the hex-encoded sha256 digest as `&str`.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+
 	pub fn parse(key_hash: &str) -> Result<Self, String> {
 		let Some(digest) = key_hash.strip_prefix("sha256:") else {
 			return Err("keyHash must use the sha256:<hex> format".to_string());
