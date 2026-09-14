@@ -51,6 +51,69 @@ pub struct GuardrailLabels {
 	pub action: GuardrailAction,
 }
 
+// --- WS-5 Serving-SRE telemetry label types ---
+
+#[derive(
+	Copy, Clone, Hash, Debug, PartialEq, Eq, prometheus_client::encoding::EncodeLabelValue, Default,
+)]
+pub enum BalanceStrategy {
+	#[default]
+	P2c,
+	Fallback,
+	Degraded,
+	Override,
+}
+
+#[derive(
+	Copy, Clone, Hash, Debug, PartialEq, Eq, prometheus_client::encoding::EncodeLabelValue, Default,
+)]
+pub enum ProbeOutcome {
+	Success,
+	#[default]
+	Failure,
+	Skipped,
+}
+
+#[derive(
+	Copy, Clone, Hash, Debug, PartialEq, Eq, prometheus_client::encoding::EncodeLabelValue, Default,
+)]
+pub enum EvictionReason {
+	#[default]
+	ConsecutiveFailures,
+	HealthThreshold,
+	RequestFailure,
+}
+
+#[derive(
+	Copy, Clone, Hash, Debug, PartialEq, Eq, prometheus_client::encoding::EncodeLabelValue, Default,
+)]
+pub enum EvictionSource {
+	#[default]
+	Probe,
+	Request,
+}
+
+#[derive(Clone, Hash, Default, Debug, PartialEq, Eq, EncodeLabelSet)]
+pub struct BalanceLabels {
+	pub backend: DefaultedUnknown<RichStrng>,
+	pub strategy: BalanceStrategy,
+	#[prometheus(flatten)]
+	pub route: RouteIdentifier,
+}
+
+#[derive(Clone, Hash, Default, Debug, PartialEq, Eq, EncodeLabelSet)]
+pub struct HealthProbeLabels {
+	pub backend: DefaultedUnknown<RichStrng>,
+	pub outcome: ProbeOutcome,
+}
+
+#[derive(Clone, Hash, Default, Debug, PartialEq, Eq, EncodeLabelSet)]
+pub struct HealthEvictionLabels {
+	pub backend: DefaultedUnknown<RichStrng>,
+	pub reason: EvictionReason,
+	pub source: EvictionSource,
+}
+
 #[derive(Clone, Hash, Default, Debug, PartialEq, Eq, EncodeLabelSet)]
 pub struct MinimalHTTPLabels {
 	pub backend: DefaultedUnknown<RichStrng>,
@@ -221,6 +284,12 @@ pub struct Metrics {
 	// metrics for guardrail checks (allow/mask/reject) for request/response
 	pub guardrail_checks: Family<GuardrailLabels, counter::Counter>,
 
+	// WS-5: Serving-SRE telemetry — balance selection, health probing, eviction.
+	pub balance_picks: Family<BalanceLabels, counter::Counter>,
+	pub balance_exhausted: Family<BalanceLabels, counter::Counter>,
+	pub health_probe: Family<HealthProbeLabels, counter::Counter>,
+	pub health_eviction: Family<HealthEvictionLabels, counter::Counter>,
+
 	pub cost_catalog_lookups: Family<CostCatalogLookupLabels, counter::Counter>,
 
 	/// Usage reports abandoned after the final retry, or shed because the
@@ -365,6 +434,42 @@ impl Metrics {
 				registry.register(
 					"guardrail_checks",
 					"Total number of guardrail checks",
+					m.clone(),
+				);
+				m
+			},
+			balance_picks: {
+				let m = Family::<BalanceLabels, _>::default();
+				registry.register(
+					"balance_picks_total",
+					"Total endpoint/provider selections by strategy",
+					m.clone(),
+				);
+				m
+			},
+			balance_exhausted: {
+				let m = Family::<BalanceLabels, _>::default();
+				registry.register(
+					"balance_exhausted_total",
+					"Total selection exhaustions (no healthy endpoint, yields NoHealthyEndpoints 503)",
+					m.clone(),
+				);
+				m
+			},
+			health_probe: {
+				let m = Family::<HealthProbeLabels, _>::default();
+				registry.register(
+					"health_probe_total",
+					"Total active health probe attempts by outcome",
+					m.clone(),
+				);
+				m
+			},
+			health_eviction: {
+				let m = Family::<HealthEvictionLabels, _>::default();
+				registry.register(
+					"health_eviction_total",
+					"Total endpoint evictions by reason and source",
 					m.clone(),
 				);
 				m
@@ -579,3 +684,102 @@ const OUTPUT_TOKEN_BUCKET: [f64; 14] = [
 const FIRST_TOKEN_BUCKET: [f64; 16] = [
 	0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
 ];
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use prometheus_client::encoding::text::encode;
+
+	fn fresh_metrics() -> (Registry, Metrics) {
+		let mut registry = Registry::default();
+		let metrics = Metrics::new(&mut registry, FzHashSet::default());
+		(registry, metrics)
+	}
+
+	fn encode_registry(registry: &Registry) -> String {
+		let mut buf = String::new();
+		encode(&mut buf, registry).unwrap();
+		buf
+	}
+
+	#[test]
+	fn balance_picks_total_registered_and_incremented() {
+		let (registry, metrics) = fresh_metrics();
+		let labels = BalanceLabels {
+			backend: Some(RichStrng::from("test-backend")).into(),
+			strategy: BalanceStrategy::P2c,
+			route: RouteIdentifier::default(),
+		};
+		metrics.balance_picks.get_or_create(&labels).inc();
+		let output = encode_registry(&registry);
+		assert!(
+			output.contains("balance_picks_total"),
+			"balance_picks_total should be in the encoded output"
+		);
+	}
+
+	#[test]
+	fn balance_exhausted_total_registered_and_incremented() {
+		let (registry, metrics) = fresh_metrics();
+		let labels = BalanceLabels::default();
+		metrics.balance_exhausted.get_or_create(&labels).inc();
+		let output = encode_registry(&registry);
+		assert!(
+			output.contains("balance_exhausted_total"),
+			"balance_exhausted_total should be in the encoded output"
+		);
+	}
+
+	#[test]
+	fn health_probe_total_registered_and_incremented() {
+		let (registry, metrics) = fresh_metrics();
+		let labels = HealthProbeLabels {
+			backend: Some(RichStrng::from("probe-target")).into(),
+			outcome: ProbeOutcome::Success,
+		};
+		metrics.health_probe.get_or_create(&labels).inc();
+		let output = encode_registry(&registry);
+		assert!(
+			output.contains("health_probe_total"),
+			"health_probe_total should be in the encoded output"
+		);
+	}
+
+	#[test]
+	fn health_eviction_total_registered_and_incremented() {
+		let (registry, metrics) = fresh_metrics();
+		let labels = HealthEvictionLabels {
+			backend: Some(RichStrng::from("evicted-backend")).into(),
+			reason: EvictionReason::ConsecutiveFailures,
+			source: EvictionSource::Probe,
+		};
+		metrics.health_eviction.get_or_create(&labels).inc();
+		let output = encode_registry(&registry);
+		assert!(
+			output.contains("health_eviction_total"),
+			"health_eviction_total should be in the encoded output"
+		);
+	}
+
+	#[test]
+	fn excluded_metrics_filter_hides_ws5_metrics() {
+		let mut registry = Registry::default();
+		let removes = FzHashSet::from_iter([
+			"balance_picks_total".to_string(),
+			"balance_exhausted_total".to_string(),
+			"health_probe_total".to_string(),
+			"health_eviction_total".to_string(),
+		]);
+		let _metrics = Metrics::new(&mut registry, removes);
+		let mut buf = String::new();
+		encode(&mut buf, &registry).unwrap();
+		assert!(
+			!buf.contains("balance_picks_total"),
+			"excluded metric should not appear in registry"
+		);
+		assert!(
+			!buf.contains("health_eviction_total"),
+			"excluded metric should not appear in registry"
+		);
+	}
+}

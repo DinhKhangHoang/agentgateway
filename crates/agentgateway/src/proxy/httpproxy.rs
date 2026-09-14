@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use ::http::uri::PathAndQuery;
 use ::http::{HeaderMap, header};
 use agent_core::prelude::AssertSize;
+use agent_core::strng::RichStrng;
 use anyhow::anyhow;
 use frozen_collections::Len;
 use futures_util::FutureExt;
@@ -45,7 +46,10 @@ use crate::store::{
 };
 use crate::telemetry::log;
 use crate::telemetry::log::{AsyncLog, DropOnLog, LogBody, RequestLog, TraceSampler};
-use crate::telemetry::metrics::{OutboundCallKind, OutboundCallLabels, OutboundCallSubtype};
+use crate::telemetry::metrics::{
+    BalanceLabels, BalanceStrategy, OutboundCallKind, OutboundCallLabels, OutboundCallSubtype,
+    RouteIdentifier,
+};
 use crate::telemetry::trc::TraceParent;
 use crate::transport::stream::{Extension, Socket, TCPConnectionInfo, TLSConnectionInfo};
 use crate::types::local::InternalBackend;
@@ -2064,7 +2068,21 @@ async fn make_backend_call(
 
 	let (mut backend_call, mut maybe_inference) = match backend {
 		Backend::AI(n, ai) => {
-			let (provider, handle) = ai.select_provider().ok_or(ProxyError::NoHealthyEndpoints)?;
+			let balance_labels = BalanceLabels {
+				backend: Some(RichStrng::from(n.name.as_str())).into(),
+				strategy: BalanceStrategy::P2c,
+				route: RouteIdentifier::default(),
+			};
+			let (provider, handle) = match ai.select_provider() {
+				Some(v) => {
+					inputs.metrics.balance_picks.get_or_create(&balance_labels).inc();
+					v
+				}
+				None => {
+					inputs.metrics.balance_exhausted.get_or_create(&balance_labels).inc();
+					return Err(ProxyError::NoHealthyEndpoints.into());
+				}
+			};
 			log.add(move |l| l.request_handle = Some(handle));
 			let sub_backend_name = BackendTargetRef::Backend {
 				name: n.name.as_ref(),
@@ -2822,10 +2840,28 @@ pub fn build_service_call(
 
 	let discovery = inputs.stores.read_discovery();
 	let workloads = &discovery.workloads;
-	let (ep, handle, wl) = svc
+	let svc_balance_labels = BalanceLabels {
+		backend: Some(RichStrng::from(svc.hostname.as_str())).into(),
+		strategy: BalanceStrategy::P2c,
+		route: RouteIdentifier::default(),
+	};
+	let (ep, handle, wl) = match svc
 		.endpoints
 		.select_endpoint(workloads, svc.as_ref(), port, service_override.destination)
-		.ok_or(ProxyError::NoHealthyEndpoints)?;
+	{
+		Some(v) => {
+			inputs.metrics.balance_picks.get_or_create(&svc_balance_labels).inc();
+			v
+		}
+		None => {
+			inputs
+				.metrics
+				.balance_exhausted
+				.get_or_create(&svc_balance_labels)
+				.inc();
+			return Err(ProxyError::NoHealthyEndpoints.into());
+		}
+	};
 
 	let target_port = select_service_target_port(
 		ep.as_ref(),

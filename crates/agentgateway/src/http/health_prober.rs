@@ -27,12 +27,16 @@ use std::time::{Duration, Instant};
 use ::http::header;
 use ::http::{Method, Request};
 use agent_core::prelude::Strng;
+use agent_core::strng::RichStrng;
 use tokio::time::sleep;
 use tracing::{debug, trace};
 
 use crate::http::health::{self, ActiveProbeConfig};
 use crate::llm::{AIBackend, NamedAIProvider, RouteType};
 use crate::proxy::httpproxy::{build_transport, BackendCall};
+use crate::telemetry::metrics::{
+	EvictionReason, EvictionSource, HealthEvictionLabels, HealthProbeLabels, ProbeOutcome,
+};
 use crate::types::agent::{BackendTarget, BackendTargetRef, Target};
 use crate::types::loadbalancer::ActiveHandle;
 use crate::ProxyInputs;
@@ -222,6 +226,10 @@ async fn probe_once(
         // No endpoint available (all evicted). Nothing to probe; the probe's
         // own failure count is irrelevant here — a real request would already
         // 503. Leave health as-is.
+        inputs.metrics.health_probe.get_or_create(&HealthProbeLabels {
+            backend: Default::default(),
+            outcome: ProbeOutcome::Skipped,
+        }).inc();
         return Ok(());
     };
 
@@ -234,6 +242,12 @@ async fn probe_once(
         Err(_) => (false, None),
     };
 
+    let backend_name = provider.name.as_str();
+    inputs.metrics.health_probe.get_or_create(&HealthProbeLabels {
+        backend: Some(RichStrng::from(backend_name)).into(),
+        outcome: if success { ProbeOutcome::Success } else { ProbeOutcome::Failure },
+    }).inc();
+
     record_outcome(
         handle,
         policy,
@@ -242,6 +256,8 @@ async fn probe_once(
         status,
         consecutive_threshold,
         probe_consecutive_failures,
+        &inputs.metrics,
+        backend_name,
     );
     Ok(())
 }
@@ -388,6 +404,8 @@ fn record_outcome(
     status: Option<::http::StatusCode>,
     consecutive_threshold: u64,
     probe_consecutive_failures: &mut u64,
+    metrics: &crate::telemetry::metrics::Metrics,
+    backend_name: &str,
 ) {
     // `probe_consecutive_failures` tracks PROBE failures specifically
     // (independent of real-request consecutive_failures). The eviction decision
@@ -422,6 +440,18 @@ fn record_outcome(
         eviction_duration,
         restore_health,
     );
+
+    if let Some(_) = eviction_duration {
+        metrics.health_eviction.get_or_create(&HealthEvictionLabels {
+            backend: Some(RichStrng::from(backend_name)).into(),
+            reason: if probe_unhealthy {
+                EvictionReason::ConsecutiveFailures
+            } else {
+                EvictionReason::HealthThreshold
+            },
+            source: EvictionSource::Probe,
+        }).inc();
+    }
 
     if !success {
         debug!(

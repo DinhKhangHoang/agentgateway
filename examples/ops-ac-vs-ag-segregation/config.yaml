@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+#
+# AC vs AG workload-class segregation.
+#
+# Two distinct workload classes are served by separate backend groups with
+# independent health, timeout, and retry policies:
+#
+#   ac-coding  — AI coding agents (autocomplete + short agentic).
+#                Long request timeout, aggressive health probing, retry on 5xx.
+#
+#   ag-batch   — Async generation / batch workloads.
+#                Short request timeout, frequent probing, no retry (idempotent
+#                batch jobs re-submit themselves).
+#
+# In production these would typically be separate SGLang farms with dedicated
+# AC/AG worker pools. Here we point both at different host:port targets for
+# illustration.
+
+config:
+  readinessAddr: 127.0.0.1:19001
+  statsAddr: 127.0.0.1:19002
+
+# --- LLM model definitions -------------------------------------------------
+# Each model carries its own health policy (active probe + eviction).
+# Model name matching is how agentgateway routes a request to the right
+# backend group: the client's `model` field selects the model entry.
+
+llm:
+  port: 4000
+  models:
+
+  # --- AC: AI coding agents ----------------------------------------------
+  # Long-running agentic sessions (30k-200k token context, multi-turn).
+  # Tolerate long latency; probe every 30s; evict after 2 consecutive
+  # failures; retry on 5xx to survive transient farm blips.
+  - name: ac-coding
+    provider: openAI
+    params:
+      model: glm-5.2
+      apiKey: $AC_CODING_API_KEY
+    health:
+      activeProbe:
+        interval: 30s
+        timeout: 5s
+        consecutiveFailures: 2
+      eviction:
+        duration: 60s
+        consecutiveFailures: 2
+        restoreHealth: 0.5
+
+  # --- AG: async generation / batch -------------------------------------
+  # Short, bounded jobs. Probe more frequently (10s) to detect failures
+  # fast; require 3 consecutive failures before evicting (batch traffic
+  # is bursty and a single blip is normal). No retry — batch jobs are
+  # re-submitted by the caller on failure.
+  - name: ag-batch
+    provider: openAI
+    params:
+      model: glm-5.2
+      apiKey: $AG_BATCH_API_KEY
+    health:
+      activeProbe:
+        interval: 10s
+        timeout: 3s
+        consecutiveFailures: 3
+      eviction:
+        duration: 30s
+        consecutiveFailures: 3
+        restoreHealth: 0.3
+
+# --- Route-level policies ---------------------------------------------------
+# Retry and timeout are route-level policies. Here we bind two explicit
+# routes on port 8080 — one per workload class — so each class gets its
+# own retry and timeout settings. In a K8s deployment these would be
+# AgentgatewayPolicy CRDs with targetRefs pointing at the HTTPRoute.
+
+binds:
+- port: 8080
+  listeners:
+  - protocol: HTTP
+    routes:
+
+    # --- AC route: long timeout, retry on 5xx ---------------------------
+    - name: ac-coding-route
+      matches:
+      - path:
+          pathPrefix: /v1/chat/completions
+        headers:
+        - name: x-workload-class
+          value:
+            exact: ac-coding
+      policies:
+        timeout:
+          requestTimeout: 600s
+          backendRequestTimeout: 600s
+        retry:
+          attempts: 3
+          backoff: 1s
+          codes: [500, 502, 503, 504]
+      backends:
+      - host: ac-farm-sglang.default.svc.cluster.local:30000
+
+    # --- AG route: short timeout, no retry ------------------------------
+    - name: ag-batch-route
+      matches:
+      - path:
+          pathPrefix: /v1/chat/completions
+        headers:
+        - name: x-workload-class
+          value:
+            exact: ag-batch
+      policies:
+        timeout:
+          requestTimeout: 120s
+          backendRequestTimeout: 120s
+      backends:
+      - host: ag-farm-sglang.default.svc.cluster.local:30001

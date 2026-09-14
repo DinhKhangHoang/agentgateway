@@ -39,8 +39,8 @@ use crate::llm::cost::{CostLookupStatus, ModelCatalog};
 use crate::mcp::{MCPInfo, MCPOperation};
 use crate::proxy::{ProxyResponseReason, dtrace};
 use crate::telemetry::metrics::{
-	CostCatalogLookupLabels, GenAILabels, GenAILabelsTokenUsage, HTTPLabels, MCPCall, Metrics,
-	RouteIdentifier,
+	CostCatalogLookupLabels, EvictionReason, EvictionSource, GenAILabels, GenAILabelsTokenUsage,
+	HealthEvictionLabels, HTTPLabels, MCPCall, Metrics, RouteIdentifier,
 };
 use crate::telemetry::trc::TraceParent;
 use crate::telemetry::{log_store, trc};
@@ -995,6 +995,24 @@ impl RequestLog {
 			eviction_duration,
 			restore_health,
 		);
+
+		// WS-5: emit request-source eviction metric.
+		if eviction_duration.is_some() {
+			let backend = self
+				.backend_info
+				.as_ref()
+				.map(|info| RichStrng::from(info.backend_name.as_str()))
+				.into();
+			self
+				.metrics
+				.health_eviction
+				.get_or_create(&HealthEvictionLabels {
+					backend,
+					reason: EvictionReason::RequestFailure,
+					source: EvictionSource::Request,
+				})
+				.inc();
+		}
 	}
 
 	pub(crate) fn finalize_request_handle_for_attempt(
