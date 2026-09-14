@@ -32,7 +32,7 @@ use tokio::time::sleep;
 use tracing::{debug, trace};
 
 use crate::http::health::{self, ActiveProbeConfig};
-use crate::llm::{AIBackend, NamedAIProvider, RouteType};
+use crate::llm::{AIBackend, NamedAIProvider, RouteType, SelectionContext};
 use crate::proxy::httpproxy::{build_transport, BackendCall};
 use crate::telemetry::metrics::{
 	EvictionReason, EvictionSource, HealthEvictionLabels, HealthProbeLabels, ProbeOutcome,
@@ -222,7 +222,7 @@ async fn probe_once(
 ) -> anyhow::Result<()> {
     // Select ONE endpoint via the same P2C sampler as real traffic. The
     // returned `ActiveHandle` is the exact endpoint we must probe and record.
-    let Some((provider, handle)) = ai.select_provider() else {
+    let Some((provider, handle)) = ai.select_provider(&SelectionContext::none()) else {
         // No endpoint available (all evicted). Nothing to probe; the probe's
         // own failure count is irrelevant here — a real request would already
         // 503. Leave health as-is.

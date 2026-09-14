@@ -33,7 +33,8 @@ use crate::http::{
 	merge_in_headers, retry,
 };
 use crate::llm::{
-	InputFormat, LLMInfo, LLMRequest, LLMResponse, RequestResult, RouteType, model_router,
+	InputFormat, LLMInfo, LLMRequest, LLMResponse, RequestResult, RouteType, SelectionContext,
+	model_router,
 };
 use crate::llm::policy::web_search as ws;
 use crate::proxy::tcpproxy::TCPProxy;
@@ -2073,7 +2074,7 @@ async fn make_backend_call(
 				strategy: BalanceStrategy::P2c,
 				route: RouteIdentifier::default(),
 			};
-			let (provider, handle) = match ai.select_provider() {
+			let (provider, handle) = match ai.select_provider(&SelectionContext::none()) {
 				Some(v) => {
 					inputs.metrics.balance_picks.get_or_create(&balance_labels).inc();
 					v

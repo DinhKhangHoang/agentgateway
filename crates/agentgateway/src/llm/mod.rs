@@ -35,6 +35,8 @@ pub use agent_llm::{azure, bedrock, vertex};
 
 pub mod cost;
 pub mod policy;
+pub mod selection;
+pub use selection::{composed_score, SelectionContext};
 
 use policy::streaming_guardrails::GuardedSseBody;
 pub use types::{OutputMessage, OutputMessagePart, ToolCall};
@@ -67,7 +69,10 @@ pub struct AIBackend {
 }
 
 impl AIBackend {
-	pub fn select_provider(&self) -> Option<(Arc<NamedAIProvider>, ActiveHandle)> {
+	pub fn select_provider(
+		&self,
+		ctx: &SelectionContext<'_>,
+	) -> Option<(Arc<NamedAIProvider>, ActiveHandle)> {
 		let iter = self.providers.iter();
 		let index = iter.index();
 		if index.is_empty() {
@@ -84,7 +89,9 @@ impl AIBackend {
 					index.get_index(idx).expect("index already checked");
 				(endpoint.clone(), info)
 			})
-			.max_by(|(_, a), (_, b)| a.score().total_cmp(&b.score()));
+			.max_by(|(_, a), (_, b)| {
+				composed_score(&*a, ctx).total_cmp(&composed_score(&*b, ctx))
+			});
 		let (ep, ep_info) = best?;
 		let handle = self.providers.start_request(ep.name.clone(), ep_info);
 		Some((ep, handle))
