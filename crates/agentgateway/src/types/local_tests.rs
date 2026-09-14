@@ -2350,3 +2350,26 @@ fn test_de_backend_auth_accepts_each_shape() {
 	assert!(credentials_only.kind.is_none());
 	assert_eq!(credentials_only.credentials.len(), 1);
 }
+
+#[test]
+fn local_sticky_round_trips() {
+	use std::time::Duration;
+
+	let yaml = "ttl: 600s\n";
+	let local: crate::http::sticky::LocalSticky = serde_yaml::from_str(yaml).unwrap();
+	let p: crate::http::sticky::Policy = local.try_into().unwrap();
+	assert_eq!(p.ttl, Some(Duration::from_secs(600)));
+	assert!(p.key.is_none());
+}
+
+#[test]
+fn local_capacity_round_trips() {
+	use std::time::Duration;
+
+	let yaml = "inflightCap: 10\ntpmPerMinute: 50000\ncooldown: 3s\n";
+	let local: crate::http::capacity::LocalCapacity = serde_yaml::from_str(yaml).unwrap();
+	let p: crate::http::capacity::Policy = local.try_into().unwrap();
+	assert_eq!(p.inflight_cap, Some(10));
+	assert_eq!(p.tpm_per_minute, Some(50000));
+	assert_eq!(p.cooldown, Some(Duration::from_secs(3)));
+}

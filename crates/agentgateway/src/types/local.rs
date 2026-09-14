@@ -1538,6 +1538,8 @@ impl LocalBackend {
 					health: None,
 					ext_authz: None,
 					authorization: None,
+					sticky: None,
+					capacity: None,
 				}
 				.translate(resources)
 				.await?
@@ -2420,6 +2422,12 @@ pub struct LocalBackendPolicies {
 	/// Mark this as LLM traffic to enable LLM processing.
 	#[serde(default)]
 	pub ai: Option<llm::Policy>,
+	/// G6 sticky affinity policy.
+	#[serde(default)]
+	pub sticky: Option<crate::http::sticky::LocalSticky>,
+	/// G7 capacity caps policy.
+	#[serde(default)]
+	pub capacity: Option<crate::http::capacity::LocalCapacity>,
 }
 
 enum InferenceRoutingScope {
@@ -2478,6 +2486,8 @@ impl LocalBackendPolicies {
 			health,
 			ext_authz,
 			authorization,
+			sticky,
+			capacity,
 		} = self;
 		let mut pols = vec![];
 		if let Some(p) = tcp {
@@ -2540,6 +2550,12 @@ impl LocalBackendPolicies {
 			pols.push(BackendTrafficPolicy::Health(p.try_into().map_err(
 				|e: crate::cel::Error| anyhow::anyhow!("health.unhealthyExpression: {}", e),
 			)?));
+		}
+		if let Some(p) = sticky {
+			pols.push(BackendTrafficPolicy::Sticky(p.try_into()?));
+		}
+		if let Some(p) = capacity {
+			pols.push(BackendTrafficPolicy::Capacity(p.try_into()?));
 		}
 		Ok(pols)
 	}
