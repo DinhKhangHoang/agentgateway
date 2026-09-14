@@ -30,6 +30,8 @@ mod peekbody;
 mod recordbody;
 pub mod remoteratelimit;
 pub mod sessionpersistence;
+pub mod sticky;
+pub mod capacity;
 pub mod tests_common;
 pub mod transformation_cel;
 

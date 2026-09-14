@@ -2724,6 +2724,8 @@ pub enum BackendTrafficPolicy {
 	SessionPersistence(http::sessionpersistence::Policy),
 	Transformation(Arc<crate::http::transformation_cel::Transformation>),
 	Health(health::Policy),
+	Sticky(http::sticky::Policy),
+	Capacity(http::capacity::Policy),
 
 	RequestHeaderModifier(filters::HeaderModifier),
 	ResponseHeaderModifier(Arc<filters::HeaderModifier>),

@@ -8,6 +8,7 @@
 
 use std::time::Instant;
 
+use crate::http::capacity::Policy as CapacityPolicy;
 use crate::store::SelectionState;
 use crate::types::loadbalancer::EndpointInfo;
 
@@ -39,7 +40,6 @@ const UNPINNED_UNDER_CAP: f64 = 1.0;
 const UNPINNED_OVER_CAP: f64 = 0.5;
 
 /// Returns true if the endpoint name matches the pinned backend for `ctx.key`.
-/// Looks up the per-pod pin map. `selection_state` is None when no sticky policy.
 fn is_pinned(
 	endpoint_name: &str,
 	ctx: &SelectionContext<'_>,
@@ -56,19 +56,53 @@ fn is_pinned(
 	false
 }
 
-/// Composed selection score applying G6 sticky bias (and G7 capacity gate when
-/// wired). When `selection_state` is None or `ctx.key` is None, reduces to
-/// raw `EndpointInfo::score()`.
+/// Read-only capacity check (no TPM debit). Returns true if the candidate is
+/// over its inflight or TPM cap.
+pub fn is_over_capacity(
+	endpoint_name: &str,
+	info: &EndpointInfo,
+	ctx: &SelectionContext<'_>,
+	capacity: Option<&CapacityPolicy>,
+	selection_state: Option<&SelectionState>,
+) -> bool {
+	let Some(cap) = capacity else { return false; };
+	// Inflight check (side-effect-free).
+	let inflight_over = cap
+		.inflight_cap
+		.is_some_and(|c| info.pending_requests_count() as i32 >= c);
+	// TPM check (read-only, no debit).
+	let tpm_over = if let (Some(tpm_cap), Some(state), Some(tokens)) =
+		(cap.tpm_per_minute, selection_state, ctx.input_tokens)
+	{
+		if let Some(entry) = state.tpm.get(endpoint_name) {
+			entry.check(tokens as u64, tpm_cap as u64, Instant::now())
+		} else {
+			false // no counter yet → fresh budget
+		}
+	} else {
+		false
+	};
+	inflight_over || tpm_over
+}
+
+/// Composed selection score applying G6 sticky bias + G7 capacity gate.
+/// When `selection_state`/`capacity` are None, reduces to raw `score()`.
 pub fn composed_score(
 	endpoint_name: &str,
 	info: &EndpointInfo,
 	ctx: &SelectionContext<'_>,
 	selection_state: Option<&SelectionState>,
+	capacity: Option<&CapacityPolicy>,
 ) -> f64 {
 	let raw = info.score();
 	let pinned = is_pinned(endpoint_name, ctx, selection_state);
-	// G7 capacity gate not yet wired; treat all as "under-cap".
-	let multiplier = if pinned { PINNED_UNDER_CAP } else { UNPINNED_UNDER_CAP };
+	let over_cap = is_over_capacity(endpoint_name, info, ctx, capacity, selection_state);
+	let multiplier = match (pinned, over_cap) {
+		(true, false) => PINNED_UNDER_CAP,
+		(true, true) => PINNED_OVER_CAP,
+		(false, false) => UNPINNED_UNDER_CAP,
+		(false, true) => UNPINNED_OVER_CAP,
+	};
 	raw * multiplier
 }
 
@@ -85,7 +119,6 @@ mod tests {
 
 	#[test]
 	fn bias_multipliers_ordered() {
-		// pinned-under-cap > pinned-over-cap > unpinned-under-cap > unpinned-over-cap
 		assert!(PINNED_UNDER_CAP > PINNED_OVER_CAP);
 		assert!(PINNED_OVER_CAP > UNPINNED_UNDER_CAP);
 		assert!(UNPINNED_UNDER_CAP > UNPINNED_OVER_CAP);
@@ -120,7 +153,7 @@ mod tests {
 		);
 		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };
 		assert!(is_pinned("be-a", &ctx, Some(&state)));
-		assert!(!is_pinned("be-b", &ctx, Some(&state))); // different backend
+		assert!(!is_pinned("be-b", &ctx, Some(&state)));
 	}
 
 	#[test]
@@ -133,7 +166,7 @@ mod tests {
 			Strng::from("key-a"),
 			PinEntry {
 				backend_name: Strng::from("be-a"),
-				expires_at: Instant::now(), // expired now
+				expires_at: Instant::now(),
 			},
 		);
 		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };

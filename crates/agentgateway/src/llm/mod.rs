@@ -73,6 +73,7 @@ impl AIBackend {
 		&self,
 		ctx: &SelectionContext<'_>,
 		selection_state: Option<&crate::store::SelectionState>,
+		capacity: Option<&crate::http::capacity::Policy>,
 	) -> Option<(Arc<NamedAIProvider>, ActiveHandle)> {
 		let iter = self.providers.iter();
 		let index = iter.index();
@@ -83,17 +84,31 @@ impl AIBackend {
 		// This avoids starvation where the worst endpoint gets 0 traffic
 		let a = rand::rng().random_range(0..index.len());
 		let b = rand::rng().random_range(0..index.len());
-		let best = [a, b]
+		let candidates: Vec<_> = [a, b]
 			.into_iter()
 			.map(|idx| {
 				let (_, EndpointWithInfo { endpoint, info, .. }) =
 					index.get_index(idx).expect("index already checked");
 				(endpoint.clone(), info)
 			})
-			.max_by(|(ep_a, a), (ep_b, b)| {
-				composed_score(ep_a.name.as_str(), &*a, ctx, selection_state)
-					.total_cmp(&composed_score(ep_b.name.as_str(), &*b, ctx, selection_state))
-			});
+			.collect();
+		// G7: if all P2C candidates are over capacity, reject → 503 + Retry-After.
+		let all_over_cap = candidates.iter().all(|(ep, info)| {
+			crate::llm::selection::is_over_capacity(
+				ep.name.as_str(),
+				&**info,
+				ctx,
+				capacity,
+				selection_state,
+			)
+		});
+		if all_over_cap {
+			return None;
+		}
+		let best = candidates.into_iter().max_by(|(ep_a, a), (ep_b, b)| {
+			composed_score(ep_a.name.as_str(), &**a, ctx, selection_state, capacity)
+				.total_cmp(&composed_score(ep_b.name.as_str(), &**b, ctx, selection_state, capacity))
+		});
 		let (ep, ep_info) = best?;
 		let handle = self.providers.start_request(ep.name.clone(), ep_info);
 		Some((ep, handle))

@@ -65,6 +65,17 @@ impl TpmCounter {
 		(total, over)
 	}
 
+	/// Read-only check: returns true if over cap (no debit). Rolls window if stale.
+	pub fn check(&self, input_tokens: u64, cap: u64, now: Instant) -> bool {
+		let now_nanos = now.elapsed().as_nanos() as u64;
+		let start = self.window_start_nanos.load(Ordering::Relaxed);
+		if now_nanos.saturating_sub(start) >= Self::WINDOW.as_nanos() as u64 {
+			return false; // window rolled over, fresh budget
+		}
+		let cur = self.debited.load(Ordering::Relaxed);
+		cur.saturating_add(input_tokens) > cap
+	}
+
 	/// True-up on `finish_request`: replace the pre-debit with actual usage.
 	pub fn trued_up(&self, pre_debited: u64, actual_tokens: u64) {
 		self.actual.fetch_add(actual_tokens, Ordering::Relaxed);

@@ -268,6 +268,10 @@ pub struct BackendPolicies {
 	pub session_persistence: Option<http::sessionpersistence::Policy>,
 
 	pub health: Option<health::Policy>,
+	/// G6: sticky affinity policy.
+	pub sticky: Option<crate::http::sticky::Policy>,
+	/// G7: capacity caps policy.
+	pub capacity: Option<crate::http::capacity::Policy>,
 
 	/// Internal-only override for destination endpoint selection.
 	/// Used for stateful MCP routing (session affinity).
@@ -322,6 +326,8 @@ impl BackendPolicies {
 			transformation: other.transformation.or(self.transformation),
 			session_persistence: other.session_persistence.or(self.session_persistence),
 			health: other.health.or(self.health),
+			sticky: other.sticky.or(self.sticky),
+			capacity: other.capacity.or(self.capacity),
 			override_dest: other.override_dest.or(self.override_dest),
 		}
 	}
@@ -1365,6 +1371,12 @@ impl Store {
 				},
 				BackendTrafficPolicy::Health(p) => {
 					pol.health.get_or_insert_with(|| p.clone());
+				},
+				BackendTrafficPolicy::Sticky(p) => {
+					pol.sticky.get_or_insert_with(|| p.clone());
+				},
+				BackendTrafficPolicy::Capacity(p) => {
+					pol.capacity.get_or_insert_with(|| p.clone());
 				},
 				BackendTrafficPolicy::RequestMirror(p) => {
 					if pol.request_mirror.is_empty() {

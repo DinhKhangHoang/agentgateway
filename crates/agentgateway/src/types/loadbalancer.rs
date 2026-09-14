@@ -927,6 +927,11 @@ impl EndpointInfo {
 			self.request_latency.load() * (1.0 + self.pending_requests.countf() * 0.1);
 		self.health.load() / (1.0 + latency_penalty)
 	}
+
+	/// G7: current in-flight request count for capacity gating.
+	pub fn pending_requests_count(&self) -> usize {
+		self.pending_requests.count()
+	}
 	fn start_request(
 		self: &Arc<Self>,
 		key: Strng,

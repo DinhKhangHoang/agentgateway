@@ -340,6 +340,8 @@ async fn apply_backend_policies(
 		override_dest: _,
 		// Applied elsewhere
 		health: _,
+		sticky: _,
+		capacity: _,
 	} = &*backend_call.backend_policies;
 	rp.backend_response_header = response_header_modifier.as_response_policy();
 
@@ -2074,7 +2076,7 @@ async fn make_backend_call(
 				strategy: BalanceStrategy::P2c,
 				route: RouteIdentifier::default(),
 			};
-			let (provider, handle) = match ai.select_provider(&SelectionContext::none(), None) {
+			let (provider, handle) = match ai.select_provider(&SelectionContext::none(), None, None) {
 				Some(v) => {
 					inputs.metrics.balance_picks.get_or_create(&balance_labels).inc();
 					v
