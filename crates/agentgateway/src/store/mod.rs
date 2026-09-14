@@ -1,7 +1,7 @@
 mod binds;
 mod selection_state;
 
-pub use selection_state::{PinEntry, SelectionState};
+pub use selection_state::{PinEntry, SelectionState, TpmCounter};
 
 use std::sync::{Arc, OnceLock};
 

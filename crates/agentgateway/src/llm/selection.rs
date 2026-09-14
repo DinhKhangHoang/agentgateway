@@ -172,4 +172,99 @@ mod tests {
 		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };
 		assert!(!is_pinned("be-a", &ctx, Some(&state)));
 	}
+
+	// --- Integration tests (Task 9) ---
+
+	#[test]
+	fn composed_score_none_reduces_to_raw() {
+		let info = EndpointInfo::default();
+		let raw = info.score();
+		let composed = composed_score("be-a", &info, &SelectionContext::none(), None, None);
+		assert_eq!(composed, raw);
+	}
+
+	#[test]
+	fn pinned_under_cap_beats_unpinned_under_cap() {
+		use crate::store::PinEntry;
+		use agent_core::prelude::Strng;
+		use std::time::Duration;
+
+		let state = SelectionState::default();
+		state.pins.insert(
+			Strng::from("key-a"),
+			PinEntry {
+				backend_name: Strng::from("ep-1"),
+				expires_at: Instant::now() + Duration::from_secs(60),
+			},
+		);
+		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };
+
+		let info = EndpointInfo::default();
+		let raw = info.score();
+
+		let score_pinned = composed_score("ep-1", &info, &ctx, Some(&state), None);
+		let score_unpinned = composed_score("ep-2", &info, &ctx, Some(&state), None);
+
+		// Pinned (×2.0) should beat unpinned (×1.0) with equal raw scores.
+		assert_eq!(score_pinned, raw * PINNED_UNDER_CAP);
+		assert_eq!(score_unpinned, raw * UNPINNED_UNDER_CAP);
+		assert!(score_pinned > score_unpinned);
+	}
+
+	#[test]
+	fn tpm_over_cap_deprioritizes() {
+		use agent_core::prelude::Strng;
+		use std::time::Duration;
+
+		let state = SelectionState::default();
+		let now = Instant::now();
+		let ctr = crate::store::TpmCounter::new(now);
+		// Exhaust the TPM budget: 1000 debited, cap 1000.
+		ctr.check_and_debit(1000, 1000, now);
+		state.tpm.insert(Strng::from("ep-1"), ctr);
+
+		let capacity = CapacityPolicy {
+			inflight_cap: None,
+			tpm_per_minute: Some(1000),
+			cooldown: Some(Duration::from_secs(3)),
+		};
+		let ctx = SelectionContext { key: None, input_tokens: Some(500) };
+
+		let info = EndpointInfo::default();
+		let raw = info.score();
+
+		// ep-1 is over TPM cap → ×0.5; ep-2 is fresh → ×1.0.
+		let score_over = composed_score("ep-1", &info, &ctx, Some(&state), Some(&capacity));
+		let score_fresh = composed_score("ep-2", &info, &ctx, Some(&state), Some(&capacity));
+
+		assert_eq!(score_over, raw * UNPINNED_OVER_CAP);
+		assert_eq!(score_fresh, raw * UNPINNED_UNDER_CAP);
+		assert!(score_fresh > score_over);
+	}
+
+	#[test]
+	fn per_pod_pin_divergence() {
+		use crate::store::PinEntry;
+		use agent_core::prelude::Strng;
+		use std::time::Duration;
+
+		// Two SelectionStates (simulating two pods). Same key pins to different backends.
+		let state_a = SelectionState::default();
+		let state_b = SelectionState::default();
+		let ttl = Duration::from_secs(60);
+		state_a.pins.insert(
+			Strng::from("key-a"),
+			PinEntry { backend_name: Strng::from("ep-1"), expires_at: Instant::now() + ttl },
+		);
+		state_b.pins.insert(
+			Strng::from("key-a"),
+			PinEntry { backend_name: Strng::from("ep-2"), expires_at: Instant::now() + ttl },
+		);
+
+		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };
+		assert!(is_pinned("ep-1", &ctx, Some(&state_a)));
+		assert!(!is_pinned("ep-2", &ctx, Some(&state_a)));
+		assert!(is_pinned("ep-2", &ctx, Some(&state_b)));
+		assert!(!is_pinned("ep-1", &ctx, Some(&state_b)));
+	}
 }
