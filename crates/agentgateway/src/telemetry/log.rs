@@ -243,6 +243,9 @@ pub struct Config {
 	pub format: crate::LoggingFormat,
 	/// Optional request log database sink.
 	pub database: Option<crate::telemetry::log_store::Config>,
+	/// Whether to include prompt/completion payloads in stdout/OTLP logs.
+	#[serde(default)]
+	pub log_payloads: bool,
 }
 
 #[derive(serde::Serialize, Default, Clone, Debug)]
@@ -944,6 +947,9 @@ impl RequestLog {
 			selection_key: None,
 			selection_endpoint: None,
 			selection_pre_debited: None,
+			stream_completed: false,
+			session_id: None,
+			log_payloads: false,
 		}
 	}
 
@@ -1127,6 +1133,15 @@ pub struct RequestLog {
 	pub selection_endpoint: Option<Strng>,
 	/// G7: pre-debited TPM tokens for true-up on finish_request.
 	pub selection_pre_debited: Option<u64>,
+
+	/// Whether the response stream completed normally (vs client-aborted mid-flight).
+	pub stream_completed: bool,
+
+	/// LLM session ID extracted from the `x-session-id` request header.
+	pub session_id: Option<String>,
+
+	/// Whether to include prompt/completion payloads in stdout/OTLP logs.
+	pub log_payloads: bool,
 }
 
 impl Drop for DropOnLog {
@@ -1544,6 +1559,13 @@ impl Drop for DropOnLog {
 						.map(Into::into),
 				),
 				(
+					"gen_ai.usage.server_tool_use",
+					llm_response
+						.as_ref()
+						.and_then(|l| l.server_tool_use)
+						.map(Into::into),
+				),
+				(
 					"gen_ai.request.temperature",
 					log
 						.llm_request
@@ -1610,6 +1632,11 @@ impl Drop for DropOnLog {
 				("error", log.error.quoted()),
 				("reason", reason.display()),
 				("duration", Some(dur.as_str().into())),
+				("selection.key", log.selection_key.as_ref().map(display)),
+				("selection.endpoint", log.selection_endpoint.display()),
+				("selection.pre_debited", log.selection_pre_debited.map(Into::into)),
+				("stream.completed", Some(log.stream_completed.into())),
+				("session.id", log.session_id.as_ref().map(display)),
 			];
 
 			let mut extra_kv_capacity = trace_cost_fields.as_ref().map_or(0, |fields| fields.len());
@@ -1678,6 +1705,27 @@ impl Drop for DropOnLog {
 					// JSON number formatting instead of serializing serde_json::Number directly.
 					let eval = v.as_ref().map(json_value_to_value_bag);
 					kv.push((k, eval));
+				}
+
+				let prompt_str = if log.log_payloads {
+					log.llm_request.as_ref()
+						.and_then(|info| info.prompt.as_ref())
+						.and_then(|prompt| serde_json::to_string(prompt.as_ref()).ok())
+				} else {
+					None
+				};
+				let completion_str = if log.log_payloads {
+					llm_response.as_ref()
+						.and_then(|resp| resp.completion.as_ref())
+						.and_then(|completion| serde_json::to_string(completion).ok())
+				} else {
+					None
+				};
+				if let Some(s) = &prompt_str {
+					kv.push(("request.prompt", Some(s.as_str().into())));
+				}
+				if let Some(s) = &completion_str {
+					kv.push(("response.completion", Some(s.as_str().into())));
 				}
 
 				if maybe_enable_log {
@@ -1842,7 +1890,18 @@ where
 				}
 				Poll::Ready(Some(Ok(frame)))
 			},
-			res => Poll::Ready(res),
+			Some(Err(e)) => {
+				if let Some(log) = this.log.as_mut() {
+					log.stream_completed = true;
+				}
+				Poll::Ready(Some(Err(e)))
+			},
+			None => {
+				if let Some(log) = this.log.as_mut() {
+					log.stream_completed = true;
+				}
+				Poll::Ready(None)
+			},
 		}
 	}
 

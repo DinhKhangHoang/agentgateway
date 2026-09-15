@@ -89,6 +89,7 @@ fn build_test_request() -> crate::http::Request {
 		time_per_output_token: Some(chrono::Duration::milliseconds(7).into()),
 		count_tokens: None,
 		reasoning_tokens: None,
+		server_tool_use: None,
 		cache_creation_input_tokens: None,
 		cached_input_tokens: None,
 		prompt: None,

@@ -27,6 +27,7 @@ fn ctx_with_sentinel() -> LLMContext {
 		output_text_tokens: None,
 		output_audio_tokens: None,
 		reasoning_tokens: None,
+		server_tool_use: None,
 		total_tokens: Some(400109),
 		service_tier: None,
 		first_token: None,

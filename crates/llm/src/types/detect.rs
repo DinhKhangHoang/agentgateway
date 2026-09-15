@@ -457,6 +457,14 @@ mod lookups {
 		// Bedrock invoke
 		&["metadata", "usage", "cacheReadInputTokenCount"],
 	];
+	pub const SERVER_TOOL_USE: [&[&str]; 3] = [
+		// Messages / Completions
+		&["usage", "server_tool_use"],
+		// Responses streaming
+		&["response", "usage", "server_tool_use"],
+		// Responses
+		&["usage", "output_tokens_details", "server_tool_use"],
+	];
 	pub const SERVICE_TIER: [&[&str]; 3] = [
 		// Completions
 		&["service_tier"],
@@ -493,6 +501,7 @@ impl ResponseType for Response {
 			cache_creation_input_tokens: self
 				.lookup(lookups::CACHE_CREATION_INPUT_TOKENS, |v| v.as_u64()),
 			cached_input_tokens: self.lookup(lookups::CACHED_INPUT_TOKENS, |v| v.as_u64()),
+			server_tool_use: self.lookup(lookups::SERVER_TOOL_USE, |v| v.as_u64()),
 			service_tier: self
 				.lookup(lookups::SERVICE_TIER, |v| v.as_str())
 				.map(Into::into),
@@ -619,6 +628,12 @@ pub fn amend_from_stream_response(log: &mut StreamingUsageGuard, f: &StreamRespo
 		lookups::CACHED_INPUT_TOKENS,
 		|v| v.as_u64(),
 		|l, v| l.response.cached_input_tokens = Some(v),
+	);
+	let _server_tool_use = f.set_if(
+		log,
+		lookups::SERVER_TOOL_USE,
+		|v| v.as_u64(),
+		|l, v| l.response.server_tool_use = Some(v),
 	);
 	let _provider_model = f.set_if(
 		log,

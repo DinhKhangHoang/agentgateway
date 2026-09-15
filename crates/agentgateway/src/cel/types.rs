@@ -1452,6 +1452,10 @@ pub struct LLMContext {
 	#[dynamic(rename = "reasoningTokens")]
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub reasoning_tokens: Option<u64>,
+	/// The number of server-side tool uses (e.g. web search) in the response.
+	#[dynamic(rename = "serverToolUse")]
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub server_tool_use: Option<u64>,
 	/// The total number of tokens for the request.
 	#[dynamic(rename = "totalTokens")]
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -1521,6 +1525,7 @@ impl LLMContext {
 			time_to_first_token: None,
 			time_per_output_token: None,
 			reasoning_tokens: resp.reasoning_tokens,
+			server_tool_use: resp.server_tool_use,
 			input_image_tokens: resp.input_image_tokens,
 			input_text_tokens: resp.input_text_tokens,
 			input_audio_tokens: resp.input_audio_tokens,
@@ -1608,6 +1613,7 @@ impl From<llm::LLMRequest> for LLMContext {
 			completion: None,
 			tool_calls: None,
 			reasoning_tokens: None,
+			server_tool_use: None,
 			input_image_tokens: None,
 			input_text_tokens: None,
 			input_audio_tokens: None,
@@ -2300,6 +2306,7 @@ pub fn full_example_executor() -> ExecutorSerde {
 			output_text_tokens: Some(20),
 			output_audio_tokens: Some(3),
 			reasoning_tokens: Some(30),
+			server_tool_use: None,
 			total_tokens: Some(150),
 			service_tier: Some("default".into()),
 			first_token: None,

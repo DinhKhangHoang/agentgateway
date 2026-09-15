@@ -401,6 +401,7 @@ impl ResponseType for Response {
 			reasoning_tokens: None,
 			cache_creation_input_tokens: self.usage.cache_creation_input_tokens,
 			cached_input_tokens: self.usage.cache_read_input_tokens,
+			server_tool_use: None,
 			service_tier: self.usage.service_tier.as_deref().map(Into::into),
 			completion: if log_content.completion {
 				Some(
@@ -1104,6 +1105,7 @@ pub mod typed {
 				reasoning_tokens: None,
 				cache_creation_input_tokens: self.usage.cache_creation_input_tokens.map(|i| i as u64),
 				cached_input_tokens: self.usage.cache_read_input_tokens.map(|i| i as u64),
+				server_tool_use: None,
 				service_tier: self.usage.service_tier.as_deref().map(Into::into),
 				provider_model: Some(agent_core::strng::new(&self.model)),
 				count_tokens: None,

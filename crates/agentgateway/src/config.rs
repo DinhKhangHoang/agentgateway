@@ -532,6 +532,7 @@ pub fn parse_config(
 				} else {
 					Default::default()
 				},
+				log_payloads: false,
 		},
 		dns: client::Config {
 			resolver_cfg,

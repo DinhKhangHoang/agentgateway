@@ -200,6 +200,7 @@ impl ResponseType for Response {
 					.and_then(|d| d.cache_write_tokens)
 					.or(u.cache_creation_input_tokens)
 			}),
+			server_tool_use: None,
 			service_tier: self.service_tier.as_deref().map(Into::into),
 			provider_model: Some(strng::new(&self.model)),
 			completion: if log_content.completion {

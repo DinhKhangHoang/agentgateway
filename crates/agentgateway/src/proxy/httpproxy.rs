@@ -608,7 +608,7 @@ impl HTTPProxy {
 		req
 			.extensions_mut()
 			.insert(RequestTime(start.as_datetime()));
-		let log = RequestLog::new(
+		let mut log = RequestLog::new(
 			log::CelLogging::new(
 				self.inputs.cfg.logging.clone(),
 				self.inputs.cfg.metrics.clone(),
@@ -618,6 +618,7 @@ impl HTTPProxy {
 			start,
 			tcp.clone(),
 		);
+		log.log_payloads = self.inputs.cfg.logging.log_payloads;
 		let mut log: DropOnLog = log.into();
 
 		// Setup ResponsePolicies outside of proxy_internal, so we have can unconditionally run them even on errors
@@ -2109,6 +2110,13 @@ async fn make_backend_call(
 				l.selection_key = ctx.key.map(|s| s.to_string());
 				l.selection_endpoint = Some(provider.name.clone());
 			});
+			// Session ID from request header for LLM session tracking.
+			let session_id = req.headers().get("x-session-id")
+				.and_then(|v| v.to_str().ok())
+				.map(str::to_owned);
+			if session_id.is_some() {
+				log.add(move |l| { l.session_id = session_id; });
+			}
 			// G7: TPM pre-debit on the selected endpoint.
 			if let (Some(cap), Some(tokens), Some(state)) = (
 				policies.capacity.as_ref(),
@@ -2121,6 +2129,9 @@ async fn make_backend_call(
 					});
 					let (total, _over) = entry.check_and_debit(tokens as u64, tpm_cap as u64, std::time::Instant::now());
 					log.add(|l| l.selection_pre_debited = Some(total));
+					inputs.metrics.tpm_reserved
+						.get_or_create(&balance_labels)
+						.inc_by(tokens as u64);
 				}
 			}
 			log.add(move |l| l.request_handle = Some(handle));

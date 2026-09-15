@@ -287,6 +287,7 @@ pub struct Metrics {
 	// WS-5: Serving-SRE telemetry — balance selection, health probing, eviction.
 	pub balance_picks: Family<BalanceLabels, counter::Counter>,
 	pub balance_exhausted: Family<BalanceLabels, counter::Counter>,
+	pub tpm_reserved: Family<BalanceLabels, counter::Counter>,
 	pub health_probe: Family<HealthProbeLabels, counter::Counter>,
 	pub health_eviction: Family<HealthEvictionLabels, counter::Counter>,
 
@@ -452,6 +453,15 @@ impl Metrics {
 				registry.register(
 					"balance_exhausted_total",
 					"Total selection exhaustions (no healthy endpoint, yields NoHealthyEndpoints 503)",
+					m.clone(),
+				);
+				m
+			},
+			tpm_reserved: {
+				let m = Family::<BalanceLabels, _>::default();
+				registry.register(
+					"tpm_reserved_tokens_total",
+					"Total tokens pre-debited against TPM limits",
 					m.clone(),
 				);
 				m
