@@ -80,6 +80,35 @@ impl AIBackend {
 		if index.is_empty() {
 			return None;
 		}
+		// G6 consistent-hash: when enabled and key is present but not pinned,
+		// use rendezvous hashing (HRW) for deterministic initial placement.
+		if ctx.consistent_hash && ctx.key.is_some() {
+			let key = ctx.key.unwrap();
+			let pinned = selection_state
+				.and_then(|s| s.pins.get(key))
+				.is_some_and(|e| !e.is_expired(std::time::Instant::now()));
+			if !pinned {
+				let names: Vec<&str> = index
+					.iter()
+					.map(|(_, ewi)| ewi.endpoint.name.as_str())
+					.collect();
+				let chosen = crate::llm::selection::consistent_select(key, names.iter().copied())?;
+				// Find the chosen endpoint and check capacity.
+				let found = index.iter().find(|(_, ewi)| ewi.endpoint.name.as_str() == chosen)?;
+				let (_, EndpointWithInfo { endpoint, info, .. }) = found;
+				if crate::llm::selection::is_over_capacity(
+					endpoint.name.as_str(),
+					&**info,
+					ctx,
+					capacity,
+					selection_state,
+				) {
+					return None;
+				}
+				let handle = self.providers.start_request(endpoint.name.clone(), info);
+				return Some((endpoint.clone(), handle));
+			}
+		}
 		// Intentionally allow `rand::seq::index::sample` so we can pick the same element twice
 		// This avoids starvation where the worst endpoint gets 0 traffic
 		let a = rand::rng().random_range(0..index.len());

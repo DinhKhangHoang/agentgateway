@@ -17,6 +17,11 @@ pub struct Policy {
 	/// How long a pin survives after last use. Default 10m.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub ttl: Option<Duration>,
+	/// Use rendezvous (HRW) consistent hashing for initial endpoint selection
+	/// instead of P2C. When true, requests with the same key route to the same
+	/// endpoint even before a pin is established. Requires `key` to be set.
+	#[serde(default)]
+	pub consistent_hash: bool,
 }
 
 /// Local/config sticky policy (YAML deserialization). Mirrors `LocalHealthPolicy`.
@@ -27,6 +32,8 @@ pub struct LocalSticky {
 	pub key: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none", with = "crate::serde_dur_option")]
 	pub ttl: Option<Duration>,
+	#[serde(default)]
+	pub consistent_hash: bool,
 }
 
 impl TryFrom<LocalSticky> for Policy {
@@ -35,6 +42,7 @@ impl TryFrom<LocalSticky> for Policy {
 		Ok(Self {
 			key: v.key.map(Strng::from),
 			ttl: v.ttl,
+			consistent_hash: v.consistent_hash,
 		})
 	}
 }

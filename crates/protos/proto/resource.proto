@@ -1525,6 +1525,9 @@ message BackendPolicySpec {
     string key = 1;
     // How long a pin survives after last use. Default 10m.
     google.protobuf.Duration ttl = 2;
+    // Use rendezvous (HRW) consistent hashing for initial endpoint selection
+    // instead of P2C. When true, same key → same endpoint even before a pin.
+    bool consistent_hash = 3;
   }
   // G7: capacity caps policy.
   message Capacity {

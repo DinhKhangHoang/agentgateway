@@ -2259,6 +2259,7 @@ fn backend_policy_from_proto(
 		Some(bps::Kind::Sticky(s)) => BackendTrafficPolicy::Sticky(http::sticky::Policy {
 			key: (!s.key.is_empty()).then(|| Strng::from(s.key.as_str())),
 			ttl: s.ttl.clone().map(convert_duration),
+			consistent_hash: s.consistent_hash,
 		}),
 		Some(bps::Kind::Capacity(c)) => BackendTrafficPolicy::Capacity(http::capacity::Policy {
 			inflight_cap: c.inflight_cap,

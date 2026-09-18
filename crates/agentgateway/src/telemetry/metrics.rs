@@ -59,6 +59,7 @@ pub struct GuardrailLabels {
 pub enum BalanceStrategy {
 	#[default]
 	P2c,
+	ConsistentHash,
 	Fallback,
 	Degraded,
 	Override,

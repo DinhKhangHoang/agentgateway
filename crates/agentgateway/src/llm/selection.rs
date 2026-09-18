@@ -20,11 +20,13 @@ pub struct SelectionContext<'a> {
 	pub key: Option<&'a str>,
 	/// LLMRequest.input_tokens, for G7 TPM pre-debit. None when no Capacity policy.
 	pub input_tokens: Option<u32>,
+	/// Use rendezvous consistent hashing instead of P2C for non-pinned requests.
+	pub consistent_hash: bool,
 }
 
 impl<'a> SelectionContext<'a> {
 	pub fn none() -> Self {
-		Self { key: None, input_tokens: None }
+		Self { key: None, input_tokens: None, consistent_hash: false }
 	}
 }
 
@@ -106,6 +108,28 @@ pub fn composed_score(
 	raw * multiplier
 }
 
+/// Rendezvous hashing (HRW — Highest Random Weight) for consistent-hash
+/// endpoint selection. O(n) per selection, deterministic, and minimally
+/// disruptive when endpoints are added/removed. Returns the endpoint name
+/// that maximises `hash(key || endpoint_name)`.
+pub fn consistent_select<'a, I>(key: &str, endpoints: I) -> Option<&'a str>
+where
+	I: IntoIterator<Item = &'a str>,
+{
+	use std::collections::hash_map::DefaultHasher;
+	use std::hash::{Hash, Hasher};
+
+	endpoints
+		.into_iter()
+		.max_by_key(|name| {
+			let mut hasher = DefaultHasher::new();
+			key.hash(&mut hasher);
+			name.hash(&mut hasher);
+			Hasher::finish(&hasher)
+		})
+		.map(|name| name)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -126,7 +150,7 @@ mod tests {
 
 	#[test]
 	fn is_pinned_returns_false_without_state() {
-		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };
+		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None, consistent_hash: false };
 		assert!(!is_pinned("be-a", &ctx, None));
 	}
 
@@ -151,7 +175,7 @@ mod tests {
 				expires_at: Instant::now() + Duration::from_secs(60),
 			},
 		);
-		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };
+		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None, consistent_hash: false };
 		assert!(is_pinned("be-a", &ctx, Some(&state)));
 		assert!(!is_pinned("be-b", &ctx, Some(&state)));
 	}
@@ -169,7 +193,7 @@ mod tests {
 				expires_at: Instant::now(),
 			},
 		);
-		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };
+		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None, consistent_hash: false };
 		assert!(!is_pinned("be-a", &ctx, Some(&state)));
 	}
 
@@ -197,7 +221,7 @@ mod tests {
 				expires_at: Instant::now() + Duration::from_secs(60),
 			},
 		);
-		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };
+		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None, consistent_hash: false };
 
 		let info = EndpointInfo::default();
 		let raw = info.score();
@@ -228,7 +252,7 @@ mod tests {
 			tpm_per_minute: Some(1000),
 			cooldown: Some(Duration::from_secs(3)),
 		};
-		let ctx = SelectionContext { key: None, input_tokens: Some(500) };
+		let ctx = SelectionContext { key: None, input_tokens: Some(500), consistent_hash: false };
 
 		let info = EndpointInfo::default();
 		let raw = info.score();
@@ -261,10 +285,38 @@ mod tests {
 			PinEntry { backend_name: Strng::from("ep-2"), expires_at: Instant::now() + ttl },
 		);
 
-		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None };
+		let ctx = SelectionContext { key: Some("key-a"), input_tokens: None, consistent_hash: false };
 		assert!(is_pinned("ep-1", &ctx, Some(&state_a)));
 		assert!(!is_pinned("ep-2", &ctx, Some(&state_a)));
 		assert!(is_pinned("ep-2", &ctx, Some(&state_b)));
 		assert!(!is_pinned("ep-1", &ctx, Some(&state_b)));
+	}
+
+	#[test]
+	fn consistent_select_is_deterministic() {
+		// Same key + same endpoint set → same result every time.
+		let endpoints = vec!["ep-a", "ep-b", "ep-c"];
+		let first = consistent_select("key-1", endpoints.iter().copied()).unwrap();
+		let second = consistent_select("key-1", endpoints.iter().copied()).unwrap();
+		assert_eq!(first, second, "HRW must be deterministic for the same key");
+	}
+
+	#[test]
+	fn consistent_select_different_keys_can_differ() {
+		// With enough keys and endpoints, not all keys should map to the same endpoint.
+		let endpoints = vec!["ep-a", "ep-b", "ep-c"];
+		let results: std::collections::HashSet<_> = (0..30)
+			.map(|i| consistent_select(&format!("key-{i}"), endpoints.iter().copied()).unwrap())
+			.collect();
+		assert!(
+			results.len() > 1,
+			"HRW should distribute across endpoints, not always pick the same one"
+		);
+	}
+
+	#[test]
+	fn consistent_select_empty_returns_none() {
+		let result = consistent_select("key-1", std::iter::empty());
+		assert!(result.is_none());
 	}
 }

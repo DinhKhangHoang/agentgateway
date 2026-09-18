@@ -2090,6 +2090,10 @@ async fn make_backend_call(
 						.and_then(|r| r.input_tokens)
 						.map(|t| t as u32)
 				}),
+				consistent_hash: policies
+					.sticky
+					.as_ref()
+					.is_some_and(|s| s.consistent_hash),
 			};
 			let (provider, handle) = match ai.select_provider(
 				&ctx,
