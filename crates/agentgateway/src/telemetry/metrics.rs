@@ -7,6 +7,7 @@ use frozen_collections::FzHashSet;
 use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::counter;
 use prometheus_client::metrics::family::Family;
+use prometheus_client::metrics::gauge;
 use prometheus_client::metrics::histogram::Histogram as PromHistogram;
 use prometheus_client::metrics::info::Info;
 use prometheus_client::registry::{Metric, Registry, Unit};
@@ -290,6 +291,12 @@ pub struct Metrics {
 	pub balance_exhausted: Family<BalanceLabels, counter::Counter>,
 	pub tpm_reserved: Family<BalanceLabels, counter::Counter>,
 	pub tpm_trueup_delta: Family<BalanceLabels, counter::Counter>,
+	pub sticky_total: Family<BalanceLabels, counter::Counter>,
+	pub failover_total: Family<BalanceLabels, counter::Counter>,
+	pub capacity_rejected_total: Family<BalanceLabels, counter::Counter>,
+	pub target_health: Family<BalanceLabels, gauge::Gauge>,
+	pub capacity_in_flight: Family<BalanceLabels, gauge::Gauge>,
+	pub balance_eligible_targets: Family<BalanceLabels, gauge::Gauge>,
 	pub health_probe: Family<HealthProbeLabels, counter::Counter>,
 	pub health_eviction: Family<HealthEvictionLabels, counter::Counter>,
 
@@ -473,6 +480,60 @@ impl Metrics {
 				registry.register(
 					"tpm_trueup_delta_tokens_total",
 					"Token delta between pre-debit estimate and actual usage (true-up)",
+					m.clone(),
+				);
+				m
+			},
+			sticky_total: {
+				let m = Family::<BalanceLabels, _>::default();
+				registry.register(
+					"sticky_total",
+					"Total requests that hit a sticky affinity pin",
+					m.clone(),
+				);
+				m
+			},
+			failover_total: {
+				let m = Family::<BalanceLabels, _>::default();
+				registry.register(
+					"failover_total",
+					"Total failover hops (retries to a different endpoint)",
+					m.clone(),
+				);
+				m
+			},
+			capacity_rejected_total: {
+				let m = Family::<BalanceLabels, _>::default();
+				registry.register(
+					"capacity_rejected_total",
+					"Total requests rejected due to capacity caps (inflight or TPM)",
+					m.clone(),
+				);
+				m
+			},
+			target_health: {
+				let m = Family::<BalanceLabels, _>::default();
+				registry.register(
+					"target_health",
+					"Current health score of each target endpoint (1=healthy, 0=unhealthy)",
+					m.clone(),
+				);
+				m
+			},
+			capacity_in_flight: {
+				let m = Family::<BalanceLabels, _>::default();
+				registry.register(
+					"capacity_in_flight",
+					"Current in-flight request count per endpoint",
+					m.clone(),
+				);
+				m
+			},
+			balance_eligible_targets: {
+				let m = Family::<BalanceLabels, _>::default();
+				registry.register(
+					"balance_eligible_targets",
+					"Number of eligible target endpoints for selection",
 					m.clone(),
 				);
 				m

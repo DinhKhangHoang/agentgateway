@@ -1091,6 +1091,8 @@ impl HTTPProxy {
 				res.is_err(),
 				res.as_ref().map(|r| r.status())
 			);
+			inputs.metrics.retries.get_or_create(&Default::default()).inc();
+			inputs.metrics.failover_total.get_or_create(&BalanceLabels::default()).inc();
 			finalize_attempt_for_retry(log, &mut res);
 			last_res = Some(res);
 			if let Some(bo) = retry_backoff {
@@ -2102,10 +2104,26 @@ async fn make_backend_call(
 			) {
 				Some(v) => {
 					inputs.metrics.balance_picks.get_or_create(&balance_labels).inc();
+					inputs
+						.metrics
+						.balance_eligible_targets
+						.get_or_create(&balance_labels)
+						.set(ai.providers.iter().index().len() as i64);
+					// G6: sticky hit metric.
+					if crate::llm::selection::is_pinned(
+						v.0.name.as_str(),
+						&ctx,
+						Some(inputs.stores.read_binds().selection_state().as_ref()),
+					) {
+						inputs.metrics.sticky_total.get_or_create(&balance_labels).inc();
+					}
 					v
 				}
 				None => {
 					inputs.metrics.balance_exhausted.get_or_create(&balance_labels).inc();
+					if policies.capacity.is_some() {
+						inputs.metrics.capacity_rejected_total.get_or_create(&balance_labels).inc();
+					}
 					let retry_after = policies.capacity.as_ref().and_then(|c| c.cooldown);
 					return Err(ProxyError::NoHealthyEndpoints { retry_after }.into());
 				}

@@ -42,7 +42,7 @@ const UNPINNED_UNDER_CAP: f64 = 1.0;
 const UNPINNED_OVER_CAP: f64 = 0.5;
 
 /// Returns true if the endpoint name matches the pinned backend for `ctx.key`.
-fn is_pinned(
+pub fn is_pinned(
 	endpoint_name: &str,
 	ctx: &SelectionContext<'_>,
 	selection_state: Option<&SelectionState>,
