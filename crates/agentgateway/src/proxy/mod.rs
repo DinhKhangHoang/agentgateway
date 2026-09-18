@@ -44,7 +44,7 @@ impl ProxyResponse {
 			| ProxyError::RouteNotFound
 			| ProxyError::MisdirectedRequest
 			| ProxyError::ServiceNotFound => ProxyResponseReason::NotFound,
-			ProxyError::NoHealthyEndpoints
+			ProxyError::NoHealthyEndpoints { .. }
 			| ProxyError::InvalidBackendType
 			| ProxyError::DnsResolution
 			| ProxyError::NoValidBackends
@@ -174,7 +174,9 @@ pub enum ProxyError {
 	#[error("invalid backend type")]
 	InvalidBackendType,
 	#[error("no healthy backends")]
-	NoHealthyEndpoints,
+	NoHealthyEndpoints {
+		retry_after: Option<std::time::Duration>,
+	},
 	#[error("external authorization failed")]
 	ExternalAuthorizationFailed(Option<StatusCode>),
 	#[error("authorization failed")]
@@ -284,7 +286,7 @@ impl ProxyError {
 			ProxyError::ExternalAuthorizationFailed(status) => status.unwrap_or(StatusCode::FORBIDDEN),
 
 			ProxyError::DnsResolution => StatusCode::SERVICE_UNAVAILABLE,
-			ProxyError::NoHealthyEndpoints => StatusCode::SERVICE_UNAVAILABLE,
+			ProxyError::NoHealthyEndpoints { .. } => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::UpstreamCallFailed(_) => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::UpstreamCallTimeout => StatusCode::GATEWAY_TIMEOUT,
 
@@ -381,10 +383,14 @@ impl ProxyError {
 		// gRPC callers see `grpc-status: UNAVAILABLE` on an HTTP 200 body and
 		// back off via `traffic.retry` (FR-4.4), so `Retry-After` is omitted on
 		// that path (it is not valid on a 200).
-		if !is_grpc_request && matches!(self, ProxyError::NoHealthyEndpoints) {
-			let secs = crate::http::health::DEFAULT_EVICTION_SECS;
-			if let Ok(hv) = HeaderValue::try_from(secs.to_string()) {
-				rb = rb.header(hyper::header::RETRY_AFTER, hv);
+		if !is_grpc_request {
+			if let ProxyError::NoHealthyEndpoints { retry_after } = self {
+				let secs = retry_after
+					.map(|d| d.as_secs())
+					.unwrap_or(crate::http::health::DEFAULT_EVICTION_SECS);
+				if let Ok(hv) = HeaderValue::try_from(secs.to_string()) {
+					rb = rb.header(hyper::header::RETRY_AFTER, hv);
+				}
 			}
 		}
 
@@ -554,7 +560,7 @@ mod tests {
 
 	#[test]
 	fn grpc_error_response_maps_http_status_to_grpc_status() {
-		let response = ProxyError::NoHealthyEndpoints.into_response_with_grpc(true);
+		let response = ProxyError::NoHealthyEndpoints { retry_after: None }.into_response_with_grpc(true);
 
 		assert_eq!(response.status(), StatusCode::OK);
 		assert_eq!(
@@ -576,7 +582,7 @@ mod tests {
 
 	#[test]
 	fn http_error_response_keeps_http_status() {
-		let response = ProxyError::NoHealthyEndpoints.into_response_with_grpc(false);
+		let response = ProxyError::NoHealthyEndpoints { retry_after: None }.into_response_with_grpc(false);
 
 		assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 		assert_eq!(
@@ -592,7 +598,7 @@ mod tests {
 		// fallback exhausted even the evicted set) advertises a Retry-After
 		// matching the health policy's base eviction duration, so a client
 		// that honors it lands on a recovered backend.
-		let response = ProxyError::NoHealthyEndpoints.into_response_with_grpc(false);
+		let response = ProxyError::NoHealthyEndpoints { retry_after: None }.into_response_with_grpc(false);
 
 		assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 		let retry_after = response
@@ -603,6 +609,23 @@ mod tests {
 			retry_after.to_str().unwrap(),
 			crate::http::health::DEFAULT_EVICTION_SECS.to_string()
 		);
+	}
+
+	#[test]
+	fn http_no_healthy_endpoints_uses_custom_retry_after() {
+		// When the capacity policy specifies a cooldown, the 503 Retry-After
+		// header must reflect it rather than the default eviction window.
+		let response = ProxyError::NoHealthyEndpoints {
+			retry_after: Some(std::time::Duration::from_secs(30)),
+		}
+		.into_response_with_grpc(false);
+
+		assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+		let retry_after = response
+			.headers()
+			.get(hyper::header::RETRY_AFTER)
+			.expect("Retry-After header on NoHealthyEndpoints 503");
+		assert_eq!(retry_after.to_str().unwrap(), "30");
 	}
 
 	#[test]

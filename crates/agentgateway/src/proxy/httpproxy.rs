@@ -2102,7 +2102,8 @@ async fn make_backend_call(
 				}
 				None => {
 					inputs.metrics.balance_exhausted.get_or_create(&balance_labels).inc();
-					return Err(ProxyError::NoHealthyEndpoints.into());
+					let retry_after = policies.capacity.as_ref().and_then(|c| c.cooldown);
+					return Err(ProxyError::NoHealthyEndpoints { retry_after }.into());
 				}
 			};
 			// G6/G7: store selection info for pin-on-success + TPM true-up.
@@ -2127,8 +2128,8 @@ async fn make_backend_call(
 					let entry = state.tpm.entry(provider.name.clone()).or_insert_with(|| {
 						crate::store::TpmCounter::new(std::time::Instant::now())
 					});
-					let (total, _over) = entry.check_and_debit(tokens as u64, tpm_cap as u64, std::time::Instant::now());
-					log.add(|l| l.selection_pre_debited = Some(total));
+					let (_total, _over) = entry.check_and_debit(tokens as u64, tpm_cap as u64, std::time::Instant::now());
+					log.add(|l| l.selection_pre_debited = Some(tokens as u64));
 					inputs.metrics.tpm_reserved
 						.get_or_create(&balance_labels)
 						.inc_by(tokens as u64);
@@ -2805,6 +2806,38 @@ async fn make_backend_call(
 	} else {
 		resp
 	};
+	// G7: TPM true-up — replace the pre-debited estimate with actual token usage.
+	// Must run after process_response populates llm_response with real counts.
+	if resp.status().is_success() {
+		if let Some(log_ref) = log.as_ref() {
+			if let (Some(endpoint), Some(pre_debited)) =
+				(&log_ref.selection_endpoint, log_ref.selection_pre_debited)
+			{
+				let actual = log_ref
+					.llm_response
+					.load_clone()
+					.and_then(|info| info.response.total_tokens.or(info.response.output_tokens));
+				if let Some(actual_tokens) = actual {
+					let binds = inputs.stores.read_binds();
+					let state = binds.selection_state();
+					if let Some(entry) = state.tpm.get(endpoint) {
+						entry.trued_up(pre_debited, actual_tokens);
+					}
+					let delta = actual_tokens.saturating_sub(pre_debited);
+					let trueup_labels = BalanceLabels {
+						backend: Some(RichStrng::from(endpoint.as_str())).into(),
+						strategy: BalanceStrategy::P2c,
+						route: RouteIdentifier::default(),
+					};
+					inputs
+						.metrics
+						.tpm_trueup_delta
+						.get_or_create(&trueup_labels)
+						.inc_by(delta);
+				}
+			}
+		}
+	}
 	// TODO: we currently do not support ImmediateResponse from inference router
 	if let Some(maybe_inference) = maybe_inference.as_mut() {
 		let _ = Box::pin(
@@ -2929,7 +2962,7 @@ pub fn build_service_call(
 				.balance_exhausted
 				.get_or_create(&svc_balance_labels)
 				.inc();
-			return Err(ProxyError::NoHealthyEndpoints.into());
+			return Err(ProxyError::NoHealthyEndpoints { retry_after: None }.into());
 		}
 	};
 
@@ -2940,7 +2973,7 @@ pub fn build_service_call(
 		service_override.destination,
 		service_override.inference_failed_open,
 	)
-	.ok_or(ProxyError::NoHealthyEndpoints)?;
+	.ok_or(ProxyError::NoHealthyEndpoints { retry_after: None })?;
 
 	log.add(move |l| l.request_handle = Some(handle));
 
@@ -3067,7 +3100,7 @@ pub fn build_service_call(
 		} else {
 			// For direct connections, we need the workload IP
 			let Some(ip) = wl.workload_ips.first() else {
-				return Err(ProxyError::NoHealthyEndpoints);
+				return Err(ProxyError::NoHealthyEndpoints { retry_after: None });
 			};
 			let dest = SocketAddr::from((*ip, target_port));
 			Target::Address(dest)
