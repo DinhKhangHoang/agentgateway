@@ -34,9 +34,20 @@ pub fn parse_config(
 	contents: String,
 	local_config_source: Option<ConfigSource>,
 ) -> anyhow::Result<Config> {
+	// Shellexpend before parsing it
+	let contents = contents.replace("# yaml-language-server: $schema", "#");
+	let contents = shellexpand::full(&contents)?;
 	let nested: NestedRawConfig = serdes::yamlviajson::from_str(&contents).ctx("invalid config")?;
 	let raw = nested.config.unwrap_or_default();
 	cel::register_custom_functions(&raw.custom_functions).ctx("invalid config.customFunctions")?;
+	let sensitive_headers = raw
+		.sensitive_headers
+		.iter()
+		.map(|name| {
+			::http::HeaderName::from_str(name)
+				.map_err(|e| anyhow::anyhow!("invalid sensitive header '{name}': {e}"))
+		})
+		.collect::<anyhow::Result<Vec<_>>>()?;
 
 	let ipv6_enabled = parse::<bool>("IPV6_ENABLED")?
 		.or(raw.enable_ipv6)
@@ -133,10 +144,12 @@ pub fn parse_config(
 		} else {
 			crate::control::RootCert::Default
 		};
+		let headers = parse_headers("XDS_HEADER_").ctx("invalid XDS_HEADER_*")?;
 		XDSConfig {
 			address,
 			auth,
 			ca_cert: xds_root_cert,
+			headers,
 			namespace: namespace.into(),
 			gateway: gateway.into(),
 			local_config,
@@ -228,6 +241,12 @@ pub fn parse_config(
 	} else {
 		None
 	};
+
+	let spiffe = raw
+		.spiffe
+		.and_then(|cfg| cfg.endpoint)
+		.map(|endpoint| crate::control::spiffe::Config { endpoint });
+
 	let network = parse("NETWORK")?.or(raw.network).unwrap_or_default();
 
 	// Self-identity for locality-aware load balancing.
@@ -283,6 +302,34 @@ pub fn parse_config(
 		.unwrap_or_default();
 	let termination_max_deadline =
 		parse_duration("CONNECTION_TERMINATION_DEADLINE")?.or(raw.connection_termination_deadline);
+	let termination_max_deadline = match termination_max_deadline {
+		Some(period) => period,
+		None => match parse::<u64>("TERMINATION_GRACE_PERIOD_SECONDS")? {
+			// We want our drain period to be less than Kubernetes, so we can use the last few seconds
+			// to abruptly terminate anything remaining before Kubernetes SIGKILLs us.
+			// We could just take the SIGKILL, but it is even more abrupt (TCP RST vs RST_STREAM/TLS close, etc)
+			// Note: we do this in code instead of in configuration so that we can use downward API to expose this variable
+			// if it is added to Kubernetes (https://github.com/kubernetes/kubernetes/pull/125746).
+			Some(secs) => Duration::from_secs(cmp::max(
+				if secs > 10 {
+					secs - 5
+				} else {
+					// If the grace period is really low give less buffer
+					secs - 1
+				},
+				1,
+			)),
+			None => Duration::from_secs(5),
+		},
+	};
+	let termination_min_deadline = if termination_min_deadline > termination_max_deadline {
+		warn!(
+			"connectionMinTerminationDeadline ({termination_min_deadline:?}) exceeds connectionTerminationDeadline ({termination_max_deadline:?}); using the maximum for both"
+		);
+		termination_max_deadline
+	} else {
+		termination_min_deadline
+	};
 	let tracing_env = resolve_tracing_env_overrides().ctx("invalid tracing environment overrides")?;
 
 	let mut otlp_headers = raw
@@ -350,27 +397,42 @@ pub fn parse_config(
 	let dynamic_ca_cert_cache =
 		parse_dynamic_ca_cert_cache_config().ctx("invalid dynamic CA cert cache config")?;
 
-	let model_catalog_sources = parse::<String>("MODEL_CATALOG_PATHS")?
-		.map(|s| {
-			s.split(',')
-				.map(|p| PathBuf::from(p.trim()))
-				.filter(|p| !p.as_os_str().is_empty())
-				.map(|file| crate::ModelCatalogSource::File { file })
-				.collect::<Vec<_>>()
-		})
-		.or(raw.model_catalog)
-		.unwrap_or_default();
-	let shared_database = raw.database.clone();
-	let database = shared_database
-		.clone()
-		.or_else(|| raw.logging.as_ref().and_then(|l| l.database.clone()));
-	let storage = StorageConfig {
-		mode: raw.storage.clone().unwrap_or_default().mode,
+	let model_catalog_sources = raw.model_catalog.unwrap_or_default();
+	let database = raw.database.clone();
+	let explicit_logging_database = raw.logging.as_ref().and_then(|l| l.database.clone());
+	if database
+		.as_ref()
+		.is_some_and(|database| database.max_connections == Some(0))
+	{
+		anyhow::bail!("config.database.maxConnections must be greater than zero");
+	}
+	if explicit_logging_database
+		.as_ref()
+		.is_some_and(|database| database.max_connections == Some(0))
+	{
+		anyhow::bail!("config.logging.database.maxConnections must be greater than zero");
+	}
+	let logging_database = explicit_logging_database.or_else(|| database.clone());
+
+	let mut storage_mode = raw.storage.clone().unwrap_or_default().mode;
+	if parse::<bool>("UI_READ_ONLY")?.unwrap_or(false) {
+		storage_mode = ConfigStoreMode::ReadOnly;
 	};
-	if storage.mode == ConfigStoreMode::Hybrid && shared_database.is_none() {
+	let storage = StorageConfig { mode: storage_mode };
+	if storage.mode == ConfigStoreMode::Hybrid && database.is_none() {
 		anyhow::bail!("config.storage.mode=hybrid requires config.database.url");
 	}
+	if storage.mode == ConfigStoreMode::Hybrid
+		&& database.as_ref().is_some_and(|database| {
+			(database.url.starts_with("postgres://") || database.url.starts_with("postgresql://"))
+				&& database.max_connections == Some(1)
+		}) {
+		anyhow::bail!(
+			"config.database.maxConnections must be at least 2 for PostgreSQL hybrid storage"
+		);
+	}
 
+	let hbone_defaults = agent_hbone::Config::default();
 	Ok(crate::Config {
 		ipv6_enabled,
 		network: network.clone().into(),
@@ -381,32 +443,15 @@ pub fn parse_config(
 		self_addr,
 		xds,
 		ca,
+		spiffe,
 		num_worker_threads: parse_worker_threads(raw.worker_threads)
 			.ctx("invalid WORKER_THREADS/config.workerThreads")?,
 		termination_min_deadline,
 		threading_mode,
 		backend: raw.backend,
 		admin_runtime_handle: None,
-		termination_max_deadline: match termination_max_deadline {
-				Some(period) => period,
-				None => match parse::<u64>("TERMINATION_GRACE_PERIOD_SECONDS")? {
-				// We want our drain period to be less than Kubernetes, so we can use the last few seconds
-				// to abruptly terminate anything remaining before Kubernetes SIGKILLs us.
-				// We could just take the SIGKILL, but it is even more abrupt (TCP RST vs RST_STREAM/TLS close, etc)
-				// Note: we do this in code instead of in configuration so that we can use downward API to expose this variable
-				// if it is added to Kubernetes (https://github.com/kubernetes/kubernetes/pull/125746).
-				Some(secs) => Duration::from_secs(cmp::max(
-					if secs > 10 {
-						secs - 5
-					} else {
-						// If the grace period is really low give less buffer
-						secs - 1
-					},
-					1,
-				)),
-				None => Duration::from_secs(5),
-			},
-		},
+		budget_policy: Arc::new(crate::http::budget::BudgetPolicy::default()),
+		termination_max_deadline,
 		tracing: raw
 			.tracing
 			.clone()
@@ -503,6 +548,7 @@ pub fn parse_config(
 				.ctx("invalid config.metrics.fields")?
 				.unwrap_or_default(),
 		},
+		histograms: raw.histograms,
 		logging: telemetry::log::Config {
 			filter: raw
 					.logging
@@ -523,15 +569,13 @@ pub fn parse_config(
 				.as_ref()
 				.and_then(|l| l.format.clone())
 				.unwrap_or_default(),
-			database: database.clone(),
+			database: logging_database.clone(),
 				fields: logging_fields(raw.logging.as_ref().and_then(|f| f.fields.clone()))
 					.ctx("invalid config.logging.fields")?,
-				database_fields: if database.is_some() {
-					database_logging_fields(raw.standard_attributes.as_ref())
-						.ctx("invalid config.standardAttributes")?
-				} else {
-					Default::default()
-				},
+				database_fields: Arc::new(arc_swap::ArcSwap::from_pointee(
+					standard_attributes(raw.standard_attributes.as_ref())
+						.ctx("invalid config.standardAttributes")?,
+				)),
 				log_payloads: false,
 		},
 		dns: client::Config {
@@ -559,28 +603,31 @@ pub fn parse_config(
 		},
 		database,
 		storage,
+		sensitive_headers,
 		session_encoder,
 		oidc_cookie_encoder,
 			hbone: Arc::new(agent_hbone::Config {
-				// window size: per-stream limit
-				window_size: parse("HTTP2_STREAM_WINDOW_SIZE")
-					.ctx("invalid HTTP2_STREAM_WINDOW_SIZE")?
-					.or(raw.hbone.as_ref().and_then(|h| h.window_size))
-					.unwrap_or(4u32 * 1024 * 1024),
-			// connection window size: per connection.
-			// Setting this to the same value as window_size can introduce deadlocks in some applications
-			// where clients do not read data on streamA until they receive data on streamB.
-			// If streamA consumes the entire connection window, we enter a deadlock.
-			// A 4x limit should be appropriate without introducing too much potential buffering.
-				connection_window_size: parse("HTTP2_CONNECTION_WINDOW_SIZE")?
-					.or(raw.hbone.as_ref().and_then(|h| h.connection_window_size))
-					.unwrap_or(16u32 * 1024 * 1024),
-				frame_size: parse("HTTP2_FRAME_SIZE")?
-					.or(raw.hbone.as_ref().and_then(|h| h.frame_size))
-					.unwrap_or(1024u32 * 1024),
-				pool_max_streams_per_conn: parse("POOL_MAX_STREAMS_PER_CONNECTION")?
-					.or(raw.hbone.as_ref().and_then(|h| h.pool_max_streams_per_conn))
-					.unwrap_or(100u16),
+				h2: agent_hbone::H2Config {
+					// window size: per-stream limit
+					window_size: parse("HTTP2_STREAM_WINDOW_SIZE")
+						.ctx("invalid HTTP2_STREAM_WINDOW_SIZE")?
+						.or(raw.hbone.as_ref().and_then(|h| h.window_size))
+						.unwrap_or(hbone_defaults.h2.window_size),
+					// connection window size: per connection.
+					// Setting this to the same value as window_size can introduce deadlocks in some applications
+					// where clients do not read data on streamA until they receive data on streamB.
+					// If streamA consumes the entire connection window, we enter a deadlock.
+					// A 4x limit should be appropriate without introducing too much potential buffering.
+					connection_window_size: parse("HTTP2_CONNECTION_WINDOW_SIZE")?
+						.or(raw.hbone.as_ref().and_then(|h| h.connection_window_size))
+						.unwrap_or(hbone_defaults.h2.connection_window_size),
+					frame_size: parse("HTTP2_FRAME_SIZE")?
+						.or(raw.hbone.as_ref().and_then(|h| h.frame_size))
+						.unwrap_or(hbone_defaults.h2.frame_size),
+					max_streams_per_conn: parse("POOL_MAX_STREAMS_PER_CONNECTION")?
+						.or(raw.hbone.as_ref().and_then(|h| h.pool_max_streams_per_conn))
+						.unwrap_or(hbone_defaults.h2.max_streams_per_conn),
+				},
 				pool_unused_release_timeout: parse_duration("POOL_UNUSED_RELEASE_TIMEOUT")?
 					.or(
 						raw
@@ -588,7 +635,7 @@ pub fn parse_config(
 						.as_ref()
 						.and_then(|h| h.pool_unused_release_timeout),
 				)
-				.unwrap_or(Duration::from_secs(60 * 5)),
+				.unwrap_or(hbone_defaults.pool_unused_release_timeout),
 		}),
 	})
 }
@@ -614,7 +661,7 @@ fn logging_fields(fields: Option<RawLoggingFields>) -> anyhow::Result<LoggingFie
 	})
 }
 
-fn database_logging_fields(
+pub(crate) fn standard_attributes(
 	standard_attributes: Option<&crate::RawStandardAttributes>,
 ) -> anyhow::Result<LoggingFields> {
 	let add = [
@@ -1216,6 +1263,43 @@ config:
 	}
 
 	#[test]
+	fn min_termination_deadline_clamps_to_max() {
+		let _env_lock = lock_env();
+
+		let config = parse_config(
+			r#"
+config:
+  connectionMinTerminationDeadline: 10s
+  connectionTerminationDeadline: 5s
+"#
+			.to_string(),
+			None,
+		)
+		.unwrap();
+
+		assert_eq!(config.termination_max_deadline, Duration::from_secs(5));
+		assert_eq!(config.termination_min_deadline, Duration::from_secs(5));
+	}
+
+	#[test]
+	fn min_termination_deadline_clamps_to_derived_max() {
+		let _env_lock = lock_env();
+
+		let config = parse_config(
+			r#"
+config:
+  connectionMinTerminationDeadline: 10s
+"#
+			.to_string(),
+			None,
+		)
+		.unwrap();
+
+		assert_eq!(config.termination_max_deadline, Duration::from_secs(5));
+		assert_eq!(config.termination_min_deadline, Duration::from_secs(5));
+	}
+
+	#[test]
 	fn tracing_requires_endpoint_from_config_or_env() {
 		let _env_lock = lock_env();
 
@@ -1247,6 +1331,44 @@ config:
 	}
 
 	#[test]
+	fn xds_headers_are_loaded_from_environment() {
+		let _env_lock = lock_env();
+		let _address = TempEnvVar::set("XDS_ADDRESS", "http://127.0.0.1:15010");
+		let _namespace = TempEnvVar::set("NAMESPACE", "default");
+		let _gateway = TempEnvVar::set("GATEWAY", "agentgateway");
+		let _revision = TempEnvVar::set("XDS_HEADER_X_ISTIO_REVISION", "canary");
+		let _tenant = TempEnvVar::set("XDS_HEADER_X_TENANT", "team-a");
+
+		let config = parse_config("{}".to_string(), None).expect("config should parse");
+
+		assert!(
+			config
+				.xds
+				.headers
+				.contains(&("x-istio-revision".to_string(), "canary".to_string()))
+		);
+		assert!(
+			config
+				.xds
+				.headers
+				.contains(&("x-tenant".to_string(), "team-a".to_string()))
+		);
+	}
+
+	#[test]
+	fn invalid_xds_header_is_rejected_during_startup() {
+		let _env_lock = lock_env();
+		let _header = TempEnvVar::set("XDS_HEADER_X_TENANT", "bad\nvalue");
+
+		let err = parse_config("{}".to_string(), None).expect_err("invalid header should fail");
+
+		assert!(
+			err.to_string().contains("invalid XDS_HEADER_*"),
+			"unexpected error: {err}"
+		);
+	}
+
+	#[test]
 	fn storage_hybrid_uses_shared_database_url() {
 		let _env_lock = lock_env();
 		let config = parse_config(
@@ -1267,6 +1389,11 @@ config:
 			config.database.as_ref().map(|db| db.url.as_str()),
 			Some("sqlite::memory:")
 		);
+		assert_eq!(
+			config.logging.database.as_ref().map(|db| db.url.as_str()),
+			Some("sqlite::memory:")
+		);
+		assert_eq!(config.database.as_ref(), config.logging.database.as_ref());
 
 		let err = parse_config(
 			r#"
@@ -1305,6 +1432,98 @@ config:
 				.to_string()
 				.contains("config.storage.mode=hybrid requires config.database.url"),
 			"unexpected error: {err}"
+		);
+	}
+
+	#[test]
+	fn primary_and_logging_databases_can_differ() {
+		let _env_lock = lock_env();
+		let config = parse_config(
+			r#"
+config:
+  database:
+    url: "postgres://config.example/database"
+    maxConnections: 7
+  logging:
+    database:
+      url: "postgres://logs.example/database"
+      maxConnections: 11
+  storage:
+    mode: hybrid
+"#
+			.to_string(),
+			None,
+		)
+		.expect("config should preserve both databases");
+
+		let database = config.database.as_ref().expect("primary database");
+		let logging_database = config.logging.database.as_ref().expect("logging database");
+		assert_eq!(database.url, "postgres://config.example/database");
+		assert_eq!(database.max_connections, Some(7));
+		assert_eq!(logging_database.url, "postgres://logs.example/database");
+		assert_eq!(logging_database.max_connections, Some(11));
+		assert_ne!(database, logging_database);
+	}
+
+	#[test]
+	fn legacy_logging_database_does_not_become_primary_database() {
+		let _env_lock = lock_env();
+		let config = parse_config(
+			r#"
+config:
+  logging:
+    database:
+      url: "sqlite::memory:"
+"#
+			.to_string(),
+			None,
+		)
+		.expect("legacy logging database should parse");
+
+		assert!(config.database.is_none());
+		assert_eq!(
+			config.logging.database.as_ref().map(|db| db.url.as_str()),
+			Some("sqlite::memory:")
+		);
+	}
+
+	#[test]
+	fn database_pool_sizes_must_be_usable() {
+		let _env_lock = lock_env();
+		let err = parse_config(
+			r#"
+config:
+  database:
+    url: "sqlite::memory:"
+    maxConnections: 0
+"#
+			.to_string(),
+			None,
+		)
+		.expect_err("zero-sized pool should fail");
+		assert!(
+			err
+				.to_string()
+				.contains("config.database.maxConnections must be greater than zero")
+		);
+
+		let err = parse_config(
+			r#"
+config:
+  database:
+    url: "postgres://database.example/database"
+    maxConnections: 1
+  storage:
+    mode: hybrid
+"#
+			.to_string(),
+			None,
+		)
+		.expect_err("PostgreSQL hybrid pool needs a slot besides its listener");
+		assert!(
+			err
+				.to_string()
+				.contains("maxConnections must be at least 2 for PostgreSQL hybrid storage")
 		);
 	}
 
@@ -1388,6 +1607,85 @@ config:
 		unsafe {
 			env::remove_var("SESSION_KEY");
 		}
+	}
+
+	#[test]
+	fn expands_environment_variables_in_config() {
+		let _env_lock = lock_env();
+		let _network = TempEnvVar::set("TEST_EXPAND_NETWORK", "expanded-network");
+
+		let config = parse_config(
+			r#"
+config:
+  network: "${TEST_EXPAND_NETWORK}"
+"#
+			.to_string(),
+			None,
+		)
+		.expect("config should parse");
+
+		assert_eq!(config.network.as_str(), "expanded-network");
+	}
+
+	#[test]
+	fn expands_environment_variables_with_default_values() {
+		let _env_lock = lock_env();
+		unsafe {
+			env::remove_var("TEST_EXPAND_UNSET");
+		}
+
+		let config = parse_config(
+			r#"
+config:
+  network: "${TEST_EXPAND_UNSET:-fallback-network}"
+"#
+			.to_string(),
+			None,
+		)
+		.expect("config should parse");
+
+		assert_eq!(config.network.as_str(), "fallback-network");
+	}
+
+	#[test]
+	fn does_not_expand_schema_comment() {
+		let _env_lock = lock_env();
+
+		// The schema comment contains a `$schema` token that must not be treated as a variable.
+		let config = parse_config(
+			r#"# yaml-language-server: $schema=https://example.com/schema.json
+config:
+  network: "static-network"
+"#
+			.to_string(),
+			None,
+		)
+		.expect("config with schema comment should parse");
+
+		assert_eq!(config.network.as_str(), "static-network");
+	}
+
+	#[test]
+	fn errors_on_unset_environment_variable() {
+		let _env_lock = lock_env();
+		unsafe {
+			env::remove_var("TEST_EXPAND_MISSING");
+		}
+
+		let err = parse_config(
+			r#"
+config:
+  network: "${TEST_EXPAND_MISSING}"
+"#
+			.to_string(),
+			None,
+		)
+		.expect_err("unset variable should fail expansion");
+
+		assert!(
+			err.to_string().contains("environment variable not found"),
+			"unexpected error: {err}"
+		);
 	}
 
 	#[test]
@@ -1507,5 +1805,29 @@ config:
 		unsafe {
 			env::remove_var("SESSION_KEY");
 		}
+	}
+
+	#[test]
+	fn spiffe_disabled_without_endpoint() {
+		let _env = lock_env();
+		let config = parse_config("{}".to_string(), None).expect("config should parse");
+		assert!(
+			config.spiffe.is_none(),
+			"SPIFFE must be disabled when no socket is configured"
+		);
+	}
+
+	#[test]
+	fn spiffe_enabled_from_raw_endpoint_field() {
+		let _env = lock_env();
+		let config = parse_config(
+			"config:\n  spiffe:\n    endpoint: unix:///run/spire/agent.sock\n".to_string(),
+			None,
+		)
+		.expect("config should parse");
+		let spiffe = config
+			.spiffe
+			.expect("spiffe.endpoint should enable the SPIFFE Workload API");
+		assert_eq!(spiffe.endpoint, "unix:///run/spire/agent.sock");
 	}
 }

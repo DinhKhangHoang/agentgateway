@@ -68,6 +68,21 @@ fn test_phone_recognizer() {
 }
 
 #[test]
+fn test_phone_recognizer_does_not_cross_line_breaks() {
+	let recognizer = PhoneRecognizer::new();
+	let text = "Call (212) 555-0100\n123 in the next line";
+
+	let results = recognizer.recognize(text);
+
+	assert!(
+		results
+			.iter()
+			.any(|result| result.matched == "(212) 555-0100"),
+		"expected the phone number before the line break to be recognized, got {results:?}"
+	);
+}
+
+#[test]
 fn test_url_recognizer() {
 	let recognizer = UrlRecognizer::new();
 
@@ -94,16 +109,15 @@ fn test_url_recognizer() {
 fn test_credit_card_recognizer() {
 	let recognizer = credit_card_recognizer::CreditCardRecognizer::new();
 
-	// Test credit card numbers (using test numbers)
-	let text = "Card number: 4111-1111-1111-1111 or 5555-5555-5555-4444";
+	let text =
+		"Valid cards: 4111-1111-1111-1111 and 5555-5555-5555-4444. Invalid card: 4111-1111-1111-1112";
 	let results = recognizer.recognize(text);
 
-	// Should find credit card patterns
-	assert!(!results.is_empty());
-	for result in results {
-		assert!(result.score > 0.0);
-		assert!(result.matched.contains("1111") || result.matched.contains("5555"));
-	}
+	let matches: Vec<&str> = results
+		.iter()
+		.map(|result| result.matched.as_str())
+		.collect();
+	assert_eq!(matches, vec!["4111-1111-1111-1111", "5555-5555-5555-4444"]);
 }
 
 #[test]

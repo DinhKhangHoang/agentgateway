@@ -41,6 +41,9 @@ fn ctx_with_sentinel() -> LLMContext {
 		cost: None,
 		cost_rates: None,
 		cost_status: None,
+		inter_chunk_latencies: Default::default(),
+		provider_input_tokens: None,
+		provider_total_tokens: None,
 	}
 }
 
@@ -93,7 +96,7 @@ fn payload_omits_unset_counters() {
 #[test]
 fn cost_decimals_serialize_as_strings() {
 	let mut ctx = ctx_with_sentinel();
-	ctx.cost = Some(crate::llm::cost::Breakdown {
+	ctx.cost = Some(crate::llm::catalog::Breakdown {
 		input: "1.20001".parse().unwrap(),
 		output: "0.00105".parse().unwrap(),
 		..Default::default()

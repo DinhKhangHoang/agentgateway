@@ -6,7 +6,63 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::http::RequestBodyExt;
 use crate::http::x_headers::TRACEPARENT;
+
+#[tokio::test]
+async fn retry_replays_input_and_records_each_rendered_llm_attempt() {
+	use crate::http::retry::ReplayBody;
+	let original = Bytes::from_static(
+		br#"{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hello"}]}"#,
+	);
+	let mut body = Body::from(original.clone());
+	body.record(4096);
+	let (content, state) = body.into_replay_parts();
+	let replay = ReplayBody::try_new(content, 4096).unwrap();
+	let retry = replay.clone();
+	let provider = custom_provider(custom::ProviderFormat::GenerateContent);
+	let mut recordings = Vec::new();
+	for replay in [replay, retry] {
+		let body = state.wrap(http::RawBody::new(replay));
+		assert_eq!(body.known_bytes(), Some(&original));
+		let recording = body.recorded().unwrap().clone();
+		let req = ::http::Request::builder()
+			.uri("/v1/chat/completions")
+			.header(::http::header::CONTENT_TYPE, "application/json")
+			.body(body)
+			.unwrap();
+		let RequestResult::Success { request, .. } = provider
+			.process_completions_request(
+				&openai_test_backend_info(),
+				None,
+				req,
+				false,
+				&mut None,
+				None,
+			)
+			.await
+			.unwrap()
+		else {
+			panic!("expected forwarded request")
+		};
+		// Parsing input is not forwarding: only the translated payload is recorded.
+		assert!(recording.bytes().is_empty());
+		let sent = request.into_body().collect().await.unwrap().to_bytes();
+		assert_ne!(sent, original);
+		assert!(
+			serde_json::from_slice::<Value>(&sent)
+				.unwrap()
+				.get("contents")
+				.is_some()
+		);
+		assert!(recording.is_complete());
+		assert_eq!(recording.bytes(), sent);
+		recordings.push((recording, sent));
+	}
+	for (recording, sent) in recordings {
+		assert_eq!(recording.bytes(), sent);
+	}
+}
 
 fn llm_request_with_tokens(input_tokens: Option<u64>) -> LLMRequest {
 	LLMRequest {
@@ -27,24 +83,448 @@ fn llm_request_with_tokens(input_tokens: Option<u64>) -> LLMRequest {
 fn vertex_gemini_uses_native_completions_and_compat_fallbacks() {
 	let provider = AIProvider::Vertex(vertex::Provider {
 		project_id: strng::new("test-project"),
-		model: None,
+		model_override: None,
 		region: None,
 	});
-	let model = Some("google/gemini-2.5-flash-lite");
+	let model = "google/gemini-2.5-flash-lite";
 
 	assert_eq!(
 		provider
-			.chat_translation(InputFormat::Completions, model)
+			.chat_translation(InputFormat::Completions, model, None)
 			.unwrap()
 			.output,
 		ChatFormat::VertexGemini
 	);
 	for input in [InputFormat::Messages, InputFormat::Responses] {
 		assert_eq!(
-			provider.chat_translation(input, model).unwrap().output,
+			provider
+				.chat_translation(input, model, None)
+				.unwrap()
+				.output,
 			ChatFormat::OpenAICompletions
 		);
 	}
+}
+
+#[test]
+fn bedrock_chat_translation_follows_endpoint_selection() {
+	fn bedrock(pref: bedrock::BedrockEndpointPreference) -> AIProvider {
+		AIProvider::Bedrock(BedrockProvider::new(bedrock::Provider {
+			model_override: None,
+			region: strng::new("us-east-1"),
+			guardrail_identifier: None,
+			guardrail_version: None,
+			endpoint_preference: pref,
+		}))
+	}
+
+	let runtime = bedrock(bedrock::BedrockEndpointPreference::RuntimeOnly);
+	for input in [
+		InputFormat::Completions,
+		InputFormat::Messages,
+		InputFormat::Responses,
+	] {
+		assert_eq!(
+			runtime
+				.chat_translation(input, "anthropic.claude-3-5-sonnet-20241022-v2:0", None)
+				.unwrap()
+				.output,
+			ChatFormat::BedrockConverse,
+			"{input:?} must render Converse on the Runtime endpoint"
+		);
+	}
+
+	let catalog = crate::llm::catalog::ModelCatalog::from_json(
+		r#"{"providers":{"aws.bedrock":{"models":{
+			"anthropic.claude-sonnet-5":{"tags":["mantle","anthropic_messages"]},
+			"openai.gpt-oss-120b":{"tags":["mantle","openai_completions","openai_responses"]}
+		}}}}"#,
+	);
+	let catalog = Some(catalog.as_handle());
+	let mantle = bedrock(bedrock::BedrockEndpointPreference::MantleOnly);
+	// gpt-oss-120b serves the two OpenAI-compatible formats on Mantle.
+	for (input, expected) in [
+		(InputFormat::Completions, ChatFormat::OpenAICompletions),
+		(InputFormat::Responses, ChatFormat::OpenAIResponses),
+	] {
+		assert_eq!(
+			mantle
+				.chat_translation(input, "openai.gpt-oss-120b", catalog)
+				.unwrap()
+				.output,
+			expected,
+			"{input:?} must pass through natively on the Mantle endpoint"
+		);
+	}
+	// Claude serves the native Messages API on Mantle.
+	assert_eq!(
+		mantle
+			.chat_translation(InputFormat::Messages, "anthropic.claude-sonnet-5", catalog)
+			.unwrap()
+			.output,
+		ChatFormat::AnthropicMessages,
+		"Messages must pass through natively for a Claude model on Mantle"
+	);
+}
+
+// A Claude model only speaks the Anthropic Messages API on Mantle, so an inbound Chat Completions
+// request must be translated to Messages, never sent to Mantle as OpenAI Chat Completions.
+#[test]
+fn bedrock_mantle_never_sends_completions_to_a_claude_model() {
+	fn mantle_provider() -> AIProvider {
+		AIProvider::Bedrock(BedrockProvider::new(bedrock::Provider {
+			model_override: None,
+			region: strng::new("us-east-1"),
+			guardrail_identifier: None,
+			guardrail_version: None,
+			endpoint_preference: bedrock::BedrockEndpointPreference::MantleOnly,
+		}))
+	}
+	let mantle = mantle_provider();
+
+	// Tag-driven: the imported catalog tags Claude with anthropic_messages only.
+	let catalog = crate::llm::catalog::ModelCatalog::from_json(
+		r#"{"providers":{"aws.bedrock":{"models":{
+			"anthropic.claude-sonnet-5":{"tags":["mantle","anthropic_messages"]}
+		}}}}"#,
+	);
+	assert_eq!(
+		mantle
+			.chat_translation(
+				InputFormat::Completions,
+				"anthropic.claude-sonnet-5",
+				Some(catalog.as_handle()),
+			)
+			.unwrap()
+			.output,
+		ChatFormat::AnthropicMessages,
+		"a Completions request to a tagged Claude model must translate to Messages, not completions"
+	);
+
+	// Untagged fallback: the is_anthropic_model heuristic must also keep Completions off completions.
+	assert_eq!(
+		mantle
+			.chat_translation(InputFormat::Completions, "anthropic.claude-opus-4-8", None)
+			.unwrap()
+			.output,
+		ChatFormat::AnthropicMessages,
+		"an untagged Claude model must still translate Completions to Messages"
+	);
+}
+
+#[test]
+fn gemini_inbound_selects_native_translation_only_for_gemini_upstreams() {
+	let vertex = AIProvider::Vertex(vertex::Provider {
+		project_id: strng::new("test-project"),
+		model_override: None,
+		region: None,
+	});
+	assert_eq!(
+		vertex
+			.chat_translation(InputFormat::Gemini, "gemini-2.5-flash", None)
+			.unwrap()
+			.output,
+		ChatFormat::VertexGemini
+	);
+	// Vertex with a non-Gemini model has no Gemini-input translation.
+	assert!(
+		vertex
+			.chat_translation(InputFormat::Gemini, "claude-sonnet-4-5", None)
+			.is_err()
+	);
+
+	let gemini = AIProvider::Gemini(gemini::Provider {
+		model_override: None,
+	});
+	assert_eq!(
+		gemini
+			.chat_translation(InputFormat::Gemini, "gemini-2.5-flash", None)
+			.unwrap()
+			.output,
+		ChatFormat::VertexGemini
+	);
+	// Completions inbound on the Gemini API provider prefers our native conversion over the
+	// OpenAI-compat shim, matching Vertex with a Gemini model.
+	assert_eq!(
+		gemini
+			.chat_translation(InputFormat::Completions, "gemini-2.5-flash", None)
+			.unwrap()
+			.output,
+		ChatFormat::VertexGemini
+	);
+	// Messages and Responses clients still ride the compat shim: there is no conversion from
+	// those formats to native Gemini.
+	for input in [InputFormat::Messages, InputFormat::Responses] {
+		assert_eq!(
+			gemini
+				.chat_translation(input, "gemini-2.5-flash", None)
+				.unwrap()
+				.output,
+			ChatFormat::OpenAICompletions
+		);
+	}
+}
+
+#[test]
+fn gemini_inbound_to_non_gemini_upstream_is_unsupported() {
+	let anthropic = AIProvider::Anthropic(anthropic::Provider {
+		model_override: None,
+	});
+	let Err(err) = anthropic.chat_translation(InputFormat::Gemini, "claude-opus-4", None) else {
+		panic!("expected unsupported conversion");
+	};
+	assert!(matches!(err, AIError::UnsupportedConversion(_)));
+	let msg = err.to_string();
+	assert!(msg.contains("Gemini") && msg.contains("anthropic"), "{msg}");
+
+	let vertex = AIProvider::Vertex(vertex::Provider {
+		project_id: strng::new("test-project"),
+		model_override: None,
+		region: None,
+	});
+	let Err(err) = vertex.chat_translation(InputFormat::Gemini, "claude-sonnet-4-5", None) else {
+		panic!("expected unsupported conversion");
+	};
+	let msg = err.to_string();
+	assert!(msg.contains("Gemini") && msg.contains("vertex"), "{msg}");
+}
+
+#[test]
+fn custom_provider_generate_content_advertises_the_native_chat_format() {
+	let provider = custom_provider(custom::ProviderFormat::GenerateContent);
+
+	// Native Gemini input takes the direct passthrough.
+	assert_eq!(
+		provider
+			.chat_translation(InputFormat::Gemini, "gemini-2.5-flash", None)
+			.unwrap()
+			.output,
+		ChatFormat::VertexGemini
+	);
+	// Completions input prefers our native conversion over the compat shim, exactly like
+	// Vertex with a Gemini model (the CHAT_TRANSLATIONS quirk).
+	assert_eq!(
+		provider
+			.chat_translation(InputFormat::Completions, "gemini-2.5-flash", None)
+			.unwrap()
+			.output,
+		ChatFormat::VertexGemini
+	);
+
+	// A custom provider that does not declare the format has no Gemini-input translation.
+	let undeclared = custom_provider(custom::ProviderFormat::Completions);
+	assert!(
+		undeclared
+			.chat_translation(InputFormat::Gemini, "gemini-2.5-flash", None)
+			.is_err()
+	);
+}
+
+#[tokio::test]
+async fn custom_provider_completions_inbound_renders_native_gemini() {
+	// With generateContent declared, the CHAT_TRANSLATIONS quirk applies to custom providers
+	// too: OpenAI-compat input converts to the native request, and the conversion must not
+	// assume a Vertex provider.
+	let provider = custom_provider(custom::ProviderFormat::GenerateContent);
+	let req = ::http::Request::builder()
+		.uri("/v1/chat/completions")
+		.header(::http::header::CONTENT_TYPE, "application/json")
+		.body(Body::from(
+			br#"{"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "hello"}]}"#
+				.to_vec(),
+		))
+		.unwrap();
+
+	let RequestResult::Success {
+		request: mut forwarded,
+		llm_request,
+		upstream_route_type,
+	} = provider
+		.process_completions_request(
+			&openai_test_backend_info(),
+			None,
+			req,
+			false,
+			&mut None,
+			None,
+		)
+		.await
+		.expect("completions request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+
+	assert_eq!(upstream_route_type, RouteType::GenerateContent);
+	assert!(matches!(
+		llm_request.provider_state,
+		Some(ProviderState::VertexGemini)
+	));
+
+	provider
+		.setup_request(
+			&mut forwarded,
+			upstream_route_type,
+			Some(&llm_request),
+			None,
+			None,
+			false,
+			None,
+			None,
+		)
+		.expect("setup_request should succeed");
+	assert_eq!(
+		forwarded.uri().path(),
+		"/v1beta/models/gemini-2.5-flash:generateContent"
+	);
+
+	let body = forwarded.into_body().collect().await.unwrap().to_bytes();
+	let json: Value = serde_json::from_slice(&body).expect("forwarded body should be JSON");
+	assert!(json.get("contents").is_some(), "{json}");
+	assert!(json.get("messages").is_none(), "{json}");
+}
+
+#[test]
+fn custom_provider_declaring_gemini_count_tokens_renders_passthrough() {
+	// countTokens has no cross-provider conversion, so the render gate must accept exactly
+	// the providers that speak it natively, including a custom provider declaring it.
+	let req: types::gemini::CountTokensRequest =
+		serde_json::from_value(json!({"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}))
+			.unwrap();
+
+	let provider = custom_provider(custom::ProviderFormat::GeminiCountTokens);
+	let body = provider
+		.render_gemini_count_tokens_request(&req, "gemini-2.5-flash")
+		.expect("declared format renders passthrough");
+	let json: Value = serde_json::from_slice(&body).unwrap();
+	assert!(json.get("contents").is_some(), "{json}");
+
+	let undeclared = custom_provider(custom::ProviderFormat::Completions);
+	assert!(
+		undeclared
+			.render_gemini_count_tokens_request(&req, "gemini-2.5-flash")
+			.is_err()
+	);
+}
+
+#[test]
+fn gemini_render_is_passthrough_with_unknown_fields() {
+	let provider = AIProvider::Vertex(vertex::Provider {
+		project_id: strng::new("test-project"),
+		model_override: None,
+		region: None,
+	});
+	let translation = provider
+		.chat_translation(InputFormat::Gemini, "gemini-2.5-flash", None)
+		.unwrap();
+
+	let raw = json!({
+		"contents": [{
+			"role": "user",
+			"parts": [
+				{ "text": "describe this", "someNewPartField": 1 },
+				{ "inlineData": { "mimeType": "image/png", "data": "AAAA" } }
+			],
+			"someNewContentField": true
+		}],
+		"systemInstruction": { "parts": [{ "text": "be brief" }] },
+		"tools": [
+			{ "functionDeclarations": [{
+				"name": "get_weather",
+				"parameters": { "type": "object" },
+				"behavior": "BLOCKING"
+			}] },
+			{ "googleSearch": {} }
+		],
+		"toolConfig": { "functionCallingConfig": { "mode": "AUTO", "someNewKnob": 1 } },
+		"generationConfig": {
+			"temperature": 0.5,
+			"thinkingConfig": { "thinkingLevel": "high", "someNewField": true },
+			"responseModalities": ["TEXT"]
+		},
+		"safetySettings": [{
+			"category": "HARM_CATEGORY_HATE_SPEECH",
+			"threshold": "BLOCK_NONE",
+			"someNewField": 1
+		}],
+		"modelArmorConfig": { "promptTemplateName": "projects/p/locations/l/templates/t" }
+	});
+	let inner: types::gemini::GenerateContentRequest =
+		serde_json::from_value(raw.clone()).expect("valid request");
+	let rendered = translation
+		.render_request(
+			types::ChatRequest::Gemini(inner),
+			&ChatRequestContext {
+				catalog: None,
+				provider: &provider,
+				headers: &HeaderMap::new(),
+				prompt_caching: None,
+			},
+		)
+		.expect("render");
+	assert!(matches!(
+		rendered.provider_state,
+		Some(ProviderState::VertexGemini)
+	));
+	let out: Value = serde_json::from_slice(&rendered.body).expect("valid body");
+	assert_eq!(
+		out, raw,
+		"render must pass unknown fields through untouched"
+	);
+}
+
+#[test]
+fn gemini_error_passes_google_shape_through() {
+	let provider = AIProvider::Vertex(vertex::Provider {
+		project_id: strng::new("test-project"),
+		model_override: None,
+		region: None,
+	});
+	let translation = provider
+		.chat_translation(InputFormat::Gemini, "gemini-2.5-flash", None)
+		.unwrap();
+	assert!(matches!(
+		provider.chat_error_format(translation, "gemini-2.5-flash"),
+		ChatErrorFormat::Google
+	));
+
+	let body = bytes::Bytes::from_static(
+		br#"{"error":{"code":400,"message":"bad request","status":"INVALID_ARGUMENT"}}"#,
+	);
+	let out = translation
+		.error(
+			&body,
+			::http::StatusCode::BAD_REQUEST,
+			ChatErrorFormat::Google,
+		)
+		.expect("error translation");
+	assert_eq!(out, body);
+}
+
+#[test]
+fn strip_alt_query_removes_only_alt() {
+	let mut req = crate::http::tests_common::request(
+		"https://example.com/v1beta/models/m:streamGenerateContent?alt=sse&key=abc",
+		http::Method::POST,
+		&[],
+	);
+	strip_alt_query(&mut req);
+	assert_eq!(req.uri().query(), Some("key=abc"));
+
+	let mut req = crate::http::tests_common::request(
+		"https://example.com/v1beta/models/m:streamGenerateContent?alt=sse",
+		http::Method::POST,
+		&[],
+	);
+	strip_alt_query(&mut req);
+	assert_eq!(req.uri().query(), None);
+
+	let mut req = crate::http::tests_common::request(
+		"https://example.com/v1beta/models/m:generateContent?key=abc",
+		http::Method::POST,
+		&[],
+	);
+	strip_alt_query(&mut req);
+	assert_eq!(req.uri().query(), Some("key=abc"));
 }
 
 #[test]
@@ -55,6 +535,7 @@ fn streaming_amend_on_drop_updates_local_rate_limit() {
 			tokens_per_fill: 10,
 			fill_interval: std::time::Duration::from_secs(60),
 			limit_type: crate::http::localratelimit::RateLimitType::Tokens,
+			key: None,
 		})
 		.unwrap();
 	let log = AsyncLog::default();
@@ -70,55 +551,43 @@ fn streaming_amend_on_drop_updates_local_rate_limit() {
 	let mut amend = AmendOnDrop::new(
 		log,
 		LLMResponsePolicies {
-			local_rate_limit: vec![rate_limit.clone()],
+			local_rate_limit: vec![rate_limit.shared_bucket()],
 			..Default::default()
 		},
 		None,
 		None,
-		crate::test_helpers::policy_client(),
+		PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi),
 	);
-	let _ = amend.report_usage();
+	amend.report_usage();
 
-	assert!(
-		rate_limit
-			.check_llm_request(&llm_request_with_tokens(Some(7)))
-			.is_err()
-	);
-	assert!(
-		rate_limit
-			.check_llm_request(&llm_request_with_tokens(Some(6)))
-			.is_ok()
-	);
+	let plain = ::http::Request::builder()
+		.body(crate::http::Body::empty())
+		.unwrap();
+	let exec = cel::Executor::new_request(&plain);
+	assert!(rate_limit.charge_tokens(Some(7), &exec).is_err());
+	assert!(rate_limit.charge_tokens(Some(6), &exec).is_ok());
 }
 
-/// Local to this module. `usage_report_tests.rs` defines a same-named helper;
-/// that one is not in scope here, so this is a deliberate duplicate rather
-/// than an import.
-fn unreachable_report() -> crate::llm::policy::usage_report::UsageReport {
-	crate::llm::policy::usage_report::UsageReport {
-		target: crate::types::agent::SimpleBackendReference::Invalid,
-		path: None,
-		timeout: None,
-		max_retries: Some(0),
-		dimensions: vec![],
-	}
-}
-
-/// A usage report must fire when it is the ONLY policy configured.
-///
-/// `report_usage()` is gated on rate limiting being present (llm/mod.rs:2588).
-/// Deployments whose limits live in an external policy server configure no
-/// native rate limit at all, so a gate that only checks rate limits makes the
-/// feature silently do nothing for precisely its intended users. This test
-/// fails if that gate regresses.
-#[tokio::test]
-async fn usage_report_fires_with_no_rate_limit_configured() {
-	let client = crate::test_helpers::policy_client();
+#[test]
+fn streaming_amend_on_drop_uses_cache_inclusive_input_tokens() {
+	let rate_limit =
+		crate::http::localratelimit::RateLimit::try_from(crate::http::localratelimit::RateLimitSpec {
+			max_tokens: 10,
+			tokens_per_fill: 10,
+			fill_interval: std::time::Duration::from_secs(60),
+			limit_type: crate::http::localratelimit::RateLimitType::Tokens,
+			key: None,
+		})
+		.unwrap();
+	let mut request = llm_request_with_tokens(Some(5));
+	request.cache_convention = CacheTokenConvention::InputExcludesCache;
 	let log = AsyncLog::default();
 	log.store(Some(LLMInfo {
-		request: llm_request_with_tokens(Some(2)),
+		request,
 		response: LLMResponse {
 			input_tokens: Some(2),
+			cached_input_tokens: Some(2),
+			cache_creation_input_tokens: Some(1),
 			output_tokens: Some(4),
 			..Default::default()
 		},
@@ -127,273 +596,21 @@ async fn usage_report_fires_with_no_rate_limit_configured() {
 	let mut amend = AmendOnDrop::new(
 		log,
 		LLMResponsePolicies {
-			usage_report: Some(Arc::new(unreachable_report())),
+			local_rate_limit: vec![rate_limit.shared_bucket()],
 			..Default::default()
 		},
 		None,
 		None,
-		client.clone(),
+		PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi),
 	);
-	// report_usage hands back the delivery task so a test can await it. No
-	// sleep, no yield: the assertion runs after delivery has actually finished.
-	let delivery = amend.report_usage().expect("a report must be dispatched");
-	delivery.await.unwrap();
+	amend.report_usage();
 
-	// Delivery fails (the target is Invalid); what matters is that it was
-	// ATTEMPTED. A gate regression shows up as this counter staying at zero.
-	assert_eq!(
-		client.inputs.metrics.llm_usage_report_dropped.get(),
-		1,
-		"usage report must be attempted even with no rate limit configured"
-	);
-}
-
-/// Both completion paths — buffered and streaming — gate on
-/// `needs_completion_amend`. This asserts the condition itself, because a
-/// test that calls `amend_tokens` directly bypasses the gate entirely and so
-/// cannot detect a gate regression: verified by reverting the gate and
-/// watching such a test still pass.
-#[test]
-fn a_usage_report_alone_requires_a_completion_amend() {
-	let pol = LLMResponsePolicies {
-		usage_report: Some(Arc::new(unreachable_report())),
-		..Default::default()
-	};
-	assert!(
-		pol.needs_completion_amend(),
-		"a usage report with no rate limit configured must still amend on completion"
-	);
-	assert!(
-		!LLMResponsePolicies::default().needs_completion_amend(),
-		"nothing configured must remain a no-op"
-	);
-}
-
-/// The buffered path reaches delivery once the gate lets it through.
-#[tokio::test]
-async fn usage_report_fires_on_the_non_streaming_path_with_no_rate_limit() {
-	let client = crate::test_helpers::policy_client();
-	let pol = LLMResponsePolicies {
-		usage_report: Some(Arc::new(unreachable_report())),
-		..Default::default()
-	};
-	let llm_info = LLMInfo {
-		request: llm_request_with_tokens(Some(2)),
-		response: LLMResponse {
-			input_tokens: Some(2),
-			output_tokens: Some(4),
-			..Default::default()
-		},
-	};
-	let resp = ::http::Response::new(crate::http::Body::empty());
-	let exec = cel::Executor::new_response(None, &resp);
-
-	let delivery =
-		amend_tokens(pol, &llm_info, exec, client.clone()).expect("a report must be dispatched");
-	delivery.await.unwrap();
-
-	assert_eq!(
-		client.inputs.metrics.llm_usage_report_dropped.get(),
-		1,
-		"the buffered-response path must report usage too"
-	);
-}
-
-// --- One report per request -------------------------------------------------
-
-/// Accepts POSTs, counts them, keeps the last body, and signals arrivals so a
-/// test can await delivery instead of sleeping.
-#[derive(Clone)]
-struct CountingReceiver {
-	count: Arc<std::sync::atomic::AtomicUsize>,
-	last: Arc<std::sync::Mutex<Option<Value>>>,
-	tx: tokio::sync::mpsc::UnboundedSender<()>,
-}
-
-impl CountingReceiver {
-	fn request_count(&self) -> usize {
-		self.count.load(std::sync::atomic::Ordering::SeqCst)
-	}
-	fn last_payload(&self) -> Value {
-		self
-			.last
-			.lock()
-			.unwrap()
-			.clone()
-			.expect("no report received")
-	}
-}
-
-impl wiremock::Respond for CountingReceiver {
-	fn respond(&self, req: &wiremock::Request) -> wiremock::ResponseTemplate {
-		self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-		*self.last.lock().unwrap() = serde_json::from_slice(&req.body).ok();
-		let _ = self.tx.send(());
-		wiremock::ResponseTemplate::new(200)
-	}
-}
-
-async fn counting_receiver() -> (
-	wiremock::MockServer,
-	CountingReceiver,
-	tokio::sync::mpsc::UnboundedReceiver<()>,
-) {
-	let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-	let receiver = CountingReceiver {
-		count: Default::default(),
-		last: Default::default(),
-		tx,
-	};
-	let mock = wiremock::MockServer::start().await;
-	wiremock::Mock::given(wiremock::matchers::method("POST"))
-		.and(wiremock::matchers::path("/usage"))
-		.respond_with(receiver.clone())
-		.mount(&mock)
-		.await;
-	(mock, receiver, rx)
-}
-
-fn report_policy_targeting(mock: &wiremock::MockServer) -> LLMResponsePolicies {
-	LLMResponsePolicies {
-		usage_report: Some(Arc::new(crate::llm::policy::usage_report::UsageReport {
-			target: crate::types::agent::SimpleBackendReference::InlineBackend(
-				crate::types::agent::Target::Address(*mock.address()),
-			),
-			path: None,
-			timeout: None,
-			max_retries: Some(0),
-			dimensions: vec![],
-		})),
-		..Default::default()
-	}
-}
-
-/// Await the first report. A bounded wait on a signal, not a fixed sleep: it
-/// returns the moment delivery happens and fails loudly if it never does.
-async fn await_first_report(rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>) {
-	tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
-		.await
-		.expect("no usage report arrived within 10s")
-		.expect("receiver channel closed before a report arrived");
-}
-
-/// The entire point of this feature: a streaming response must produce exactly
-/// ONE usage report, not one per SSE chunk. If this asserts a number greater
-/// than 1, the implementation is doing what the ext_proc service it replaces
-/// was doing, and has bought nothing.
-///
-/// The bedrock `basic.bin` fixture carries three contentBlockDelta events, so
-/// a per-chunk implementation would show at least three reports here. A
-/// single-chunk fixture would make this assertion vacuous.
-#[tokio::test]
-async fn streaming_response_produces_exactly_one_report() {
-	use crate::test_helpers::proxymock::setup_proxy_test;
-
-	let (mock, receiver, mut rx) = counting_receiver().await;
-	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
-
-	let provider = AIProvider::bedrock(bedrock::Provider {
-		model: Some(strng::new("us.anthropic.claude-haiku-4-5-20251001-v1:0")),
-		region: strng::new("us-west-2"),
-		guardrail_identifier: None,
-		guardrail_version: None,
-	});
-	let req = LLMRequest {
-		input_tokens: None,
-		input_format: InputFormat::Messages,
-		cache_convention: CacheTokenConvention::pending(),
-		request_model: "us.anthropic.claude-haiku-4-5-20251001-v1:0".into(),
-		provider: "bedrock".into(),
-		streaming: true,
-		params: Default::default(),
-		prompt: None,
-		provider_state: None,
-		web_search: None,
-	};
-
-	let input_bytes = fs::read(fixture_path("response/bedrock/basic.bin")).expect("fixture");
-	let resp = Response::new(Body::from(input_bytes));
-
-	let out = provider
-		.process_response(
-			client,
-			req,
-			report_policy_targeting(&mock),
-			None,
-			AsyncLog::default(),
-			llm::LogContentFields::default(),
-			None,
-			resp,
-		)
-		.await
-		.expect("streaming response should process");
-
-	// Draining the body runs the stream to completion, which is what triggers
-	// the single end-of-request report.
-	let _ = out.collect().await.unwrap();
-	await_first_report(&mut rx).await;
-
-	assert_eq!(
-		receiver.request_count(),
-		1,
-		"one report per request, not per chunk"
-	);
-	let body = receiver.last_payload();
-	assert_eq!(body["streaming"], true);
-	assert_eq!(body["usage"]["outputTokens"], 142);
-	assert_eq!(body["usage"]["inputTokens"], 15);
-}
-
-#[tokio::test]
-async fn non_streaming_response_produces_exactly_one_report() {
-	use crate::test_helpers::proxymock::setup_proxy_test;
-
-	let (mock, receiver, mut rx) = counting_receiver().await;
-	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
-
-	let provider = AIProvider::OpenAI(openai::Provider { model: None });
-	let req = LLMRequest {
-		input_tokens: None,
-		input_format: InputFormat::Completions,
-		cache_convention: CacheTokenConvention::pending(),
-		request_model: "gpt-3.5-turbo".into(),
-		provider: "openai".into(),
-		streaming: false,
-		params: Default::default(),
-		prompt: None,
-		provider_state: None,
-		web_search: None,
-	};
-
-	let input_bytes = fs::read(fixture_path("response/completions/basic.json")).expect("fixture");
-	let mut resp = Response::new(Body::from(input_bytes));
-	resp.headers_mut().insert(
-		::http::header::CONTENT_TYPE,
-		"application/json".parse().unwrap(),
-	);
-
-	let out = provider
-		.process_response(
-			client,
-			req,
-			report_policy_targeting(&mock),
-			None,
-			AsyncLog::default(),
-			llm::LogContentFields::default(),
-			None,
-			resp,
-		)
-		.await
-		.expect("buffered response should process");
-	let _ = out.collect().await.unwrap();
-
-	await_first_report(&mut rx).await;
-
-	assert_eq!(receiver.request_count(), 1);
-	let body = receiver.last_payload();
-	assert_eq!(body["streaming"], false);
-	assert_eq!(body["usage"]["outputTokens"], 23);
-	assert_eq!(body["usage"]["inputTokens"], 17);
+	let plain = ::http::Request::builder()
+		.body(crate::http::Body::empty())
+		.unwrap();
+	let exec = cel::Executor::new_request(&plain);
+	assert!(rate_limit.charge_tokens(Some(7), &exec).is_err());
+	assert!(rate_limit.charge_tokens(Some(6), &exec).is_ok());
 }
 
 fn test_root() -> &'static Path {
@@ -463,13 +680,372 @@ async fn test_passthrough() {
 	);
 }
 
+fn openai_inline_moderation_param() -> openai::ModerationParam {
+	openai::ModerationParam {
+		model: strng::new("omni-moderation-latest"),
+		policy: Some(openai::ModerationPolicyParam {
+			input: Some(openai::ModerationConfigParam {
+				mode: openai::ModerationMode::Block,
+			}),
+			output: Some(openai::ModerationConfigParam {
+				mode: openai::ModerationMode::Score,
+			}),
+		}),
+	}
+}
+
+fn openai_inline_moderation_value() -> Value {
+	json!({
+		"model": "omni-moderation-latest",
+		"policy": {
+			"input": { "mode": "block" },
+			"output": { "mode": "score" }
+		}
+	})
+}
+
+fn openai_test_backend_info() -> crate::http::auth::BackendInfo {
+	let inputs = crate::test_helpers::proxymock::setup_proxy_test("{}")
+		.unwrap()
+		.pi;
+	crate::http::auth::BackendInfo {
+		target: crate::types::agent::BackendTarget::Invalid,
+		call_target: Target::from(("api.openai.com", 443)),
+		inputs,
+	}
+}
+
+#[tokio::test]
+async fn openai_inline_moderation_injected_for_completions() {
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: Some(openai_inline_moderation_param()),
+	});
+	let backend_info = openai_test_backend_info();
+	let req = ::http::Request::builder()
+		.uri("/v1/chat/completions")
+		.header(::http::header::CONTENT_TYPE, "application/json")
+		.body(Body::from(
+			br#"{
+				"model": "gpt-5",
+				"messages": [{"role": "user", "content": "hello"}]
+			}"#
+				.to_vec(),
+		))
+		.unwrap();
+
+	let RequestResult::Success {
+		request: forwarded,
+		upstream_route_type,
+		..
+	} = provider
+		.process_completions_request(&backend_info, None, req, false, &mut None, None)
+		.await
+		.expect("OpenAI completions request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+
+	assert_eq!(upstream_route_type, RouteType::Completions);
+	assert_eq!(
+		forwarded_json["moderation"],
+		openai_inline_moderation_value()
+	);
+}
+
+#[tokio::test]
+async fn openai_inline_moderation_overrides_client_value_for_completions() {
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: Some(openai_inline_moderation_param()),
+	});
+	let backend_info = openai_test_backend_info();
+	let req = ::http::Request::builder()
+		.uri("/v1/chat/completions")
+		.header(::http::header::CONTENT_TYPE, "application/json")
+		.body(Body::from(
+			br#"{
+				"model": "gpt-5",
+				"messages": [{"role": "user", "content": "hello"}],
+				"moderation": {
+					"model": "client-selected-model",
+					"policy": {
+						"input": { "mode": "score" },
+						"output": { "mode": "score" }
+					}
+				}
+			}"#
+				.to_vec(),
+		))
+		.unwrap();
+
+	let RequestResult::Success {
+		request: forwarded, ..
+	} = provider
+		.process_completions_request(&backend_info, None, req, false, &mut None, None)
+		.await
+		.expect("OpenAI completions request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+
+	assert_eq!(
+		forwarded_json["moderation"],
+		openai_inline_moderation_value()
+	);
+}
+
+#[tokio::test]
+async fn openai_client_moderation_passthrough_without_config() {
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
+	let backend_info = openai_test_backend_info();
+	let req = ::http::Request::builder()
+		.uri("/v1/chat/completions")
+		.header(::http::header::CONTENT_TYPE, "application/json")
+		.body(Body::from(
+			br#"{
+					"model": "gpt-5",
+					"messages": [{"role": "user", "content": "hello"}],
+					"moderation": {
+						"model": "client-selected-model",
+						"policy": {
+							"input": {
+								"mode": "future-mode",
+								"future_option": { "enabled": true }
+							},
+							"output": { "mode": "block" }
+						}
+					},
+					"future_top_level": { "enabled": true }
+				}"#
+				.to_vec(),
+		))
+		.unwrap();
+
+	let RequestResult::Success {
+		request: forwarded, ..
+	} = provider
+		.process_completions_request(&backend_info, None, req, false, &mut None, None)
+		.await
+		.expect("OpenAI completions request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+
+	assert_eq!(
+		forwarded_json["moderation"],
+		json!({
+			"model": "client-selected-model",
+			"policy": {
+				"input": {
+					"mode": "future-mode",
+					"future_option": { "enabled": true }
+				},
+				"output": { "mode": "block" }
+			}
+		})
+	);
+	assert_eq!(
+		forwarded_json["future_top_level"],
+		json!({ "enabled": true })
+	);
+}
+
+#[tokio::test]
+async fn openai_inline_moderation_injected_for_responses() {
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: Some(openai_inline_moderation_param()),
+	});
+	let backend_info = openai_test_backend_info();
+	let req = ::http::Request::builder()
+		.uri("/v1/responses")
+		.header(::http::header::CONTENT_TYPE, "application/json")
+		.body(Body::from(
+			br#"{
+				"model": "gpt-5",
+				"input": "hello"
+			}"#
+				.to_vec(),
+		))
+		.unwrap();
+
+	let RequestResult::Success {
+		request: forwarded,
+		upstream_route_type,
+		..
+	} = provider
+		.process_responses_request(&backend_info, None, req, false, &mut None, None)
+		.await
+		.expect("OpenAI responses request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+
+	assert_eq!(upstream_route_type, RouteType::Responses);
+	assert_eq!(
+		forwarded_json["moderation"],
+		openai_inline_moderation_value()
+	);
+}
+
+#[test]
+fn openai_inline_moderation_injected_after_messages_translation() {
+	let mut cases = Vec::new();
+	for moderation in [None, Some(openai_inline_moderation_param())] {
+		let configured = moderation.is_some();
+		let provider = AIProvider::OpenAI(openai::Provider {
+			model_override: None,
+			moderation,
+		});
+		for output in [ChatFormat::OpenAICompletions, ChatFormat::OpenAIResponses] {
+			let request = serde_json::from_value(json!({
+				"model": "gpt-5",
+				"max_tokens": 64,
+				"messages": [{"role": "user", "content": "hello"}]
+			}))
+			.unwrap();
+			let rendered = ChatTranslation {
+				input: InputFormat::Messages,
+				output,
+			}
+			.render_request(
+				types::ChatRequest::Messages(request),
+				&ChatRequestContext {
+					provider: &provider,
+					headers: &HeaderMap::new(),
+					prompt_caching: None,
+					catalog: None,
+				},
+			)
+			.unwrap();
+			let forwarded: Value = serde_json::from_slice(&rendered.body).unwrap();
+			cases.push(json!({
+				"format": format!("{output:?}"),
+				"moderation_configured": configured,
+				"moderation": forwarded.get("moderation"),
+			}));
+		}
+	}
+	insta::assert_json_snapshot!(cases, @r#"
+[
+  {
+    "format": "OpenAICompletions",
+    "moderation_configured": false,
+    "moderation": null
+  },
+  {
+    "format": "OpenAIResponses",
+    "moderation_configured": false,
+    "moderation": null
+  },
+  {
+    "format": "OpenAICompletions",
+    "moderation_configured": true,
+    "moderation": {
+      "model": "omni-moderation-latest",
+      "policy": {
+        "input": {
+          "mode": "block"
+        },
+        "output": {
+          "mode": "score"
+        }
+      }
+    }
+  },
+  {
+    "format": "OpenAIResponses",
+    "moderation_configured": true,
+    "moderation": {
+      "model": "omni-moderation-latest",
+      "policy": {
+        "input": {
+          "mode": "block"
+        },
+        "output": {
+          "mode": "score"
+        }
+      }
+    }
+  }
+]
+"#);
+}
+
+#[test]
+fn openai_response_passthrough_preserves_moderation_fields() {
+	let completion_response: types::completions::Response = serde_json::from_value(json!({
+		"model": "gpt-5",
+		"usage": null,
+		"choices": [],
+		"moderation": {
+			"input": { "flagged": false },
+			"output": { "flagged": true }
+		}
+	}))
+	.expect("completion response should deserialize");
+	let completion_roundtrip =
+		serde_json::to_value(completion_response).expect("completion response should serialize");
+	assert_eq!(
+		completion_roundtrip["moderation"],
+		json!({
+			"input": { "flagged": false },
+			"output": { "flagged": true }
+		})
+	);
+
+	let responses_response: types::responses::Response = serde_json::from_value(json!({
+		"id": "resp_123",
+		"status": "completed",
+		"output": [],
+		"model": "gpt-5",
+		"moderation": {
+			"input": { "flagged": false },
+			"output": { "flagged": true }
+		}
+	}))
+	.expect("responses response should deserialize");
+	let responses_roundtrip =
+		serde_json::to_value(responses_response).expect("responses response should serialize");
+	assert_eq!(
+		responses_roundtrip["moderation"],
+		json!({
+			"input": { "flagged": false },
+			"output": { "flagged": true }
+		})
+	);
+}
+
 #[tokio::test]
 async fn openai_provider_normalizes_max_tokens_before_forwarding() {
 	use crate::http::auth::BackendInfo;
 	use crate::test_helpers::proxymock::setup_proxy_test;
 	use crate::types::agent::BackendTarget;
 
-	let provider = AIProvider::OpenAI(openai::Provider { model: None });
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
 	let inputs = setup_proxy_test("{}").unwrap().pi;
 	let backend_info = BackendInfo {
 		target: BackendTarget::Invalid,
@@ -494,7 +1070,7 @@ async fn openai_provider_normalizes_max_tokens_before_forwarding() {
 		llm_request,
 		..
 	} = provider
-		.process_completions_request(&backend_info, None, req, false, &mut None)
+		.process_completions_request(&backend_info, None, req, false, &mut None, None)
 		.await
 		.expect("OpenAI completions request should process")
 	else {
@@ -517,7 +1093,10 @@ async fn openai_provider_normalizes_max_tokens_after_model_alias() {
 	use crate::test_helpers::proxymock::setup_proxy_test;
 	use crate::types::agent::BackendTarget;
 
-	let provider = AIProvider::OpenAI(openai::Provider { model: None });
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
 	let inputs = setup_proxy_test("{}").unwrap().pi;
 	let backend_info = BackendInfo {
 		target: BackendTarget::Invalid,
@@ -549,7 +1128,7 @@ async fn openai_provider_normalizes_max_tokens_after_model_alias() {
 		llm_request,
 		..
 	} = provider
-		.process_completions_request(&backend_info, Some(&policy), req, false, &mut None)
+		.process_completions_request(&backend_info, Some(&policy), req, false, &mut None, None)
 		.await
 		.expect("OpenAI completions request should process")
 	else {
@@ -573,7 +1152,10 @@ async fn openai_provider_preserves_max_tokens_for_non_gpt_models() {
 	use crate::test_helpers::proxymock::setup_proxy_test;
 	use crate::types::agent::BackendTarget;
 
-	let provider = AIProvider::OpenAI(openai::Provider { model: None });
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
 	let inputs = setup_proxy_test("{}").unwrap().pi;
 	let backend_info = BackendInfo {
 		target: BackendTarget::Invalid,
@@ -598,7 +1180,7 @@ async fn openai_provider_preserves_max_tokens_for_non_gpt_models() {
 		llm_request,
 		..
 	} = provider
-		.process_completions_request(&backend_info, None, req, false, &mut None)
+		.process_completions_request(&backend_info, None, req, false, &mut None, None)
 		.await
 		.expect("OpenAI-compatible completions request should process")
 	else {
@@ -621,7 +1203,9 @@ async fn count_tokens_resolves_model_alias_once_for_upstream_request() {
 	use crate::test_helpers::proxymock::setup_proxy_test;
 	use crate::types::agent::BackendTarget;
 
-	let provider = AIProvider::Anthropic(anthropic::Provider { model: None });
+	let provider = AIProvider::Anthropic(anthropic::Provider {
+		model_override: None,
+	});
 	let inputs = setup_proxy_test("{}").unwrap().pi;
 	let backend_info = BackendInfo {
 		target: BackendTarget::Invalid,
@@ -652,7 +1236,7 @@ async fn count_tokens_resolves_model_alias_once_for_upstream_request() {
 		llm_request,
 		..
 	} = provider
-		.process_count_tokens_request(&backend_info, req, Some(&policy), &mut None)
+		.process_count_tokens_request(&backend_info, req, Some(&policy), &mut None, None)
 		.await
 		.expect("count_tokens request should process")
 	else {
@@ -675,7 +1259,7 @@ async fn count_tokens_uses_native_endpoint_after_model_alias() {
 	use crate::types::agent::BackendTarget;
 
 	let provider = AIProvider::Vertex(vertex::Provider {
-		model: None,
+		model_override: None,
 		region: None,
 		project_id: strng::new("test-project"),
 	});
@@ -710,7 +1294,7 @@ async fn count_tokens_uses_native_endpoint_after_model_alias() {
 		upstream_route_type,
 		..
 	} = provider
-		.process_count_tokens_request(&backend_info, req, Some(&policy), &mut None)
+		.process_count_tokens_request(&backend_info, req, Some(&policy), &mut None, None)
 		.await
 		.expect("count_tokens request should process")
 	else {
@@ -726,6 +1310,329 @@ async fn count_tokens_uses_native_endpoint_after_model_alias() {
 	assert_eq!(llm_request.request_model, "claude-3-5-sonnet");
 }
 
+fn gemini_generate_content_request(uri: &str) -> ::http::Request<Body> {
+	::http::Request::builder()
+		.uri(uri)
+		.header(::http::header::CONTENT_TYPE, "application/json")
+		.body(Body::from(
+			br#"{
+				"contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+				"someNewTopLevelField": {"a": true}
+			}"#
+				.to_vec(),
+		))
+		.unwrap()
+}
+
+fn vertex_backend_info() -> crate::http::auth::BackendInfo {
+	use crate::test_helpers::proxymock::setup_proxy_test;
+	use crate::types::agent::BackendTarget;
+	crate::http::auth::BackendInfo {
+		target: BackendTarget::Invalid,
+		call_target: Target::from(("aiplatform.googleapis.com", 443)),
+		inputs: setup_proxy_test("{}").unwrap().pi,
+	}
+}
+
+#[tokio::test]
+async fn gemini_generate_content_forwards_unknown_top_level_fields() {
+	let provider = AIProvider::Vertex(vertex::Provider {
+		model_override: None,
+		region: None,
+		project_id: strng::new("test-project"),
+	});
+	let req = gemini_generate_content_request(
+		"https://example.com/v1beta/models/gemini-2.5-flash:generateContent",
+	);
+
+	let RequestResult::Success {
+		request: forwarded,
+		llm_request,
+		..
+	} = provider
+		.process_gemini_request(&vertex_backend_info(), None, req, false, &mut None, None)
+		.await
+		.expect("generateContent request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+	assert_eq!(llm_request.request_model, "gemini-2.5-flash");
+	assert!(!llm_request.streaming);
+
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+	assert_eq!(forwarded_json["someNewTopLevelField"], json!({"a": true}));
+	assert_eq!(forwarded_json["contents"][0]["parts"][0]["text"], "hello");
+	assert!(
+		forwarded_json.get("model").is_none(),
+		"the model rides the path, not the body: {forwarded_json}"
+	);
+}
+
+#[tokio::test]
+async fn gemini_stream_without_alt_sse_is_rejected_with_google_shaped_400() {
+	let provider = AIProvider::Vertex(vertex::Provider {
+		model_override: None,
+		region: None,
+		project_id: strng::new("test-project"),
+	});
+	for uri in [
+		"https://example.com/v1beta/models/gemini-2.5-flash:streamGenerateContent",
+		"https://example.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=json",
+	] {
+		let RequestResult::Rejected(resp) = provider
+			.process_gemini_request(
+				&vertex_backend_info(),
+				None,
+				gemini_generate_content_request(uri),
+				false,
+				&mut None,
+				None,
+			)
+			.await
+			.expect("the non-SSE streaming variant is a client error, not a gateway failure")
+		else {
+			panic!("expected a direct response for {uri}");
+		};
+
+		assert_eq!(resp.status(), ::http::StatusCode::BAD_REQUEST);
+		let body = resp.into_body().collect().await.unwrap().to_bytes();
+		let body: Value = serde_json::from_slice(&body).expect("error body should be JSON");
+		assert_eq!(body["error"]["code"], json!(400));
+		assert_eq!(body["error"]["status"], json!("INVALID_ARGUMENT"));
+		assert!(
+			body["error"]["message"]
+				.as_str()
+				.is_some_and(|m| m.contains("alt=sse")),
+			"{body}"
+		);
+	}
+}
+
+fn gemini_count_tokens_request(uri: &str) -> ::http::Request<Body> {
+	::http::Request::builder()
+		.uri(uri)
+		.header(::http::header::CONTENT_TYPE, "application/json")
+		.body(Body::from(
+			br#"{
+				"contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+				"someNewField": {"a": true}
+			}"#
+				.to_vec(),
+		))
+		.unwrap()
+}
+
+#[tokio::test]
+async fn gemini_count_tokens_passes_body_through_on_vertex() {
+	use crate::http::auth::BackendInfo;
+	use crate::test_helpers::proxymock::setup_proxy_test;
+	use crate::types::agent::BackendTarget;
+
+	let provider = AIProvider::Vertex(vertex::Provider {
+		model_override: None,
+		region: None,
+		project_id: strng::new("test-project"),
+	});
+	let inputs = setup_proxy_test("{}").unwrap().pi;
+	let backend_info = BackendInfo {
+		target: BackendTarget::Invalid,
+		call_target: Target::from(("aiplatform.googleapis.com", 443)),
+		inputs,
+	};
+	let req =
+		gemini_count_tokens_request("https://example.com/v1beta/models/gemini-2.5-flash:countTokens");
+
+	let RequestResult::Success {
+		request: forwarded,
+		llm_request,
+		upstream_route_type,
+		..
+	} = provider
+		.process_gemini_count_tokens_request(&backend_info, None, req, &mut None)
+		.await
+		.expect("countTokens request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+
+	assert_eq!(upstream_route_type, RouteType::GeminiCountTokens);
+	assert_eq!(llm_request.input_format, InputFormat::GeminiCountTokens);
+	assert_eq!(llm_request.request_model, "gemini-2.5-flash");
+	assert!(!llm_request.streaming);
+
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+	assert_eq!(forwarded_json["someNewField"], json!({"a": true}));
+	assert_eq!(forwarded_json["contents"][0]["parts"][0]["text"], "hello");
+	assert!(
+		forwarded_json.get("model").is_none(),
+		"the model rides the path, not the body: {forwarded_json}"
+	);
+}
+
+#[tokio::test]
+async fn gemini_count_tokens_applies_model_alias_and_rewrites_upstream_path() {
+	use crate::http::auth::BackendInfo;
+	use crate::llm::policy::Policy;
+	use crate::test_helpers::proxymock::setup_proxy_test;
+	use crate::types::agent::BackendTarget;
+
+	let provider = AIProvider::Gemini(gemini::Provider {
+		model_override: None,
+	});
+	let inputs = setup_proxy_test("{}").unwrap().pi;
+	let backend_info = BackendInfo {
+		target: BackendTarget::Invalid,
+		call_target: Target::from((gemini::DEFAULT_HOST_STR, 443)),
+		inputs,
+	};
+	let policy = Policy {
+		model_aliases: std::collections::HashMap::from([(
+			strng::new("fast"),
+			strng::new("gemini-2.5-flash"),
+		)]),
+		..Default::default()
+	};
+	let req = gemini_count_tokens_request("https://example.com/v1beta/models/fast:countTokens");
+
+	let RequestResult::Success {
+		request: mut forwarded,
+		llm_request,
+		upstream_route_type,
+		..
+	} = provider
+		.process_gemini_count_tokens_request(&backend_info, Some(&policy), req, &mut None)
+		.await
+		.expect("countTokens request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+	assert_eq!(llm_request.request_model, "gemini-2.5-flash");
+
+	provider
+		.setup_request(
+			&mut forwarded,
+			upstream_route_type,
+			Some(&llm_request),
+			None,
+			None,
+			false,
+			None,
+			None,
+		)
+		.expect("setup_request should succeed");
+	assert_eq!(
+		forwarded.uri().path(),
+		"/v1beta/models/gemini-2.5-flash:countTokens"
+	);
+	assert_eq!(forwarded.uri().query(), None);
+	assert_eq!(
+		forwarded.uri().authority().map(|a| a.as_str()),
+		Some(gemini::DEFAULT_HOST_STR)
+	);
+}
+
+#[tokio::test]
+async fn gemini_count_tokens_on_non_gemini_upstream_is_unsupported() {
+	use crate::http::auth::BackendInfo;
+	use crate::test_helpers::proxymock::setup_proxy_test;
+	use crate::types::agent::BackendTarget;
+
+	let provider = AIProvider::Anthropic(anthropic::Provider {
+		model_override: None,
+	});
+	let inputs = setup_proxy_test("{}").unwrap().pi;
+	let backend_info = BackendInfo {
+		target: BackendTarget::Invalid,
+		call_target: Target::from(("api.anthropic.com", 443)),
+		inputs,
+	};
+	let req =
+		gemini_count_tokens_request("https://example.com/v1beta/models/claude-opus-4:countTokens");
+
+	let err = provider
+		.process_gemini_count_tokens_request(&backend_info, None, req, &mut None)
+		.await
+		.expect_err("countTokens against a non-Gemini upstream must be rejected");
+	assert!(matches!(err, AIError::UnsupportedConversion(_)), "{err}");
+}
+
+#[test]
+fn gemini_count_tokens_response_reports_total_tokens() {
+	let provider = AIProvider::Gemini(gemini::Provider {
+		model_override: None,
+	});
+	let req = LLMRequest {
+		input_tokens: None,
+		input_format: InputFormat::GeminiCountTokens,
+		cache_convention: CacheTokenConvention::pending(),
+		request_model: "gemini-2.5-flash".into(),
+		provider: "gcp.gemini".into(),
+		streaming: false,
+		params: Default::default(),
+		prompt: None,
+		provider_state: None,
+		web_search: None,
+	};
+	let body = br#"{"totalTokens":31,"promptTokensDetails":[{"modality":"TEXT","tokenCount":31}]}"#;
+	let buffered = BufferedResponse {
+		managed_body: Body::empty(),
+		parts: ::http::Response::new(()).into_parts().0,
+		bytes: bytes::Bytes::from_static(body),
+	};
+
+	let log = AsyncLog::<llm::LLMInfo>::default();
+	let resp = provider
+		.process_gemini_count_tokens_response(req, buffered, None, &log)
+		.expect("countTokens response should process");
+	assert_eq!(
+		log.take().expect("llm info").response.count_tokens,
+		Some(31)
+	);
+	assert!(resp.headers().get(header::CONTENT_LENGTH).is_none());
+}
+
+#[tokio::test]
+async fn anthropic_count_tokens_preserves_upstream_errors() {
+	let provider = AIProvider::bedrock(bedrock::Provider {
+		model_override: None,
+		region: strng::new("us-east-1"),
+		guardrail_identifier: None,
+		guardrail_version: None,
+		endpoint_preference: Default::default(),
+	});
+	let req = LLMRequest {
+		input_tokens: None,
+		input_format: InputFormat::CountTokens,
+		cache_convention: CacheTokenConvention::pending(),
+		request_model: "us.anthropic.claude-haiku-4-5-20251001-v1:0".into(),
+		provider: "aws.bedrock".into(),
+		streaming: false,
+		params: Default::default(),
+		prompt: None,
+		provider_state: None,
+		web_search: None,
+	};
+	let body =
+		bytes::Bytes::from_static(br#"{"message":"The provided model does not support CountTokens"}"#);
+	let mut parts = ::http::Response::new(()).into_parts().0;
+	parts.status = ::http::StatusCode::BAD_REQUEST;
+	let buffered = BufferedResponse {
+		managed_body: Body::empty(),
+		parts,
+		bytes: body.clone(),
+	};
+
+	let resp = provider
+		.process_count_tokens_response(req, buffered, None, &Default::default())
+		.expect("error response should process");
+	assert_eq!(resp.status(), ::http::StatusCode::BAD_REQUEST);
+	assert_eq!(resp.into_body().collect().await.unwrap().to_bytes(), body);
+}
+
 #[tokio::test]
 async fn vertex_anthropic_messages_prepares_vertex_body() {
 	use crate::http::auth::BackendInfo;
@@ -733,7 +1640,7 @@ async fn vertex_anthropic_messages_prepares_vertex_body() {
 	use crate::types::agent::BackendTarget;
 
 	let provider = AIProvider::Vertex(vertex::Provider {
-		model: None,
+		model_override: None,
 		region: Some(strng::new("us-central1")),
 		project_id: strng::new("test-project"),
 	});
@@ -761,7 +1668,7 @@ async fn vertex_anthropic_messages_prepares_vertex_body() {
 		upstream_route_type,
 		..
 	} = provider
-		.process_messages_request(&backend_info, None, req, false, &mut None)
+		.process_messages_request(&backend_info, None, req, false, &mut None, None)
 		.await
 		.expect("Vertex Anthropic messages request should process")
 	else {
@@ -788,7 +1695,8 @@ async fn provider_model_is_set_before_llm_transformations() {
 	use crate::types::agent::BackendTarget;
 
 	let provider = AIProvider::OpenAI(openai::Provider {
-		model: Some("gcp/failover-model".into()),
+		model_override: Some("gcp/failover-model".into()),
+		moderation: None,
 	});
 	let inputs = setup_proxy_test("{}").unwrap().pi;
 	let backend_info = BackendInfo {
@@ -826,7 +1734,7 @@ async fn provider_model_is_set_before_llm_transformations() {
 		llm_request,
 		..
 	} = provider
-		.process_completions_request(&backend_info, Some(&policy), req, false, &mut None)
+		.process_completions_request(&backend_info, Some(&policy), req, false, &mut None, None)
 		.await
 		.expect("OpenAI completions request should process")
 	else {
@@ -842,13 +1750,351 @@ async fn provider_model_is_set_before_llm_transformations() {
 }
 
 #[tokio::test]
+async fn messages_to_completions_final_transformation() {
+	use crate::llm::policy::Policy;
+
+	async fn create_llm_request(vec_body: Vec<u8>, policy: Option<&Policy>) -> (Request, RouteType) {
+		let provider = AIProvider::OpenAI(openai::Provider {
+			model_override: None,
+			moderation: None,
+		});
+		let backend_info = openai_test_backend_info();
+		let req = ::http::Request::builder()
+			.uri("/v1/messages")
+			.header(::http::header::CONTENT_TYPE, "application/json")
+			.body(Body::from(vec_body))
+			.unwrap();
+		let RequestResult::Success {
+			request: forwarded,
+			upstream_route_type,
+			..
+		} = provider
+			.process_messages_request(&backend_info, policy, req, false, &mut None, None)
+			.await
+			.expect("Anthropic messages request should translate to OpenAI completions")
+		else {
+			panic!("expected forwarded request");
+		};
+		(forwarded, upstream_route_type)
+	}
+	let expr = |e: &str| std::sync::Arc::new(crate::cel::Expression::new_strict(e).unwrap());
+
+	let policy = Policy {
+		final_transformations: Some(
+			[
+				// Only true final-conversion: `system` became messages[0].
+				(
+					"converted_message_count".to_string(),
+					expr("llmRequest.messages.size()"),
+				),
+				// Mutate a field carried through the conversion.
+				("max_tokens".to_string(), expr("32")),
+				("reasoning_effort".to_string(), expr("fail(\"remove\")")),
+			]
+			.into_iter()
+			.collect(),
+		),
+		..Default::default()
+	};
+
+	let vec_body = br#"{
+				"model": "gpt-5.6",
+				"max_tokens": 64,
+				"system": "be brief",
+				"messages": [{"role": "user", "content": "hello"}],
+				"tools": [{
+					"name": "get_weather",
+					"description": "Look up the weather",
+					"input_schema": {
+						"type": "object",
+						"properties": {"city": {"type": "string"}},
+						"required": ["city"]
+					}
+				}]
+			}"#
+		.to_vec();
+
+	let (forwarded, upstream_route_type) = create_llm_request(vec_body.clone(), Some(&policy)).await;
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+
+	assert_eq!(upstream_route_type, RouteType::Completions);
+	// The request really was converted to completions format.
+	assert_eq!(forwarded_json["messages"][0]["role"], json!("system"));
+	// 2 (system + user), not the 1 message the client sent.
+	assert_eq!(forwarded_json["converted_message_count"], json!(2));
+	assert_eq!(forwarded_json["max_tokens"], json!(32));
+	// Indexing returns Null for a missing key too, so assert on key presence.
+	let reasoning_effort = forwarded_json.get("reasoning_effort");
+	assert!(
+		reasoning_effort.is_none(),
+		"reasoning_effort should be removed, got: {reasoning_effort:?}"
+	);
+
+	let (forwarded, upstream_route_type) = create_llm_request(vec_body, None).await;
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+	assert_eq!(upstream_route_type, RouteType::Completions);
+	// The request really was converted to completions format.
+	assert_eq!(forwarded_json["messages"][0]["role"], json!("system"));
+	// 2 (system + user), not the 1 message the client sent.
+	assert_eq!(forwarded_json["max_completion_tokens"], json!(64));
+	// Indexing returns Null for a missing key too, so assert on key presence.
+	let reasoning_effort = forwarded_json.get("reasoning_effort");
+	assert_eq!(reasoning_effort, Some(&json!("none")));
+}
+
+#[tokio::test]
+async fn detect_final_transformations_skip_opaque_bodies() {
+	use crate::llm::policy::Policy;
+
+	async fn create_detect_request(
+		content_type: &str,
+		body: &[u8],
+		policy: Option<&Policy>,
+	) -> (Request, RouteType) {
+		let provider = AIProvider::OpenAI(openai::Provider {
+			model_override: None,
+			moderation: None,
+		});
+		let backend_info = openai_test_backend_info();
+		let req = ::http::Request::builder()
+			.uri("/v1/passthrough")
+			.header(::http::header::CONTENT_TYPE, content_type)
+			.body(Body::from(body.to_vec()))
+			.unwrap();
+		let RequestResult::Success {
+			request: forwarded,
+			upstream_route_type,
+			..
+		} = provider
+			.process_detect_request(&backend_info, policy, req, &mut None)
+			.await
+			.expect("detect request should process")
+		else {
+			panic!("expected forwarded request");
+		};
+		(forwarded, upstream_route_type)
+	}
+
+	let expr = |e: &str| std::sync::Arc::new(crate::cel::Expression::new_strict(e).unwrap());
+	let policy = Policy {
+		final_transformations: Some(
+			[("max_tokens".to_string(), expr("32"))]
+				.into_iter()
+				.collect(),
+		),
+		..Default::default()
+	};
+
+	// Inner spaces and key order survive only if the body is never round-tripped through serde.
+	let json_body = br#"{ "model": "gpt-4o", "max_tokens": 64 }"#;
+
+	// A non-JSON content type is passed through opaquely even when the body happens to parse as
+	// JSON, so final transformations must not rewrite (or re-serialize) it.
+	let (forwarded, route_type) = create_detect_request("text/plain", json_body, Some(&policy)).await;
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	assert_eq!(route_type, RouteType::Detect);
+	assert_eq!(
+		forwarded_body.as_ref(),
+		json_body.as_slice(),
+		"passthrough body must be forwarded byte-for-byte"
+	);
+
+	// A body that fails to parse falls back to raw passthrough, which must not become an error.
+	let raw_body = b"\x00\x01not json at all";
+	let (forwarded, route_type) =
+		create_detect_request("application/octet-stream", raw_body, Some(&policy)).await;
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	assert_eq!(route_type, RouteType::Detect);
+	assert_eq!(forwarded_body.as_ref(), raw_body.as_slice());
+
+	// Malformed JSON under a JSON content type takes the same raw fallback.
+	let bad_json = br#"{"model": "gpt-4o", "#;
+	let (forwarded, route_type) =
+		create_detect_request("application/json", bad_json, Some(&policy)).await;
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	assert_eq!(route_type, RouteType::Detect);
+	assert_eq!(forwarded_body.as_ref(), bad_json.as_slice());
+
+	// A genuine JSON detect body is still transformed: this is the behavior the guard preserves.
+	let (forwarded, route_type) =
+		create_detect_request("application/json", json_body, Some(&policy)).await;
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+	assert_eq!(route_type, RouteType::Detect);
+	assert_eq!(forwarded_json["max_tokens"], json!(32));
+	assert_eq!(forwarded_json["model"], json!("gpt-4o"));
+
+	// Without a policy the JSON body is unchanged apart from the parse/serialize round trip.
+	let (forwarded, _) = create_detect_request("application/json", json_body, None).await;
+	let forwarded_body = forwarded.collect().await.unwrap().to_bytes();
+	let forwarded_json: Value =
+		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
+	assert_eq!(forwarded_json["max_tokens"], json!(64));
+}
+
+#[tokio::test]
+async fn bedrock_transformed_provider_model_is_used_for_upstream_path() {
+	use crate::http::auth::BackendInfo;
+	use crate::llm::policy::Policy;
+	use crate::test_helpers::proxymock::setup_proxy_test;
+	use crate::types::agent::BackendTarget;
+
+	let provider = AIProvider::bedrock(bedrock::Provider {
+		model_override: Some(strng::new(
+			"bedrock-runtime/us/anthropic.claude-3-5-sonnet-20241022-v2:0",
+		)),
+		region: strng::new("us-east-1"),
+		guardrail_identifier: None,
+		guardrail_version: None,
+		endpoint_preference: Default::default(),
+	});
+	let inputs = setup_proxy_test("{}").unwrap().pi;
+	let backend_info = BackendInfo {
+		target: BackendTarget::Invalid,
+		call_target: Target::from(("bedrock-runtime.us-east-1.amazonaws.com", 443)),
+		inputs,
+	};
+	let policy = Policy {
+		transformations: Some(
+			[(
+				"model".to_string(),
+				std::sync::Arc::new(
+					crate::cel::Expression::new_strict(
+						r#"llmRequest.model.stripPrefix("bedrock-runtime/us/")"#,
+					)
+					.unwrap(),
+				),
+			)]
+			.into_iter()
+			.collect(),
+		),
+		..Default::default()
+	};
+	let expected_model = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+
+	let req = ::http::Request::builder()
+		.uri("https://gateway.example.com/v1/chat/completions")
+		.header(::http::header::CONTENT_TYPE, "application/json")
+		.body(Body::from(
+			json!({
+				"model": "client-model",
+				"messages": [{"role": "user", "content": "hello"}],
+				"stream": true,
+			})
+			.to_string(),
+		))
+		.unwrap();
+
+	let RequestResult::Success {
+		request: mut forwarded,
+		llm_request,
+		upstream_route_type,
+	} = provider
+		.process_completions_request(&backend_info, Some(&policy), req, false, &mut None, None)
+		.await
+		.expect("Bedrock completions request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+
+	assert_eq!(llm_request.request_model, expected_model);
+	provider
+		.setup_request(
+			&mut forwarded,
+			upstream_route_type,
+			Some(&llm_request),
+			None,
+			None,
+			false,
+			None,
+			None,
+		)
+		.expect("Bedrock upstream request should be finalized");
+	assert_eq!(
+		forwarded.uri().path(),
+		format!("/model/{expected_model}/converse-stream")
+	);
+}
+
+#[tokio::test]
+async fn bedrock_provider_model_overrides_client_model() {
+	use crate::http::auth::BackendInfo;
+	use crate::test_helpers::proxymock::setup_proxy_test;
+	use crate::types::agent::BackendTarget;
+
+	let configured_model = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+	let provider = AIProvider::bedrock(bedrock::Provider {
+		model_override: Some(strng::new(configured_model)),
+		region: strng::new("us-east-1"),
+		guardrail_identifier: None,
+		guardrail_version: None,
+		endpoint_preference: Default::default(),
+	});
+	let inputs = setup_proxy_test("{}").unwrap().pi;
+	let backend_info = BackendInfo {
+		target: BackendTarget::Invalid,
+		call_target: Target::from(("bedrock-runtime.us-east-1.amazonaws.com", 443)),
+		inputs,
+	};
+	let req = ::http::Request::builder()
+		.uri("https://gateway.example.com/v1/chat/completions")
+		.header(::http::header::CONTENT_TYPE, "application/json")
+		.body(Body::from(
+			br#"{
+				"model": "client-model",
+				"messages": [{"role": "user", "content": "hello"}]
+			}"#
+				.to_vec(),
+		))
+		.unwrap();
+
+	let RequestResult::Success {
+		request: mut forwarded,
+		llm_request,
+		upstream_route_type,
+	} = provider
+		.process_completions_request(&backend_info, None, req, false, &mut None, None)
+		.await
+		.expect("Bedrock completions request should process")
+	else {
+		panic!("expected forwarded request");
+	};
+
+	assert_eq!(llm_request.request_model, configured_model);
+	provider
+		.setup_request(
+			&mut forwarded,
+			upstream_route_type,
+			Some(&llm_request),
+			None,
+			None,
+			false,
+			None,
+			None,
+		)
+		.expect("Bedrock upstream request should be finalized");
+	assert_eq!(
+		forwarded.uri().path(),
+		format!("/model/{configured_model}/converse")
+	);
+}
+
+#[tokio::test]
 async fn llm_transformations_can_set_missing_model() {
 	use crate::http::auth::BackendInfo;
 	use crate::llm::policy::Policy;
 	use crate::test_helpers::proxymock::setup_proxy_test;
 	use crate::types::agent::BackendTarget;
 
-	let provider = AIProvider::OpenAI(openai::Provider { model: None });
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
 	let inputs = setup_proxy_test("{}").unwrap().pi;
 	let backend_info = BackendInfo {
 		target: BackendTarget::Invalid,
@@ -882,7 +2128,7 @@ async fn llm_transformations_can_set_missing_model() {
 		llm_request,
 		..
 	} = provider
-		.process_completions_request(&backend_info, Some(&policy), req, false, &mut None)
+		.process_completions_request(&backend_info, Some(&policy), req, false, &mut None, None)
 		.await
 		.expect("OpenAI completions request should process")
 	else {
@@ -903,7 +2149,9 @@ async fn copilot_anthropic_model_uses_messages_route() {
 	use crate::test_helpers::proxymock::setup_proxy_test;
 	use crate::types::agent::BackendTarget;
 
-	let provider = AIProvider::Copilot(copilot::Provider { model: None });
+	let provider = AIProvider::Copilot(copilot::Provider {
+		model_override: None,
+	});
 	let inputs = setup_proxy_test("{}").unwrap().pi;
 	let backend_info = BackendInfo {
 		target: BackendTarget::Invalid,
@@ -928,7 +2176,7 @@ async fn copilot_anthropic_model_uses_messages_route() {
 		llm_request,
 		upstream_route_type,
 	} = provider
-		.process_messages_request(&backend_info, None, req, false, &mut None)
+		.process_messages_request(&backend_info, None, req, false, &mut None, None)
 		.await
 		.expect("Copilot Anthropic messages request should process")
 	else {
@@ -951,6 +2199,8 @@ async fn copilot_anthropic_model_uses_messages_route() {
 			None,
 			None,
 			false,
+			None,
+			None,
 		)
 		.expect("setup_request should succeed");
 	assert_eq!(setup_req.uri().path(), "/v1/messages");
@@ -960,6 +2210,137 @@ async fn copilot_anthropic_model_uses_messages_route() {
 		serde_json::from_slice(&forwarded_body).expect("forwarded request should be JSON");
 	assert_eq!(forwarded_json["model"], json!("claude-sonnet-4"));
 	assert_eq!(forwarded_json["max_tokens"], json!(64));
+}
+
+#[test]
+fn copilot_embeddings_response_adds_missing_openai_fields() {
+	let provider = AIProvider::Copilot(copilot::Provider {
+		model_override: None,
+	});
+	let mut request = llm_request_with_tokens(None);
+	request.input_format = InputFormat::Embeddings;
+	request.request_model = "text-embedding-3-small".into();
+	let response = Bytes::from_static(
+		br#"{"data":[{"embedding":[0.5,-0.25],"index":0,"object":"embedding"}],"usage":{"prompt_tokens":2,"total_tokens":2}}"#,
+	);
+
+	let (llm_response, body) = provider
+		.process_embeddings_response(&request, &::http::HeaderMap::new(), response)
+		.expect("Copilot embeddings response should normalize");
+	let body: Value = serde_json::from_slice(&body).expect("normalized response should be JSON");
+
+	assert_eq!(body["object"], json!("list"));
+	assert_eq!(body["model"], json!("text-embedding-3-small"));
+	assert_eq!(body["data"][0]["embedding"], json!([0.5, -0.25]));
+	assert_eq!(llm_response.input_tokens, Some(2));
+	assert_eq!(llm_response.total_tokens, Some(2));
+}
+
+#[test]
+fn copilot_embeddings_response_preserves_missing_usage() {
+	let provider = AIProvider::Copilot(copilot::Provider {
+		model_override: None,
+	});
+	let mut request = llm_request_with_tokens(None);
+	request.input_format = InputFormat::Embeddings;
+	request.request_model = "text-embedding-3-small".into();
+	let response =
+		Bytes::from_static(br#"{"data":[{"embedding":[0.5],"index":0,"object":"embedding"}]}"#);
+
+	let (_, body) = provider
+		.process_embeddings_response(&request, &::http::HeaderMap::new(), response)
+		.expect("Copilot embeddings response should normalize");
+	let body: Value = serde_json::from_slice(&body).expect("normalized response should be JSON");
+
+	assert!(body.get("usage").is_none());
+}
+
+#[test]
+fn copilot_embeddings_response_preserves_explicit_openai_fields() {
+	let provider = AIProvider::Copilot(copilot::Provider {
+		model_override: None,
+	});
+	let mut request = llm_request_with_tokens(None);
+	request.input_format = InputFormat::Embeddings;
+	request.request_model = "requested-model".into();
+	let response = Bytes::from_static(
+		br#"{"object":"upstream-list","model":"upstream-model","data":[{"embedding":[0.5],"index":0,"object":"embedding"}],"usage":{"prompt_tokens":1,"total_tokens":1}}"#,
+	);
+
+	let (_, body) = provider
+		.process_embeddings_response(&request, &::http::HeaderMap::new(), response)
+		.expect("Copilot embeddings response should preserve explicit fields");
+	let body: Value = serde_json::from_slice(&body).expect("normalized response should be JSON");
+
+	assert_eq!(body["object"], json!("upstream-list"));
+	assert_eq!(body["model"], json!("upstream-model"));
+}
+
+#[test]
+fn copilot_embeddings_parse_error_logs_normalized_response() {
+	#[derive(Clone)]
+	struct LogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+	impl std::io::Write for LogWriter {
+		fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+			self.0.lock().unwrap().extend_from_slice(buf);
+			Ok(buf.len())
+		}
+
+		fn flush(&mut self) -> std::io::Result<()> {
+			Ok(())
+		}
+	}
+
+	let logs = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+	let writer = LogWriter(logs.clone());
+	let subscriber = tracing_subscriber::fmt()
+		.with_ansi(false)
+		.without_time()
+		.with_writer(move || writer.clone())
+		.finish();
+
+	tracing::subscriber::with_default(subscriber, || {
+		let provider = AIProvider::Copilot(copilot::Provider {
+			model_override: None,
+		});
+		let mut request = llm_request_with_tokens(None);
+		request.input_format = InputFormat::Embeddings;
+		request.request_model = "text-embedding-3-small".into();
+		let response = Bytes::from_static(br#"{"usage":"invalid"}"#);
+
+		assert!(
+			provider
+				.process_embeddings_response(&request, &::http::HeaderMap::new(), response)
+				.is_err()
+		);
+	});
+
+	let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+	assert!(logs.contains(r#""object":"list""#), "{logs}");
+	assert!(
+		logs.contains(r#""model":"text-embedding-3-small""#),
+		"{logs}"
+	);
+}
+
+#[test]
+fn non_copilot_embeddings_response_still_requires_openai_fields() {
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
+	let mut request = llm_request_with_tokens(None);
+	request.input_format = InputFormat::Embeddings;
+	let response = Bytes::from_static(
+		br#"{"data":[{"embedding":[0.5],"index":0,"object":"embedding"}],"usage":{"prompt_tokens":1,"total_tokens":1}}"#,
+	);
+
+	assert!(
+		provider
+			.process_embeddings_response(&request, &::http::HeaderMap::new(), response)
+			.is_err()
+	);
 }
 
 #[test]
@@ -1014,7 +2395,7 @@ fn test_completions_reasoning_effort_maps_to_enabled_thinking_budget() {
 	}))
 	.expect("valid completions request");
 
-	let translated = conversion::messages::from_completions::translate(&request)
+	let translated = conversion::messages::from_completions::translate(&request, None)
 		.expect("completions->messages translation");
 	let translated: Value =
 		serde_json::from_slice(&translated).expect("translated request should be valid json");
@@ -1051,7 +2432,7 @@ fn test_completions_json_schema_response_format_maps_to_anthropic_output_config(
 	}))
 	.expect("valid completions request");
 
-	let translated = conversion::messages::from_completions::translate(&request)
+	let translated = conversion::messages::from_completions::translate(&request, None)
 		.expect("completions->messages translation");
 	let translated: Value =
 		serde_json::from_slice(&translated).expect("translated request should be valid json");
@@ -1128,10 +2509,11 @@ async fn process_response_routes_streaming_error_to_buffered_path() {
 	use crate::test_helpers::proxymock::setup_proxy_test;
 
 	let bedrock = AIProvider::bedrock(bedrock::Provider {
-		model: Some(strng::new("anthropic.claude-3-5-sonnet-20241022-v2:0")),
+		model_override: Some(strng::new("anthropic.claude-3-5-sonnet-20241022-v2:0")),
 		region: strng::new("us-west-2"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		endpoint_preference: Default::default(),
 	});
 
 	let error_json = r#"{"message":"Expected toolResult blocks at messages.2.content for the following Ids: tooluse_abc123"}"#;
@@ -1165,8 +2547,7 @@ async fn process_response_routes_streaming_error_to_buffered_path() {
 			req,
 			LLMResponsePolicies::default(),
 			None,
-			AsyncLog::default(),
-			llm::LogContentFields::default(),
+			Default::default(),
 			None,
 			resp,
 		)
@@ -1194,9 +2575,88 @@ async fn process_response_routes_streaming_error_to_buffered_path() {
 	);
 }
 
+#[tokio::test]
+async fn upstream_encoding_is_applied_after_messages_response_translation() {
+	use crate::proxy::httpproxy::PolicyClient;
+	use crate::test_helpers::proxymock::setup_proxy_test;
+
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
+	let mut req = llm_request_with_tokens(None);
+	req.input_format = InputFormat::Messages;
+	req.request_model = "gpt-4o".into();
+	req.streaming = false;
+	let upstream_body = br#"{"id":"chatcmpl-1","object":"chat.completion","created":0,"model":"gpt-4o","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Hello!"}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}"#;
+	let compressed = crate::http::compression::encode_body(upstream_body, "br")
+		.await
+		.unwrap();
+	let upstream = ::http::Response::builder()
+		.header(::http::header::CONTENT_ENCODING, "br")
+		.header(::http::header::CONTENT_LENGTH, compressed.len())
+		.body(Body::from(compressed))
+		.unwrap();
+
+	let response = provider
+		.process_response(
+			PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+			req,
+			LLMResponsePolicies::default(),
+			None,
+			Default::default(),
+			None,
+			upstream,
+		)
+		.await
+		.unwrap();
+
+	// Keep the response plain while later response policies can still replace its body.
+	assert!(
+		!response
+			.headers()
+			.contains_key(::http::header::CONTENT_ENCODING)
+	);
+	assert!(
+		response
+			.extensions()
+			.get::<crate::cel::BufferedBody>()
+			.is_none()
+	);
+	let (parts, body) = response.into_parts();
+	let mut body: Value = serde_json::from_slice(&body.collect().await.unwrap().to_bytes()).unwrap();
+	assert_eq!(body["type"], "message");
+	assert_eq!(body["content"][0]["text"], "Hello!");
+	// Stand in for a later response-body policy mutation.
+	body["policy_applied"] = true.into();
+	let mut response = Response::from_parts(parts, Body::from(serde_json::to_vec(&body).unwrap()));
+
+	encode_deferred_response(&mut response);
+	assert_eq!(response.headers()[::http::header::CONTENT_ENCODING], "br");
+	assert!(
+		!response
+			.headers()
+			.contains_key(::http::header::CONTENT_LENGTH)
+	);
+	let content_encoding = response.headers().typed_get::<ContentEncoding>();
+	let (_, body) = crate::http::compression::to_bytes_with_decompression(
+		response.into_body(),
+		content_encoding.as_ref(),
+		1024 * 1024,
+	)
+	.await
+	.unwrap();
+	let body: Value = serde_json::from_slice(&body).unwrap();
+	assert_eq!(body["type"], "message");
+	assert_eq!(body["policy_applied"], true);
+}
+
 #[test]
 fn openai_completions_error_translates_to_messages_client() {
-	let provider = AIProvider::OpenAI(openai::Provider { model: None });
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
 	let mut req = llm_request_with_tokens(None);
 	req.input_format = InputFormat::Messages;
 	req.request_model = "gpt-4o".into();
@@ -1205,7 +2665,7 @@ fn openai_completions_error_translates_to_messages_client() {
 		br#"{"error":{"message":"bad request","type":"invalid_request_error","param":null,"code":400}}"#,
 	);
 	let translated = provider
-		.process_error(&req, ::http::StatusCode::BAD_REQUEST, &error)
+		.process_error(&req, ::http::StatusCode::BAD_REQUEST, &error, None)
 		.expect("OpenAI error should translate to messages error");
 	let body: Value = serde_json::from_slice(&translated).expect("translated error should be JSON");
 
@@ -1225,7 +2685,7 @@ fn custom_messages_error_translates_to_completions_client() {
 		br#"{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}"#,
 	);
 	let translated = provider
-		.process_error(&req, ::http::StatusCode::BAD_REQUEST, &error)
+		.process_error(&req, ::http::StatusCode::BAD_REQUEST, &error, None)
 		.expect("Anthropic error should translate to completions error");
 	let body: Value = serde_json::from_slice(&translated).expect("translated error should be JSON");
 
@@ -1236,7 +2696,7 @@ fn custom_messages_error_translates_to_completions_client() {
 #[test]
 fn foundry_claude_messages_error_uses_anthropic_shape() {
 	let provider = AIProvider::azure(azure::Provider {
-		model: None,
+		model_override: None,
 		resource_name: strng::new("example"),
 		resource_type: azure::AzureResourceType::Foundry,
 		api_version: None,
@@ -1250,7 +2710,7 @@ fn foundry_claude_messages_error_uses_anthropic_shape() {
 		br#"{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}"#,
 	);
 	let translated = provider
-		.process_error(&req, ::http::StatusCode::BAD_REQUEST, &error)
+		.process_error(&req, ::http::StatusCode::BAD_REQUEST, &error, None)
 		.expect("Foundry Claude messages error should stay Anthropic-shaped");
 	let body: Value = serde_json::from_slice(&translated).expect("translated error should be JSON");
 
@@ -1264,10 +2724,11 @@ async fn process_streaming_bedrock_completions_normalizes_sse_headers_and_done()
 	use crate::proxy::httpproxy::PolicyClient;
 	use crate::test_helpers::proxymock::setup_proxy_test;
 	let bedrock = AIProvider::bedrock(bedrock::Provider {
-		model: Some(strng::new("openai.gpt-oss-120b-1:0")),
+		model_override: Some(strng::new("openai.gpt-oss-120b-1:0")),
 		region: strng::new("us-east-1"),
 		guardrail_identifier: None,
 		guardrail_version: None,
+		endpoint_preference: Default::default(),
 	});
 
 	let body = Body::from(
@@ -1298,12 +2759,11 @@ async fn process_streaming_bedrock_completions_normalizes_sse_headers_and_done()
 				params: Default::default(),
 				prompt: None,
 				provider_state: None,
-		web_search: None,
+				web_search: None,
 			},
 			LLMResponsePolicies::default(),
 			None,
-			AsyncLog::default(),
-			llm::LogContentFields::default(),
+			Default::default(),
 			None,
 			resp,
 		)
@@ -1329,7 +2789,10 @@ async fn process_streaming_bedrock_completions_normalizes_sse_headers_and_done()
 
 #[test]
 fn setup_request_openai_applies_prefixed_path_without_host_override() {
-	let provider = AIProvider::OpenAI(openai::Provider { model: None });
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
 	let mut req = crate::http::tests_common::request(
 		"https://example.com/v1/messages?trace=repro",
 		http::Method::POST,
@@ -1344,6 +2807,8 @@ fn setup_request_openai_applies_prefixed_path_without_host_override() {
 			None,
 			Some("/v1/custom"),
 			false,
+			None,
+			None,
 		)
 		.expect("setup_request should succeed");
 
@@ -1357,7 +2822,10 @@ fn setup_request_openai_applies_prefixed_path_without_host_override() {
 
 #[test]
 fn setup_request_openai_normalizes_trailing_slash_in_path_prefix() {
-	let provider = AIProvider::OpenAI(openai::Provider { model: None });
+	let provider = AIProvider::OpenAI(openai::Provider {
+		model_override: None,
+		moderation: None,
+	});
 	let mut req = crate::http::tests_common::request(
 		"https://example.com/v1/messages?trace=repro",
 		http::Method::POST,
@@ -1372,6 +2840,8 @@ fn setup_request_openai_normalizes_trailing_slash_in_path_prefix() {
 			None,
 			Some("/v1/custom/"),
 			false,
+			None,
+			None,
 		)
 		.expect("setup_request should succeed");
 
@@ -1382,7 +2852,7 @@ fn setup_request_openai_normalizes_trailing_slash_in_path_prefix() {
 #[test]
 fn setup_request_custom_path_override_wins_over_format_path() {
 	let provider = AIProvider::Custom(custom::Provider {
-		model: None,
+		model_override: None,
 		provider_override: None,
 		formats: vec![custom::ProviderFormatConfig {
 			format: custom::ProviderFormat::Messages,
@@ -1415,10 +2885,108 @@ fn setup_request_custom_path_override_wins_over_format_path() {
 			Some("/override/messages"),
 			None,
 			true,
+			None,
+			None,
 		)
 		.expect("setup_request should succeed");
 
 	assert_eq!(req.uri().path(), "/override/messages");
+	assert_eq!(req.uri().query(), None);
+}
+
+#[test]
+fn setup_request_custom_generate_content_defaults_to_the_native_path() {
+	// A static configured path cannot carry the model or the streaming method, so the
+	// default for the native Gemini chat format is the canonical Gemini API shape.
+	let provider = custom_provider(custom::ProviderFormat::GenerateContent);
+	for (streaming, expected_path, expected_query) in [
+		(
+			false,
+			"/v1beta/models/gemini-2.5-flash:generateContent",
+			None,
+		),
+		(
+			true,
+			"/v1beta/models/gemini-2.5-flash:streamGenerateContent",
+			Some("alt=sse"),
+		),
+	] {
+		let llm_request = LLMRequest {
+			input_tokens: None,
+			input_format: InputFormat::Gemini,
+			cache_convention: CacheTokenConvention::pending(),
+			request_model: "gemini-2.5-flash".into(),
+			provider: Default::default(),
+			streaming,
+			params: Default::default(),
+			prompt: None,
+			provider_state: Some(ProviderState::VertexGemini),
+			web_search: None,
+		};
+		let mut req = crate::http::tests_common::request(
+			"https://gemini.example.com/v1beta/models/gemini-2.5-flash:generateContent",
+			http::Method::POST,
+			&[],
+		);
+
+		provider
+			.setup_request(
+				&mut req,
+				RouteType::GenerateContent,
+				Some(&llm_request),
+				None,
+				None,
+				false,
+				None,
+				None,
+			)
+			.expect("setup_request should succeed");
+
+		assert_eq!(req.uri().path(), expected_path, "streaming={streaming}");
+		assert_eq!(req.uri().query(), expected_query, "streaming={streaming}");
+	}
+}
+
+#[test]
+fn setup_request_custom_count_tokens_defaults_to_the_native_path() {
+	// Regression: with no configured path, countTokens used to fall through to the
+	// OpenAI default and land on /v1/chat/completions.
+	let provider = custom_provider(custom::ProviderFormat::GeminiCountTokens);
+	let llm_request = LLMRequest {
+		input_tokens: None,
+		input_format: InputFormat::GeminiCountTokens,
+		cache_convention: CacheTokenConvention::pending(),
+		request_model: "gemini-2.5-flash".into(),
+		provider: Default::default(),
+		streaming: false,
+		params: Default::default(),
+		prompt: None,
+		provider_state: None,
+		web_search: None,
+	};
+	let mut req = crate::http::tests_common::request(
+		"https://gemini.example.com/v1beta/models/gemini-2.5-flash:countTokens",
+		http::Method::POST,
+		&[],
+	);
+
+	provider
+		.setup_request(
+			&mut req,
+			RouteType::GeminiCountTokens,
+			Some(&llm_request),
+			None,
+			None,
+			false,
+			None,
+			None,
+		)
+		.expect("setup_request should succeed");
+
+	assert_eq!(
+		req.uri().path(),
+		"/v1beta/models/gemini-2.5-flash:countTokens"
+	);
 	assert_eq!(req.uri().query(), None);
 }
 
@@ -1458,6 +3026,8 @@ fn assert_prefixed_host_override_path(
 			None,
 			Some("/proxy/"),
 			true,
+			None,
+			None,
 		)
 		.expect("setup_request should succeed");
 
@@ -1465,10 +3035,176 @@ fn assert_prefixed_host_override_path(
 	assert_eq!(req.uri().query(), expected_query);
 }
 
+fn native_gemini_llm_request(request_model: &str, streaming: bool) -> LLMRequest {
+	LLMRequest {
+		input_tokens: None,
+		input_format: InputFormat::Gemini,
+		cache_convention: CacheTokenConvention::pending(),
+		request_model: request_model.into(),
+		provider: Default::default(),
+		streaming,
+		params: Default::default(),
+		prompt: None,
+		provider_state: Some(ProviderState::VertexGemini),
+		web_search: None,
+	}
+}
+
+#[test]
+fn setup_request_gemini_native_builds_generate_content_path() {
+	let provider = AIProvider::Gemini(gemini::Provider {
+		model_override: None,
+	});
+	let llm_request = native_gemini_llm_request("gemini-2.5-flash", false);
+	let mut req = crate::http::tests_common::request(
+		"https://example.com/v1beta/models/gemini-2.5-flash:generateContent",
+		http::Method::POST,
+		&[],
+	);
+
+	provider
+		.setup_request(
+			&mut req,
+			RouteType::Completions,
+			Some(&llm_request),
+			None,
+			None,
+			false,
+			None,
+			None,
+		)
+		.expect("setup_request should succeed");
+
+	assert_eq!(
+		req.uri().authority().map(|a| a.as_str()),
+		Some("generativelanguage.googleapis.com")
+	);
+	assert_eq!(
+		req.uri().path(),
+		"/v1beta/models/gemini-2.5-flash:generateContent"
+	);
+	assert_eq!(req.uri().query(), None);
+}
+
+#[test]
+fn setup_request_gemini_native_streaming_adds_alt_sse_and_strips_client_api_keys() {
+	let provider = AIProvider::Gemini(gemini::Provider {
+		model_override: None,
+	});
+	// The client's own alt=sse is dropped in favour of the path-provided one. Credential query
+	// parameters are stripped while unrelated parameters survive.
+	let llm_request = native_gemini_llm_request("models/gemini-2.5-flash", true);
+	let mut req = crate::http::tests_common::request(
+		"https://example.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=abc&%24key=def&keep=yes",
+		http::Method::POST,
+		&[("authorization", "Bearer AIzaOperatorKey")],
+	);
+
+	provider
+		.setup_request(
+			&mut req,
+			RouteType::Completions,
+			Some(&llm_request),
+			None,
+			None,
+			false,
+			None,
+			None,
+		)
+		.expect("setup_request should succeed");
+
+	assert_eq!(
+		req.uri().path(),
+		"/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+	);
+	assert_eq!(req.uri().query(), Some("alt=sse&keep=yes"));
+}
+
+#[test]
+fn setup_request_strips_query_api_keys_only_for_native_gemini() {
+	for (provider, expected_query) in [
+		(
+			AIProvider::Gemini(gemini::Provider {
+				model_override: None,
+			}),
+			"alt=sse&keep=yes",
+		),
+		(
+			AIProvider::Vertex(vertex::Provider {
+				model_override: None,
+				region: None,
+				project_id: strng::new("test-project"),
+			}),
+			"alt=sse&key=abc&%24key=def&keep=yes",
+		),
+	] {
+		let llm_request = native_gemini_llm_request("gemini-2.5-flash", true);
+		let mut req = crate::http::tests_common::request(
+			"https://proxy.example.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=abc&%24key=def&keep=yes",
+			http::Method::POST,
+			&[("authorization", "Bearer ya29.operator-token")],
+		);
+
+		provider
+			.setup_request(
+				&mut req,
+				RouteType::Completions,
+				Some(&llm_request),
+				None,
+				None,
+				true,
+				None,
+				None,
+			)
+			.expect("setup_request should succeed");
+
+		assert_eq!(
+			req.uri().path(),
+			"/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+		);
+		assert_eq!(req.uri().query(), Some(expected_query));
+	}
+}
+
+#[test]
+fn setup_request_gemini_without_native_state_keeps_compat_path() {
+	let provider = AIProvider::Gemini(gemini::Provider {
+		model_override: None,
+	});
+	let llm_request = LLMRequest {
+		provider_state: None,
+		web_search: None,
+		..native_gemini_llm_request("gemini-2.5-flash", false)
+	};
+	let mut req = crate::http::tests_common::request(
+		"https://example.com/v1/chat/completions?key=abc&%24key=def",
+		http::Method::POST,
+		&[("authorization", "Bearer AIzaOperatorKey")],
+	);
+
+	provider
+		.setup_request(
+			&mut req,
+			RouteType::Completions,
+			Some(&llm_request),
+			None,
+			None,
+			false,
+			None,
+			None,
+		)
+		.expect("setup_request should succeed");
+
+	assert_eq!(req.uri().path(), "/v1beta/openai/chat/completions");
+	assert_eq!(req.uri().query(), Some("key=abc&%24key=def"));
+}
+
 #[test]
 fn setup_request_gemini_applies_path_prefix_with_host_override() {
 	assert_prefixed_host_override_path(
-		AIProvider::Gemini(gemini::Provider { model: None }),
+		AIProvider::Gemini(gemini::Provider {
+			model_override: None,
+		}),
 		"gemini-2.5-pro",
 		"/proxy/v1beta/openai/chat/completions",
 		Some("trace=repro"),
@@ -1479,7 +3215,7 @@ fn setup_request_gemini_applies_path_prefix_with_host_override() {
 fn setup_request_vertex_applies_path_prefix_with_host_override() {
 	assert_prefixed_host_override_path(
 		AIProvider::Vertex(vertex::Provider {
-			model: None,
+			model_override: None,
 			region: Some(strng::new("us-central1")),
 			project_id: strng::new("example-project"),
 		}),
@@ -1493,10 +3229,11 @@ fn setup_request_vertex_applies_path_prefix_with_host_override() {
 fn setup_request_bedrock_applies_path_prefix_with_host_override() {
 	assert_prefixed_host_override_path(
 		AIProvider::bedrock(bedrock::Provider {
-			model: None,
+			model_override: None,
 			region: strng::new("us-east-1"),
 			guardrail_identifier: None,
 			guardrail_version: None,
+			endpoint_preference: Default::default(),
 		}),
 		"anthropic.claude-3-5-sonnet-20241022-v2:0",
 		"/proxy/model/anthropic.claude-3-5-sonnet-20241022-v2:0/converse",
@@ -1505,10 +3242,51 @@ fn setup_request_bedrock_applies_path_prefix_with_host_override() {
 }
 
 #[test]
+fn setup_request_bedrock_sets_signing_region_with_host_override() {
+	let provider = AIProvider::bedrock(bedrock::Provider {
+		model_override: None,
+		region: strng::new("ca-central-1"),
+		guardrail_identifier: None,
+		guardrail_version: None,
+		endpoint_preference: Default::default(),
+	});
+	let mut req = crate::http::tests_common::request(
+		"https://bedrock-vpce.example.com/model/example/converse",
+		http::Method::POST,
+		&[],
+	);
+
+	provider
+		.setup_request(
+			&mut req,
+			RouteType::Messages,
+			None,
+			None,
+			None,
+			true,
+			None,
+			None,
+		)
+		.expect("setup_request should succeed");
+
+	assert_eq!(
+		req.uri().authority().map(|authority| authority.as_str()),
+		Some("bedrock-vpce.example.com")
+	);
+	assert_eq!(
+		req
+			.extensions()
+			.get::<bedrock::AwsRegion>()
+			.map(|region| region.region.as_str()),
+		Some("ca-central-1")
+	);
+}
+
+#[test]
 fn setup_request_azure_applies_path_prefix_with_host_override() {
 	assert_prefixed_host_override_path(
 		AIProvider::azure(azure::Provider {
-			model: None,
+			model_override: None,
 			resource_name: strng::new("example"),
 			resource_type: azure::AzureResourceType::OpenAI,
 			api_version: Some(strng::new("2024-02-15-preview")),
@@ -1591,14 +3369,7 @@ async fn bedrock_from_messages_stream_captures_completion() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(
-		log,
-		LLMResponsePolicies::default(),
-		None,
-		None,
-		crate::test_helpers::policy_client(),
-	)
-	.into_llm();
+	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None, PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi)).into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::bedrock::from_messages::translate_stream(
 		body,
@@ -1649,14 +3420,7 @@ async fn bedrock_from_messages_stream_skips_completion_when_disabled() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(
-		log,
-		LLMResponsePolicies::default(),
-		None,
-		None,
-		crate::test_helpers::policy_client(),
-	)
-	.into_llm();
+	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None, PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi)).into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::bedrock::from_messages::translate_stream(
 		body,
@@ -1704,14 +3468,7 @@ async fn bedrock_from_messages_stream_captures_tool_calls() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(
-		log,
-		LLMResponsePolicies::default(),
-		None,
-		None,
-		crate::test_helpers::policy_client(),
-	)
-	.into_llm();
+	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None, PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi)).into_llm();
 	let body = conversion::bedrock::from_messages::translate_stream(
 		body,
 		1024 * 1024,
@@ -1771,14 +3528,7 @@ async fn messages_passthrough_stream_captures_completion() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(
-		log,
-		LLMResponsePolicies::default(),
-		None,
-		None,
-		crate::test_helpers::policy_client(),
-	)
-	.into_llm();
+	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None, PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi)).into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::messages::passthrough_stream(
 		body,
@@ -1827,14 +3577,7 @@ async fn messages_passthrough_stream_skips_completion_when_disabled() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(
-		log,
-		LLMResponsePolicies::default(),
-		None,
-		None,
-		crate::test_helpers::policy_client(),
-	)
-	.into_llm();
+	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None, PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi)).into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::messages::passthrough_stream(
 		body,
@@ -1879,14 +3622,7 @@ async fn messages_passthrough_stream_captures_tool_calls() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(
-		log,
-		LLMResponsePolicies::default(),
-		None,
-		None,
-		crate::test_helpers::policy_client(),
-	)
-	.into_llm();
+	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None, PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi)).into_llm();
 	let body = conversion::messages::passthrough_stream(
 		body,
 		1024 * 1024,
@@ -1942,14 +3678,7 @@ async fn responses_passthrough_stream_captures_completion_and_tool_calls() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(
-		log,
-		LLMResponsePolicies::default(),
-		None,
-		None,
-		crate::test_helpers::policy_client(),
-	)
-	.into_llm();
+	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None, PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi)).into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::responses::passthrough_stream(
 		body,
@@ -1988,6 +3717,47 @@ async fn responses_passthrough_stream_captures_completion_and_tool_calls() {
 }
 
 #[tokio::test]
+async fn responses_passthrough_stream_preserves_moderation_chunks() {
+	let input_bytes = br#"event: response.completed
+data: {"type":"response.completed","sequence_number":1,"response":{"created_at":123,"id":"resp_123","model":"gpt-5","object":"response","output":[],"status":"completed","moderation":{"input":{"flagged":false},"output":{"flagged":true}}}}
+
+data: [DONE]
+
+"#;
+	let body = Body::from(input_bytes.to_vec());
+	let log = AsyncLog::default();
+	let llmresp = LLMInfo {
+		request: LLMRequest {
+			input_tokens: None,
+			input_format: InputFormat::Responses,
+			cache_convention: CacheTokenConvention::pending(),
+			request_model: "gpt-5".into(),
+			provider: "openai".into(),
+			streaming: true,
+			params: Default::default(),
+			prompt: None,
+			provider_state: None,
+			web_search: None,
+		},
+		response: LLMResponse::default(),
+	};
+	log.store(Some(llmresp));
+	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None, PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi)).into_llm();
+	let buffer_limit = 1024 * 1024;
+	let body = conversion::responses::passthrough_stream(
+		body,
+		buffer_limit,
+		logger,
+		llm::LogContentFields::default(),
+	);
+	let output = body.collect().await.unwrap().to_bytes();
+	let text = String::from_utf8(output.to_vec()).expect("stream should be valid UTF-8");
+
+	assert!(text.contains(r#""moderation":{"input":{"flagged":false},"output":{"flagged":true}}"#));
+	assert!(text.contains("data: [DONE]"));
+}
+
+#[tokio::test]
 async fn responses_passthrough_stream_skips_completion_when_disabled() {
 	let input_path = fixture_path("response/responses/stream.json");
 	let input_bytes = fs::read(&input_path).expect("Failed to read fixture");
@@ -2010,14 +3780,7 @@ async fn responses_passthrough_stream_skips_completion_when_disabled() {
 		response: LLMResponse::default(),
 	};
 	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(
-		log,
-		LLMResponsePolicies::default(),
-		None,
-		None,
-		crate::test_helpers::policy_client(),
-	)
-	.into_llm();
+	let logger = AmendOnDrop::new(log, LLMResponsePolicies::default(), None, None, PolicyClient::new(crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap().pi)).into_llm();
 	let buffer_limit = 1024 * 1024;
 	let body = conversion::responses::passthrough_stream(
 		body,
@@ -2041,7 +3804,7 @@ async fn responses_passthrough_stream_skips_completion_when_disabled() {
 
 fn vertex_provider(model: &str) -> AIProvider {
 	AIProvider::Vertex(vertex::Provider {
-		model: Some(strng::new(model)),
+		model_override: Some(strng::new(model)),
 		region: None,
 		project_id: strng::new("test-project"),
 	})
@@ -2049,7 +3812,7 @@ fn vertex_provider(model: &str) -> AIProvider {
 
 fn custom_provider(format: custom::ProviderFormat) -> AIProvider {
 	AIProvider::Custom(custom::Provider {
-		model: None,
+		model_override: None,
 		provider_override: None,
 		formats: vec![custom::ProviderFormatConfig { format, path: None }],
 	})
@@ -2080,7 +3843,7 @@ async fn read_body_decodes_gzip_request_before_json_parse() {
 		.body(Body::from(gz.to_vec()))
 		.unwrap();
 
-	let (parts, parsed) = provider
+	let (parts, _body, parsed) = provider
 		.read_body_and_default_model::<types::messages::Request>(None, req, &mut None)
 		.await
 		.expect("gzip request body should decode and parse as JSON");
@@ -2096,26 +3859,79 @@ async fn read_body_decodes_gzip_request_before_json_parse() {
 }
 
 #[tokio::test]
-async fn read_body_still_parses_plaintext_request() {
-	// A plaintext (unencoded) request body must continue to parse unchanged — the
-	// decompression path is a no-op when no Content-Encoding is present.
+async fn read_body_cached_json_respects_mutations_and_limits() {
 	let provider = custom_provider(custom::ProviderFormat::Messages);
-
-	let req = ::http::Request::builder()
-		.uri("/v1/messages")
-		.header(::http::header::CONTENT_TYPE, "application/json")
-		.body(Body::from(
-			br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#
-				.to_vec(),
-		))
-		.unwrap();
-
-	let (_parts, parsed) = provider
-		.read_body_and_default_model::<types::messages::Request>(None, req, &mut None)
-		.await
-		.expect("plaintext request body should parse as JSON");
-
-	assert_eq!(parsed.model.as_deref(), Some("claude-sonnet-4-5"));
+	let original = json!({
+		"model": "claude-sonnet-4-5",
+		"max_tokens": 8,
+		"messages": [{"role": "user", "content": "hi"}],
+	});
+	for case in [
+		"uncached",
+		"cached",
+		"policy",
+		"replacement",
+		"limit",
+		"encoding",
+	] {
+		let mut req = ::http::Request::builder()
+			.uri("/v1/messages")
+			.header(::http::header::CONTENT_TYPE, "application/json")
+			.body(Body::from(serde_json::to_vec(&original).unwrap()))
+			.unwrap();
+		if case != "uncached" {
+			req
+				.body_mut()
+				.insert_extension(json::ParsedJson(original.clone()));
+		}
+		let mut policy = None;
+		match case {
+			"policy" => {
+				policy = Some(Policy {
+					overrides: Some(HashMap::from([("model".to_string(), json!("overridden"))])),
+					..Default::default()
+				})
+			},
+			"replacement" => {
+				let mut replacement = original.clone();
+				replacement["model"] = json!("replaced");
+				req.replace_body_bytes(serde_json::to_vec(&replacement).unwrap().into());
+			},
+			"limit" => {
+				req.extensions_mut().insert(http::BufferLimit(1));
+			},
+			"encoding" => {
+				req
+					.headers_mut()
+					.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+			},
+			_ => {},
+		}
+		let result = provider
+			.read_body_and_default_model::<types::messages::Request>(policy.as_ref(), req, &mut None)
+			.await;
+		if case == "limit" {
+			assert!(matches!(result, Err(AIError::RequestTooLarge)));
+			continue;
+		}
+		if case == "encoding" {
+			assert!(
+				result.is_err(),
+				"cached JSON must not bypass decoding errors"
+			);
+			continue;
+		}
+		let (_, body, parsed) = result.unwrap();
+		assert!(body.extension::<json::ParsedJson>().is_none());
+		assert_eq!(
+			parsed.model.as_deref(),
+			Some(match case {
+				"policy" => "overridden",
+				"replacement" => "replaced",
+				_ => "claude-sonnet-4-5",
+			})
+		);
+	}
 }
 
 #[test]
@@ -2127,7 +3943,7 @@ fn custom_provider_name_falls_back_to_custom() {
 #[test]
 fn custom_provider_override_drives_provider_name() {
 	let provider = AIProvider::Custom(custom::Provider {
-		model: None,
+		model_override: None,
 		provider_override: Some(strng::literal!("cohere")),
 		formats: vec![custom::ProviderFormatConfig {
 			format: custom::ProviderFormat::Rerank,
@@ -2185,7 +4001,9 @@ fn custom_completions_backend_uses_inclusive_convention() {
 fn fixed_providers_classify_by_family() {
 	assert_eq!(
 		cache_convention_for(
-			&AIProvider::Anthropic(anthropic::Provider { model: None }),
+			&AIProvider::Anthropic(anthropic::Provider {
+				model_override: None
+			}),
 			None,
 			"claude-sonnet-4-5"
 		),
@@ -2193,7 +4011,10 @@ fn fixed_providers_classify_by_family() {
 	);
 	assert_eq!(
 		cache_convention_for(
-			&AIProvider::OpenAI(openai::Provider { model: None }),
+			&AIProvider::OpenAI(openai::Provider {
+				model_override: None,
+				moderation: None,
+			}),
 			Some(custom::ProviderFormat::Completions),
 			"gpt-4o"
 		),
@@ -2201,535 +4022,22 @@ fn fixed_providers_classify_by_family() {
 	);
 }
 
-/// An upstream error body that is not JSON must still reach the client in the
-/// client's own error shape, with the upstream status intact.
-///
-/// Regression, measured on the dev pilot 2026-09-04: a `/v1/messages` request
-/// whose upstream answered a plain nginx `404` HTML page came back as
-/// `503 processing failed: failed to parse response`. `translate_error` parses
-/// the error body to reshape it, the parse failed, and the resulting
-/// `AIError::ResponseParsing` became `ProxyError::Processing` -- which is a
-/// 503, is not `is_retryable()`, and is what the health policy's
-/// `unhealthyCondition` is then evaluated against. So one un-parseable byte
-/// costs the client a correct error body AND costs the route both halves of
-/// failover: retry sees an `Err` it will not replay, and health never sees the
-/// real upstream code. Only the two passthrough arms of `ChatTranslation::error`
-/// (`Completions`/`Responses` against an OpenAI-shaped upstream) were immune.
 #[test]
-fn non_json_upstream_error_synthesizes_messages_error() {
-	let provider = custom_provider(custom::ProviderFormat::Completions);
-	let mut req = llm_request_with_tokens(None);
-	req.input_format = InputFormat::Messages;
-	req.request_model = "glm-5.2".into();
-
-	let error = Bytes::from_static(
-		b"<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n",
-	);
-	let translated = provider
-		.process_error(&req, ::http::StatusCode::NOT_FOUND, &error)
-		.expect("a non-JSON upstream error must not fail the exchange");
-	let body: Value = serde_json::from_slice(&translated).expect("synthesized error should be JSON");
-
-	assert_eq!(body["type"], json!("error"));
-	assert_eq!(body["error"]["type"], json!("not_found_error"));
-	let message = body["error"]["message"].as_str().unwrap_or_default();
-	assert!(
-		message.contains("404 Not Found"),
-		"synthesized message should carry the upstream body so the failure is diagnosable, got: {message}",
-	);
-}
-
-/// The same for the Google error arm, which a Completions client reaches
-/// through a Gemini or Vertex backend. `parse_google_error` was strict for the
-/// same reason and had the same consequence.
-#[test]
-fn non_json_upstream_error_synthesizes_completions_error() {
-	let provider = AIProvider::Gemini(gemini::Provider { model: None });
-	let mut req = llm_request_with_tokens(None);
-	req.input_format = InputFormat::Completions;
-	req.request_model = "gemini-2.5-pro".into();
-
-	let error = Bytes::from_static(b"upstream connect error or disconnect/reset before headers");
-	let translated = provider
-		.process_error(&req, ::http::StatusCode::BAD_GATEWAY, &error)
-		.expect("a non-JSON upstream error must not fail the exchange");
-	let body: Value = serde_json::from_slice(&translated).expect("synthesized error should be JSON");
-
-	assert_eq!(body["error"]["type"], json!("api_error"));
-	let message = body["error"]["message"].as_str().unwrap_or_default();
-	assert!(
-		message.contains("upstream connect error"),
-		"synthesized message should carry the upstream body, got: {message}",
-	);
-}
-
-/// A well-formed upstream error must still be translated, not synthesized --
-/// the fallback may not swallow the upstream's own `type` and `message`.
-#[test]
-fn json_upstream_error_is_still_translated_not_synthesized() {
-	let provider = custom_provider(custom::ProviderFormat::Completions);
-	let mut req = llm_request_with_tokens(None);
-	req.input_format = InputFormat::Messages;
-
-	let error = Bytes::from_static(
-		br#"{"error":{"message":"model not found","type":"model_error","param":null,"code":404}}"#,
-	);
-	let translated = provider
-		.process_error(&req, ::http::StatusCode::NOT_FOUND, &error)
-		.expect("well-formed error should translate");
-	let body: Value = serde_json::from_slice(&translated).expect("translated error should be JSON");
-
-	assert_eq!(body["error"]["type"], json!("model_error"));
-	assert_eq!(body["error"]["message"], json!("model not found"));
-}
-
-/// The property failover actually depends on: `process_response` must return
-/// `Ok` with the upstream status preserved, so `should_retry` can match it
-/// against `traffic.retry.codes` and the health policy's `unhealthyCondition`
-/// can see the real code.
-#[tokio::test]
-async fn non_json_upstream_error_preserves_status_for_retry_and_health() {
-	use crate::proxy::httpproxy::PolicyClient;
-	use crate::test_helpers::proxymock::setup_proxy_test;
-
-	let provider = custom_provider(custom::ProviderFormat::Completions);
-	let mut req = llm_request_with_tokens(None);
-	req.input_format = InputFormat::Messages;
-	req.streaming = false;
-
-	let body = Body::from(
-		b"<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n</body>\r\n</html>\r\n"
-			.to_vec(),
-	);
-	let mut resp = Response::new(body);
-	*resp.status_mut() = ::http::StatusCode::NOT_FOUND;
-	resp
-		.headers_mut()
-		.insert(::http::header::CONTENT_TYPE, "text/html".parse().unwrap());
-
-	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
-	let result = provider
-		.process_response(
-			client,
-			req,
-			LLMResponsePolicies::default(),
-			None,
-			AsyncLog::default(),
-			llm::LogContentFields::default(),
-			None,
-			resp,
-		)
-		.await
-		.expect("process_response must not fail the exchange on a non-JSON error body");
-
-	assert_eq!(
-		result.status(),
-		::http::StatusCode::NOT_FOUND,
-		"the upstream status must survive; retry and health are both evaluated against it",
-	);
-
-	let result_body = result.collect().await.unwrap().to_bytes();
-	let parsed: Value =
-		serde_json::from_slice(&result_body).expect("synthesized error should be valid JSON");
-	assert_eq!(parsed["type"], json!("error"));
-}
-
-// ---------------------------------------------------------------------------
-// G3 web-search sidecar marker bridge (FR-2.6) — probes P13/P16/P17.
-//
-// These tests exercise `agent_llm::conversion::web_search::translate_stream`,
-// the response-side reshape of a sidecar SSE stream into the client's own
-// protocol. They live here (not in agent-llm's own test module) because the
-// real log-capture harness — `AmendOnDrop` + `test_helpers::policy_client()` —
-// is agentgateway-crate; agent-llm's `StreamingUsageGuard::default()` is a
-// Noop that silently discards all `update()` calls, so a P17 metering
-// assertion run there would pass vacuously.
-// ---------------------------------------------------------------------------
-
-/// Build a sidecar SSE body from a sequence of `data:` JSON payloads (each
-/// already a JSON string) + a trailing `[DONE]`. Matches the sidecar contract
-/// (data:-only, no `event:` field).
-fn sidecar_sse(frames: &[&str]) -> Body {
-	let mut out = String::new();
-	for f in frames {
-		out.push_str("data: ");
-		out.push_str(f);
-		out.push_str("\n\n");
-	}
-	out.push_str("data: [DONE]\n\n");
-	Body::from(out.into_bytes())
-}
-
-/// Standard log-capture harness: an `AsyncLog` + `AmendOnDrop` logger wired to
-/// a no-op policy client, with `llmresp` stored. Returns `(log2, logger)` so
-/// the caller can drain the body then `log2.take()` the final `LLMInfo`.
-fn ws_log_harness(input_format: InputFormat) -> (AsyncLog<llm::LLMInfo>, agent_llm::StreamingUsageGuard) {
-	let log = AsyncLog::default();
-	let log2 = log.clone();
-	let llmresp = LLMInfo {
-		request: LLMRequest {
-			input_tokens: None,
-			input_format,
-			cache_convention: CacheTokenConvention::pending(),
-			request_model: "test-model".into(),
-			provider: "test-provider".into(),
-			streaming: true,
-			params: Default::default(),
-			prompt: None,
-			provider_state: None,
-			web_search: Some(WebSearchStreamContext {
-				streaming: true,
-				client_tools: true,
-			}),
-		},
-		response: LLMResponse::default(),
-	};
-	log.store(Some(llmresp));
-	let logger = AmendOnDrop::new(
-		log,
-		LLMResponsePolicies::default(),
-		None,
-		None,
-		crate::test_helpers::policy_client(),
-	)
-	.into_llm();
-	(log2, logger)
-}
-
-const WS_TEXT_DELTA: &str =
-	r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"hello world"}}]}"#;
-const WS_TOOL_ROUND: &str =
-	r#"{"x-ai-ws-tool-round":{"tool_use_id":"t1","tool_name":"web_search","input":{"query":"rust async"}}}"#;
-const WS_USAGE: &str =
-	r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":2}}}"#;
-const WS_PROVENANCE: &str =
-	r#"{"x-ai-ws-provenance":{"rounds":[],"citations":[{"n":1,"url":"https://rust-lang.org","title":"Rust"}],"route_type":"llm/v1/chat"}}"#;
-const WS_IN_STREAM_ERROR: &str = r#"{"error":{"message":"sidecar blew up"}}"#;
-
-/// P13: augmentation transparency — a rerouted stream reshapes text deltas +
-/// tool-round markers + provenance into the client's protocol without dropping
-/// the assistant text, and the tool-round (executed server-side) is invisible
-/// to the chat client (dropped, not emitted as a broken chunk).
-#[tokio::test]
-async fn p13_chat_shaper_augmentation_is_transparent() {
-	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_TOOL_ROUND, WS_USAGE, WS_PROVENANCE]);
-	let (log2, logger) = ws_log_harness(InputFormat::Completions);
-	let body = agent_llm::conversion::web_search::translate_stream(
-		body,
-		1024 * 1024,
-		logger,
-		"test-model".to_string(),
-		InputFormat::Completions,
-		WebSearchStreamContext {
-			streaming: true,
-			client_tools: true,
-		},
-	);
-	let out = body.collect().await.unwrap().to_bytes();
-	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
-
-	// The assistant text survives the reshape.
-	assert!(
-		text.contains("hello world"),
-		"chat shaper must pass the text delta through; got:\n{text}"
-	);
-	// The executed tool-round marker is NOT forwarded to the chat client
-	// (it would arrive as a malformed chunk the client can't classify).
-	assert!(
-		!text.contains("x-ai-ws-tool-round"),
-		"chat shaper must drop executed tool-round markers; got:\n{text}"
-	);
-	// Provenance surfaces as a sources delta.content.
-	assert!(
-		text.contains("rust-lang.org"),
-		"chat shaper must emit provenance sources; got:\n{text}"
-	);
-	// Chat frames are data:-only (no `event:` field — the sidecar speaks chat,
-	// and the chat client expects chat-shaped SSE).
-	assert!(
-		!text.contains("event: "),
-		"chat shaper must not emit SSE event: fields; got:\n{text}"
-	);
-	// Stream terminates with [DONE].
-	assert!(
-		text.ends_with("data: [DONE]\n\n"),
-		"chat shaper must end with [DONE]; got:\n{text}"
-	);
-	// P17 (usage marker path): the sidecar's usage was recorded.
-	let info = log2.take().expect("log should have LLMInfo");
-	assert_eq!(info.response.input_tokens, Some(10));
-	assert_eq!(info.response.output_tokens, Some(5));
-	assert_eq!(info.response.total_tokens, Some(15));
-	assert_eq!(info.response.cached_input_tokens, Some(3));
-	assert_eq!(info.response.reasoning_tokens, Some(2));
-}
-
-/// P13 (Anthropic): the messages shaper drives the full Anthropic event
-/// lifecycle — `message_start`, text content-block lifecycle, and a terminal
-/// `message_delta`+`message_stop` — from sidecar markers.
-#[tokio::test]
-async fn p13_messages_shaper_drives_anthropic_lifecycle() {
-	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_USAGE, WS_PROVENANCE]);
-	let (log2, logger) = ws_log_harness(InputFormat::Messages);
-	let body = agent_llm::conversion::web_search::translate_stream(
-		body,
-		1024 * 1024,
-		logger,
-		"test-model".to_string(),
-		InputFormat::Messages,
-		WebSearchStreamContext {
-			streaming: true,
-			client_tools: true,
-		},
-	);
-	let out = body.collect().await.unwrap().to_bytes();
-	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
-
-	assert!(
-		text.contains("event: message_start\ndata: "),
-		"messages shaper must open with message_start; got:\n{text}"
-	);
-	assert!(
-		text.contains("event: content_block_start\ndata: "),
-		"messages shaper must open a text content block; got:\n{text}"
-	);
-	assert!(
-		text.contains("\"text\":\"hello world\""),
-		"messages shaper must emit the text delta; got:\n{text}"
-	);
-	assert!(
-		text.contains("event: content_block_stop\ndata: "),
-		"messages shaper must close the text block; got:\n{text}"
-	);
-	assert!(
-		text.contains("event: message_delta\ndata: "),
-		"messages shaper must emit the terminal message_delta; got:\n{text}"
-	);
-	assert!(
-		text.contains("event: message_stop\ndata: "),
-		"messages shaper must emit message_stop; got:\n{text}"
-	);
-	// Citations from provenance ride on a citations_delta.
-	assert!(
-		text.contains("citations_delta"),
-		"messages shaper must emit citations_delta from provenance; got:\n{text}"
-	);
-	// P17: usage recorded on the LLMInfo. Anthropic input_tokens = prompt -
-	// cached (OpenAI prompt_tokens INCLUDES cached; Anthropic reports
-	// non-cached + a separate cache_read_input_tokens).
-	let info = log2.take().expect("log should have LLMInfo");
-	assert_eq!(info.response.input_tokens, Some(10));
-	assert_eq!(info.response.output_tokens, Some(5));
-	assert_eq!(info.response.total_tokens, Some(15));
-}
-
-/// P16: an in-stream sidecar error (`{"error":{"message":...}}`) is surfaced
-/// per protocol, never laundered into an empty success. Chat emits an error
-/// frame; Responses emits `response.failed`; Messages surfaces it via the
-/// terminal stop_reason (no clean `end_turn`).
-#[tokio::test]
-async fn p16_in_stream_error_is_surfaced_not_laundered() {
-	// Chat: the error frame is forwarded, then [DONE].
-	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_IN_STREAM_ERROR]);
-	let (_log2, logger) = ws_log_harness(InputFormat::Completions);
-	let body = agent_llm::conversion::web_search::translate_stream(
-		body,
-		1024 * 1024,
-		logger,
-		"test-model".to_string(),
-		InputFormat::Completions,
-		WebSearchStreamContext {
-			streaming: true,
-			client_tools: true,
-		},
-	);
-	let out = body.collect().await.unwrap().to_bytes();
-	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
-	assert!(
-		text.contains(r#""error":{"message":"sidecar blew up"}"#),
-		"chat shaper must surface the in-stream error frame; got:\n{text}"
-	);
-
-	// Responses: the in-stream error becomes a response.failed terminal event.
-	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_IN_STREAM_ERROR]);
-	let (_log2, logger) = ws_log_harness(InputFormat::Responses);
-	let body = agent_llm::conversion::web_search::translate_stream(
-		body,
-		1024 * 1024,
-		logger,
-		"test-model".to_string(),
-		InputFormat::Responses,
-		WebSearchStreamContext {
-			streaming: true,
-			client_tools: true,
-		},
-	);
-	let out = body.collect().await.unwrap().to_bytes();
-	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
-	assert!(
-		text.contains("response.failed"),
-		"responses shaper must emit response.failed for an in-stream error; got:\n{text}"
-	);
-	assert!(
-		text.contains("sidecar blew up"),
-		"responses shaper must carry the error message; got:\n{text}"
-	);
-
-	// Messages: the in-stream error surfaces as a terminal message_delta with
-	// stop_reason absent (not a clean end_turn). The stream still closes with
-	// message_stop (no empty success).
-	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_IN_STREAM_ERROR]);
-	let (_log2, logger) = ws_log_harness(InputFormat::Messages);
-	let body = agent_llm::conversion::web_search::translate_stream(
-		body,
-		1024 * 1024,
-		logger,
-		"test-model".to_string(),
-		InputFormat::Messages,
-		WebSearchStreamContext {
-			streaming: true,
-			client_tools: true,
-		},
-	);
-	let out = body.collect().await.unwrap().to_bytes();
-	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
-	assert!(
-		text.contains("event: message_delta\ndata: "),
-		"messages shaper must still emit a terminal message_delta on error; got:\n{text}"
-	);
-	assert!(
-		text.contains("\"stop_reason\":null"),
-		"messages shaper must surface the in-stream error as stop_reason=null (not end_turn); got:\n{text}"
-	);
-	assert!(
-		!text.contains("\"stop_reason\":\"end_turn\""),
-		"messages shaper must NOT launder an in-stream error into a clean end_turn; got:\n{text}"
-	);
-}
-
-/// P17: metering on the bypass-equivalent path. When the sidecar sends text
-/// deltas but NO `usage` marker, the bridge falls back to ceil(text_chars/4)
-/// for output_tokens. When the `usage` marker IS present, it is authoritative.
-/// (The true bypass path — web_search configured but not triggered — never
-/// reaches this bridge; that path keeps normal upstream accounting. This test
-/// covers the bridge's own metering for the no-usage-marker case.)
-#[tokio::test]
-async fn p17_metering_usage_marker_and_eof_fallback() {
-	// Authoritative: usage marker present → exact tokens recorded.
-	let body = sidecar_sse(&[WS_TEXT_DELTA, WS_USAGE]);
-	let (log2, logger) = ws_log_harness(InputFormat::Completions);
-	let body = agent_llm::conversion::web_search::translate_stream(
-		body,
-		1024 * 1024,
-		logger,
-		"test-model".to_string(),
-		InputFormat::Completions,
-		WebSearchStreamContext {
-			streaming: true,
-			client_tools: true,
-		},
-	);
-	let _ = body.collect().await.unwrap();
-	let info = log2.take().expect("log should have LLMInfo");
-	assert_eq!(
-		info.response.output_tokens,
-		Some(5),
-		"usage marker must be authoritative for output_tokens"
-	);
-
-	// Fallback: no usage marker, text present → ceil(text_chars/4).
-	// "hello world" = 11 chars → ceil(11/4) = 3.
-	let body = sidecar_sse(&[WS_TEXT_DELTA]);
-	let (log2, logger) = ws_log_harness(InputFormat::Completions);
-	let body = agent_llm::conversion::web_search::translate_stream(
-		body,
-		1024 * 1024,
-		logger,
-		"test-model".to_string(),
-		InputFormat::Completions,
-		WebSearchStreamContext {
-			streaming: true,
-			client_tools: true,
-		},
-	);
-	let _ = body.collect().await.unwrap();
-	let info = log2.take().expect("log should have LLMInfo");
-	assert_eq!(
-		info.response.output_tokens,
-		Some(3),
-		"EOF fallback must estimate output_tokens = ceil(text_chars/4) = 3 for 11 chars"
-	);
-}
-
-/// P13 (client_tools filter): when `client_tools=false`, the sidecar's
-/// forwarded client tool-call suspension signal is stripped (the client asked
-/// us not to forward its own function tools).
-#[tokio::test]
-async fn p13_client_tools_false_strips_forwarded_tool_calls() {
-	let tool_call_frame = r#"{"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"#;
-	let body = sidecar_sse(&[WS_TEXT_DELTA, tool_call_frame, WS_USAGE]);
-	let (_log2, logger) = ws_log_harness(InputFormat::Completions);
-	let body = agent_llm::conversion::web_search::translate_stream(
-		body,
-		1024 * 1024,
-		logger,
-		"test-model".to_string(),
-		InputFormat::Completions,
-		WebSearchStreamContext {
-			streaming: true,
-			client_tools: false,
-		},
-	);
-	let out = body.collect().await.unwrap().to_bytes();
-	let text = String::from_utf8(out.to_vec()).expect("stream must be valid UTF-8");
-	assert!(
-		!text.contains("tool_calls"),
-		"client_tools=false must strip the forwarded tool-call suspension; got:\n{text}"
-	);
-	// The text delta still passes through.
-	assert!(
-		text.contains("hello world"),
-		"text must still pass through with client_tools=false; got:\n{text}"
-	);
-}
-
-/// `unparseable_upstream_body` lives in `agent_llm::conversion`; its tests live
-/// here because `cargo test -p agent-llm` does not build on this branch (stale
-/// `golden_tests.rs`), so an in-crate test module would never run.
-mod unparseable_upstream_body {
-	use agent_llm::conversion::unparseable_upstream_body;
-	use bytes::Bytes;
-
-	#[test]
-	fn collapses_whitespace_of_an_html_error_page() {
-		let body = Bytes::from_static(
-			b"<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n</body>\r\n</html>\r\n",
-		);
-		assert_eq!(
-			unparseable_upstream_body(&body),
-			"<html> <head><title>404 Not Found</title></head> <body> </body> </html>"
-		);
-	}
-
-	#[test]
-	fn caps_a_large_error_page() {
-		let body = Bytes::from(vec![b'x'; 4096]);
-		let out = unparseable_upstream_body(&body);
-		assert!(out.ends_with("... (truncated)"), "got: {out}");
-		assert_eq!(out.chars().filter(|c| *c == 'x').count(), 512);
-	}
-
-	#[test]
-	fn describes_an_empty_body() {
-		assert_eq!(
-			unparseable_upstream_body(&Bytes::new()),
-			"upstream returned an empty error body"
-		);
-	}
-
-	#[test]
-	fn does_not_panic_on_invalid_utf8() {
-		let body = Bytes::from_static(&[0xff, 0xfe, b'o', b'k']);
-		assert!(unparseable_upstream_body(&body).contains("ok"));
-	}
+fn query_requests_sse_matches_alt_query_parameter() {
+	let uri = |s: &str| s.parse::<::http::Uri>().expect("valid uri");
+	assert!(query_requests_sse(&uri(
+		"/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+	)));
+	assert!(query_requests_sse(&uri(
+		"/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=abc&alt=sse"
+	)));
+	assert!(!query_requests_sse(&uri(
+		"/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+	)));
+	assert!(!query_requests_sse(&uri(
+		"/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=json"
+	)));
+	assert!(!query_requests_sse(&uri(
+		"/v1beta/models/gemini-2.5-flash:streamGenerateContent?halt=sse"
+	)));
 }

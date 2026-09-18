@@ -7,8 +7,8 @@ use crate::{InputFormat, RouteType, apply};
 #[cfg_attr(feature = "schema", schemars(rename = "CustomProvider"))]
 pub struct Provider {
 	/// Model ID to send to the provider, overriding the model in the client request.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub model: Option<Strng>,
+	#[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
+	pub model_override: Option<Strng>,
 	/// Provider identity for cost-catalog lookup and telemetry. Built-in named providers
 	/// (cohere, mistral, ...) set this so their cost resolves under the right catalog key;
 	/// a bare custom provider may set it to match a catalog entry. Falls back to "custom".
@@ -126,6 +126,7 @@ impl ProviderPreset {
 				vec![
 					format(Completions, None),
 					format(Messages, Some("/anthropic/v1/messages")),
+					format(Responses, None),
 				],
 			),
 			Self::Groq => (
@@ -178,7 +179,7 @@ impl ProviderPreset {
 			),
 		};
 		Provider {
-			model,
+			model_override: model,
 			provider_override: Some(strng::new(provider_override)),
 			formats,
 		}
@@ -208,6 +209,8 @@ pub enum ProviderFormat {
 	Responses,
 	Embeddings,
 	AnthropicTokenCount,
+	GenerateContent,
+	GeminiCountTokens,
 	Realtime,
 	Rerank,
 }
@@ -220,6 +223,8 @@ impl ProviderFormat {
 			RouteType::Responses => Self::Responses,
 			RouteType::Embeddings => Self::Embeddings,
 			RouteType::AnthropicTokenCount => Self::AnthropicTokenCount,
+			RouteType::GenerateContent => Self::GenerateContent,
+			RouteType::GeminiCountTokens => Self::GeminiCountTokens,
 			RouteType::Realtime => Self::Realtime,
 			RouteType::Rerank => Self::Rerank,
 			RouteType::Models | RouteType::Passthrough | RouteType::Detect => return None,
@@ -233,6 +238,8 @@ impl ProviderFormat {
 			Self::Responses => InputFormat::Responses,
 			Self::Embeddings => InputFormat::Embeddings,
 			Self::AnthropicTokenCount => InputFormat::CountTokens,
+			Self::GenerateContent => InputFormat::Gemini,
+			Self::GeminiCountTokens => InputFormat::GeminiCountTokens,
 			Self::Realtime => InputFormat::Realtime,
 			Self::Rerank => InputFormat::Rerank,
 		}
@@ -245,6 +252,8 @@ impl ProviderFormat {
 			Self::Responses => RouteType::Responses,
 			Self::Embeddings => RouteType::Embeddings,
 			Self::AnthropicTokenCount => RouteType::AnthropicTokenCount,
+			Self::GenerateContent => RouteType::GenerateContent,
+			Self::GeminiCountTokens => RouteType::GeminiCountTokens,
 			Self::Realtime => RouteType::Realtime,
 			Self::Rerank => RouteType::Rerank,
 		}
@@ -258,7 +267,7 @@ mod tests {
 	#[test]
 	fn path_for_returns_format_path() {
 		let provider = Provider {
-			model: None,
+			model_override: None,
 			provider_override: None,
 			formats: vec![
 				ProviderFormatConfig {

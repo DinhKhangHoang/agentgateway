@@ -2,7 +2,7 @@ use agent_core::prelude::Strng;
 use agent_core::strng;
 use serde::{Deserialize, Serialize};
 
-use crate::types::RequestType;
+use crate::types::{ContentScope, RequestType};
 use crate::{AIError, InputFormat, LLMRequest, LLMRequestParams, SimpleChatCompletionMessage};
 
 /// Canonical rerank request, modeled on the Cohere `/v2/rerank` API.
@@ -95,8 +95,15 @@ pub struct BilledUnits {
 }
 
 impl RequestType for Request {
+	fn body_is_json(&self) -> bool {
+		true
+	}
 	fn model(&mut self) -> &mut Option<String> {
 		&mut self.model
+	}
+
+	fn to_value(&self) -> serde_json::Result<serde_json::Value> {
+		serde_json::to_value(self)
 	}
 
 	fn prepend_prompts(&mut self, _prompts: Vec<SimpleChatCompletionMessage>) {}
@@ -125,6 +132,10 @@ impl RequestType for Request {
 
 	fn set_messages(&mut self, _messages: Vec<SimpleChatCompletionMessage>) {
 		unimplemented!("set_messages is used for prompt guard; prompt guard is disabled for rerank.")
+	}
+
+	fn visit_text_mut(&mut self, _f: &mut dyn FnMut(ContentScope, &mut String)) {
+		unimplemented!("visit_text_mut is used for prompt guard; prompt guard is disabled for rerank.")
 	}
 }
 
@@ -165,6 +176,8 @@ impl crate::types::ResponseType for Response {
 	fn serialize(&self) -> serde_json::Result<Vec<u8>> {
 		serde_json::to_vec(self)
 	}
+
+	fn visit_text_mut(&mut self, _f: &mut dyn FnMut(&mut String)) {}
 }
 
 /// Parse a rerank response, accepting either Cohere's `results` or Voyage's `data` key.

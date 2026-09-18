@@ -42,10 +42,9 @@ pub struct HboneTestServer {
 impl HboneTestServer {
 	/// Creates a new HBONE test server. If port is 0, the OS will assign an available port.
 	pub async fn new(mode: Mode, name: &str, waypoint_message: Vec<u8>, port: u16) -> Self {
-		#[cfg(feature = "tls-aws-lc")]
-		let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-		#[cfg(feature = "tls-openssl")]
-		let _ = rustls_openssl::default_provider().install_default();
+		let _ = rustls::crypto::CryptoProvider::install_default(Arc::unwrap_or_clone(
+			agentgateway::transport::tls::provider(),
+		));
 
 		let addr = SocketAddr::from(([127, 0, 0, 1], port));
 		let listener = TcpListener::bind(addr).await.unwrap();
@@ -196,6 +195,8 @@ where
 	}
 }
 
+// This isolated integration-test server does not use production TLS construction.
+#[allow(clippy::disallowed_methods)]
 fn generate_test_certs(name: &str) -> rustls::ServerConfig {
 	// Generate certificates using rcgen with static test keys
 	use std::time::{Duration, SystemTime};

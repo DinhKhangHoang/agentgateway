@@ -29,6 +29,10 @@ impl RawInputItem {
 		Self(serde_json::to_value(item).expect("responses input item should serialize"))
 	}
 
+	pub(crate) fn from_value(item: Value) -> Self {
+		Self(item)
+	}
+
 	fn from_user_text(text: String) -> Self {
 		Self::from_typed(InputItem::from(InputMessage {
 			content: vec![InputContent::InputText(InputTextContent {
@@ -75,6 +79,156 @@ impl RawInputItem {
 
 		Some(SimpleChatCompletionMessage { role, content })
 	}
+
+	fn visit_text_mut(&mut self, f: &mut dyn FnMut(ContentScope, &mut String)) {
+		if let Some(role) = self.0.get("role").and_then(|r| r.as_str()) {
+			let scope = match role {
+				"system" | "developer" => ContentScope::SystemPrompt,
+				_ => ContentScope::Messages,
+			};
+			match self.0.get_mut("content") {
+				Some(Value::String(text)) => f(scope, text),
+				Some(Value::Array(parts)) => {
+					// assistant refusal parts carry prose under `refusal`, not `text`
+					for part in parts.iter_mut() {
+						visit_json_at(part, &["refusal"], scope, f);
+					}
+					scan_value_text_runs(scope, parts, f);
+				},
+				_ => {},
+			}
+			return;
+		}
+		visit_tool_item_text(&mut self.0, f);
+	}
+}
+
+// visit every documented item type
+// known-ignored items should be listed
+// unknown items should be logged for future review
+// https://github.com/openai/openai-openapi may give us a way to keep an eye on changes
+fn visit_tool_item_text(value: &mut Value, f: &mut dyn FnMut(ContentScope, &mut String)) {
+	match value.get("type").and_then(|t| t.as_str()) {
+		// `output` is either a plain string or a content-part array.
+		Some(
+			"function_call_output"
+			| "custom_tool_call_output"
+			| "local_shell_call_output"
+			| "shell_call_output"
+			| "apply_patch_call_output",
+		) => {
+			visit_json_at(value, &["output"], ContentScope::ToolOutput, f);
+		},
+		Some("program_output") => {
+			visit_json_at(value, &["result"], ContentScope::ToolOutput, f);
+		},
+		// `mcp_call` carries the model's arguments plus the server's output/error on one item.
+		Some("function_call" | "mcp_call" | "mcp_approval_request") => {
+			visit_json_at(value, &["arguments"], ContentScope::ToolInput, f);
+			visit_json_at(value, &["output"], ContentScope::ToolOutput, f);
+			visit_json_at(value, &["error"], ContentScope::ToolOutput, f);
+		},
+		Some("custom_tool_call") => {
+			visit_json_at(value, &["input"], ContentScope::ToolInput, f);
+		},
+		// Model-written JavaScript for programmatic tool calling; the item's `fingerprint`
+		// must round-trip intact and is not visited.
+		Some("program") => {
+			visit_json_at(value, &["code"], ContentScope::ToolInput, f);
+		},
+		// Model-directed actions; `actions` is computer_call's batched form, and the
+		// safety-check prose rides along with the call.
+		Some("local_shell_call" | "shell_call" | "computer_call" | "web_search_call") => {
+			visit_json_at(value, &["action"], ContentScope::ToolInput, f);
+			visit_json_at(value, &["actions"], ContentScope::ToolInput, f);
+			visit_json_at(
+				value,
+				&["pending_safety_checks"],
+				ContentScope::ToolInput,
+				f,
+			);
+		},
+		Some("apply_patch_call") => {
+			visit_json_at(value, &["operation"], ContentScope::ToolInput, f);
+		},
+		// `output` is a screenshot; only the safety-check prose is readable.
+		Some("computer_call_output") => {
+			visit_json_at(
+				value,
+				&["acknowledged_safety_checks"],
+				ContentScope::ToolOutput,
+				f,
+			);
+		},
+		Some("file_search_call") => {
+			visit_json_at(value, &["queries"], ContentScope::ToolInput, f);
+			visit_json_at(value, &["results"], ContentScope::ToolOutput, f);
+		},
+		Some("code_interpreter_call") => {
+			visit_json_at(value, &["code"], ContentScope::ToolInput, f);
+			visit_json_at(value, &["outputs"], ContentScope::ToolOutput, f);
+		},
+		// Empty object today; the documented growth point for tool-search arguments.
+		Some("tool_search_call") => {
+			visit_json_at(value, &["arguments"], ContentScope::ToolInput, f);
+		},
+		// Server-controlled tool listings: descriptions are a prompt-injection vector.
+		Some("mcp_list_tools" | "tool_search_output") => {
+			visit_json_at(value, &["tools"], ContentScope::ToolOutput, f);
+			visit_json_at(value, &["error"], ContentScope::ToolOutput, f);
+		},
+		Some("mcp_approval_response") => {
+			visit_json_at(value, &["reason"], ContentScope::ToolInput, f);
+		},
+		// Client-authored tool definitions, unscanned like the request's `tools` field.
+		Some("additional_tools") => {},
+		// No readable text: references, triggers, base64 image results.
+		Some("item_reference" | "compaction_trigger" | "image_generation_call") => {},
+		// `encrypted_content`/fingerprint the API verifies on replay; a mask would break the
+		// request, and reasoning text is bound to its encrypted blob.
+		Some("reasoning" | "compaction") => {},
+		other => {
+			tracing::debug!(
+				item_type = other.unwrap_or("<none>"),
+				"unrecognized input item; not scanned by prompt guards"
+			);
+		},
+	}
+}
+
+/// `rest` keys preserved when a masked text run collapses; see `scan_text_runs`.
+const PRESERVED_REST_KEYS: &[&str] = &[
+	// Anthropic-style cache breakpoint, accepted by some OpenAI-compat providers
+	"cache_control",
+	// OpenAI explicit prompt-cache breakpoint
+	"prompt_cache_breakpoint",
+];
+
+fn scan_value_text_runs(
+	scope: ContentScope,
+	parts: &mut Vec<Value>,
+	f: &mut dyn FnMut(ContentScope, &mut String),
+) {
+	crate::types::scan_text_runs(
+		parts,
+		"\n",
+		|part| {
+			if !matches!(
+				part.get("type").and_then(|t| t.as_str()),
+				Some("input_text" | "output_text")
+			) {
+				return None;
+			}
+			match part.get_mut("text") {
+				Some(Value::String(text)) => Some(text),
+				_ => None,
+			}
+		},
+		// parts are pass-through JSON, so `rest` is the whole part
+		|part| Some(part),
+		PRESERVED_REST_KEYS,
+		&mut |text| f(scope, text),
+	);
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -87,6 +241,9 @@ pub struct Request {
 	pub model: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	pub moderation: Option<Value>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub max_output_tokens: Option<u32>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -97,6 +254,9 @@ pub struct Request {
 
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub stream: Option<bool>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub instructions: Option<String>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub vendor_extensions: Option<RequestVendorExtensions>,
@@ -139,6 +299,8 @@ pub struct Usage {
 	/// Breakdown of tokens used in the prompt.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub output_tokens_details: Option<UsageOutputDetails>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub total_tokens: Option<u64>,
 	#[serde(flatten, default)]
 	pub rest: serde_json::Value,
 }
@@ -215,6 +377,7 @@ impl ResponseBuilder {
 			top_p: None,
 			truncation: None,
 			usage,
+			prompt_cache_diagnostics: None,
 		}
 	}
 
@@ -313,8 +476,15 @@ impl Request {
 }
 
 impl RequestType for Request {
+	fn body_is_json(&self) -> bool {
+		true
+	}
 	fn model(&mut self) -> &mut Option<String> {
 		&mut self.model
+	}
+
+	fn to_value(&self) -> serde_json::Result<serde_json::Value> {
+		serde_json::to_value(self)
 	}
 
 	fn prepend_prompts(&mut self, prompts: Vec<SimpleChatCompletionMessage>) {
@@ -366,7 +536,16 @@ impl RequestType for Request {
 	}
 
 	fn get_messages(&self) -> Vec<SimpleChatCompletionMessage> {
-		match &self.input {
+		let mut messages = self
+			.instructions
+			.as_ref()
+			.map(|instructions| SimpleChatCompletionMessage {
+				role: strng::literal!("system"),
+				content: strng::new(instructions),
+			})
+			.into_iter()
+			.collect::<Vec<_>>();
+		messages.extend(match &self.input {
 			RequestInput::Text(text) => {
 				vec![SimpleChatCompletionMessage {
 					role: strng::literal!("user"),
@@ -377,10 +556,47 @@ impl RequestType for Request {
 				.iter()
 				.filter_map(RawInputItem::as_simple_message)
 				.collect(),
-		}
+		});
+		messages
 	}
 
-	fn set_messages(&mut self, messages: Vec<SimpleChatCompletionMessage>) {
+	fn get_messages_v2(&self) -> Vec<NormalizedMessage> {
+		let mut messages = self
+			.instructions
+			.as_ref()
+			.map(|instructions| NormalizedMessage {
+				role: strng::literal!("system"),
+				parts: vec![NormalizedMessagePart::text(strng::new(instructions))],
+			})
+			.into_iter()
+			.collect::<Vec<_>>();
+		match &self.input {
+			RequestInput::Text(text) => messages.push(NormalizedMessage {
+				role: strng::literal!("user"),
+				parts: vec![NormalizedMessagePart::text(strng::new(text))],
+			}),
+			RequestInput::Items(items) => {
+				messages.extend(
+					items
+						.iter()
+						.filter_map(|item| normalized_response_item(&item.0)),
+				);
+			},
+		}
+		crate::types::attach_tool_result_names(&mut messages);
+		messages
+	}
+
+	fn set_messages(&mut self, mut messages: Vec<SimpleChatCompletionMessage>) {
+		if self.instructions.is_some() {
+			self.instructions = messages
+				.first()
+				.filter(|message| matches!(message.role.as_str(), "developer" | "system"))
+				.map(|message| message.content.to_string());
+			if self.instructions.is_some() {
+				messages.remove(0);
+			}
+		}
 		self.input = RequestInput::Items(
 			messages
 				.into_iter()
@@ -398,16 +614,148 @@ impl RequestType for Request {
 		};
 		crate::web_search::detect(tools)
 	}
+
+	fn visit_text_mut(&mut self, f: &mut dyn FnMut(ContentScope, &mut String)) {
+		if let Some(instructions) = &mut self.instructions {
+			f(ContentScope::SystemPrompt, instructions);
+		}
+		match &mut self.input {
+			RequestInput::Text(text) => f(ContentScope::Messages, text),
+			RequestInput::Items(items) => {
+				for item in items {
+					item.visit_text_mut(f);
+				}
+			},
+		}
+	}
+}
+
+fn normalized_response_item(item: &Value) -> Option<NormalizedMessage> {
+	if let Some(role) = item.get("role").and_then(Value::as_str) {
+		let mut parts = match item.get("content") {
+			Some(Value::String(text)) => vec![NormalizedMessagePart::text(strng::new(text))],
+			Some(Value::Array(content)) => content
+				.iter()
+				.filter_map(|part| {
+					part
+						.get("text")
+						.or_else(|| part.get("refusal"))
+						.and_then(Value::as_str)
+						.map(|text| NormalizedMessagePart::text(strng::new(text)))
+				})
+				.collect(),
+			_ => Vec::new(),
+		};
+		parts.extend(
+			item
+				.get("tool_calls")
+				.and_then(Value::as_array)
+				.into_iter()
+				.flatten()
+				.filter_map(crate::types::normalized_tool_call),
+		);
+		return (!parts.is_empty()).then(|| NormalizedMessage {
+			role: strng::new(role),
+			parts,
+		});
+	}
+
+	let item_type = item.get("type").and_then(Value::as_str)?;
+	if item_type == "reasoning" {
+		return Some(NormalizedMessage {
+			role: strng::literal!("assistant"),
+			parts: vec![NormalizedMessagePart::reasoning(item.clone())],
+		});
+	}
+
+	let is_call = item_type.ends_with("_call")
+		|| matches!(
+			item_type,
+			"program" | "mcp_approval_request" | "tool_search_call"
+		);
+	if is_call {
+		let name = item
+			.get("name")
+			.and_then(Value::as_str)
+			.or_else(|| item_type.strip_suffix("_call"))
+			.unwrap_or(item_type);
+		let id = item
+			.get("call_id")
+			.or_else(|| item.get("id"))
+			.and_then(Value::as_str)
+			.unwrap_or(name);
+		let arguments = [
+			"arguments",
+			"input",
+			"action",
+			"actions",
+			"operation",
+			"queries",
+			"code",
+		]
+		.into_iter()
+		.find_map(|key| item.get(key))
+		.cloned()
+		.unwrap_or_else(|| Value::Object(Default::default()));
+		let mut parts = vec![NormalizedMessagePart::tool_call(
+			strng::new(id),
+			strng::new(name),
+			crate::types::parse_json_string(arguments),
+		)];
+		if let Some(content) = item
+			.get("output")
+			.or_else(|| item.get("outputs"))
+			.or_else(|| item.get("results"))
+			.or_else(|| item.get("error"))
+		{
+			parts.push(NormalizedMessagePart::tool_result(
+				Some(strng::new(id)),
+				Some(strng::new(name)),
+				content.clone(),
+				item.get("error").map(|_| true),
+			));
+		}
+		return Some(NormalizedMessage {
+			role: strng::literal!("assistant"),
+			parts,
+		});
+	}
+
+	let is_result = item_type.ends_with("_call_output")
+		|| matches!(
+			item_type,
+			"program_output" | "tool_search_output" | "mcp_list_tools"
+		);
+	if is_result {
+		let id = item
+			.get("call_id")
+			.or_else(|| item.get("id"))
+			.and_then(Value::as_str)
+			.map(strng::new);
+		let content = ["output", "result", "tools", "error"]
+			.into_iter()
+			.find_map(|key| item.get(key))
+			.cloned()
+			.unwrap_or(Value::Null);
+		return Some(NormalizedMessage {
+			role: strng::literal!("tool"),
+			parts: vec![NormalizedMessagePart::tool_result(
+				id,
+				item.get("name").and_then(Value::as_str).map(strng::new),
+				content,
+				item.get("error").map(|_| true),
+			)],
+		});
+	}
+	None
 }
 
 fn extract_output_messages(resp: &Response) -> Option<Vec<OutputMessage>> {
-	let mut content = Vec::new();
-
-	for item in &resp.output {
-		if let OutputItem::FunctionCall(_) = item {
-			content.extend(output_item_tool_call_part(item));
-		}
-	}
+	let content: Vec<_> = resp
+		.output
+		.iter()
+		.filter_map(output_item_tool_call_part)
+		.collect();
 
 	if content.is_empty() {
 		return None;
@@ -421,14 +769,42 @@ fn extract_output_messages(resp: &Response) -> Option<Vec<OutputMessage>> {
 }
 
 pub(crate) fn output_item_tool_call_part(item: &OutputItem) -> Option<OutputMessagePart> {
-	let OutputItem::FunctionCall(call) = item else {
-		return None;
+	let (id, name, arguments) = match item {
+		OutputItem::FunctionCall(call) => {
+			let arguments = match serde_json::from_str(&call.arguments) {
+				Ok(arguments) => arguments,
+				Err(_) if call.arguments.trim().is_empty() => serde_json::Value::Object(Default::default()),
+				Err(_) => serde_json::Value::String(call.arguments.clone()),
+			};
+			let name = call
+				.namespace
+				.as_ref()
+				.filter(|namespace| !namespace.is_empty())
+				.map_or_else(
+					|| call.name.clone(),
+					|namespace| {
+						format!(
+							"{namespace}{}{}",
+							crate::conversion::namespace_tools::NAMESPACE_SEPARATOR,
+							call.name
+						)
+					},
+				);
+			(&call.call_id, name, arguments)
+		},
+		OutputItem::CustomToolCall(call) => {
+			let arguments = match serde_json::from_str(&call.input) {
+				Ok(arguments) => arguments,
+				Err(_) if call.input.trim().is_empty() => serde_json::Value::Object(Default::default()),
+				Err(_) => serde_json::Value::String(call.input.clone()),
+			};
+			(&call.call_id, call.name.clone(), arguments)
+		},
+		_ => return None,
 	};
-	let arguments =
-		serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Object(Default::default()));
 	Some(OutputMessagePart::ToolCall {
-		id: strng::new(&call.call_id),
-		name: strng::new(&call.name),
+		id: strng::new(id),
+		name: strng::new(&name),
 		arguments,
 	})
 }
@@ -457,7 +833,8 @@ impl ResponseType for Response {
 			total_tokens: self
 				.usage
 				.as_ref()
-				.map(|u| u.input_tokens + u.output_tokens),
+				.map(|u| u.total_tokens.unwrap_or(u.input_tokens + u.output_tokens)),
+			pages: None,
 			reasoning_tokens: self.usage.as_ref().and_then(|u| {
 				u.output_tokens_details
 					.as_ref()
@@ -498,6 +875,8 @@ impl ResponseType for Response {
 			},
 			output_messages,
 			first_token: Default::default(),
+			last_token_at: Default::default(),
+			inter_chunk_latencies: Default::default(),
 		}
 	}
 
@@ -562,22 +941,46 @@ impl ResponseType for Response {
 	fn serialize(&self) -> serde_json::Result<Vec<u8>> {
 		serde_json::to_vec(&self)
 	}
+
+	fn visit_text_mut(&mut self, f: &mut dyn FnMut(&mut String)) {
+		for o in &mut self.output {
+			if let OutputItem::Message(msg) = o {
+				for c in &mut msg.content {
+					if let Content::OutputText(t) = c {
+						if t.annotations.is_empty() && t.logprobs.is_none() {
+							f(&mut t.text);
+							continue;
+						}
+						// offset-based metadata cannot survive a text rewrite
+						let original = t.text.clone();
+						f(&mut t.text);
+						if t.text != original {
+							t.annotations.clear();
+							t.logprobs = None;
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 pub mod typed {
 	use async_openai::types::responses as openai_responses;
 	// Re-export async-openai Responses API types for cleaner usage
 	pub use async_openai::types::responses::{
-		AssistantRole, CreateResponse, CustomToolCallOutput, CustomToolCallOutputOutput,
+		Annotation, AssistantRole, CreateResponse, CustomToolCallOutput, CustomToolCallOutputOutput,
 		EasyInputContent, EasyInputMessage, ErrorObject, FunctionCallOutput, FunctionToolCall,
 		IncompleteDetails, InputContent, InputItem, InputMessage, InputParam, InputRole,
 		InputTextContent, InputTokenDetails, Item, MessageItem, OutputContent, OutputItem,
 		OutputMessage, OutputMessageContent, OutputStatus, OutputTextContent, OutputTokenDetails,
-		ReasoningEffort, Response, ResponseCompletedEvent, ResponseContentPartAddedEvent,
-		ResponseContentPartDoneEvent, ResponseCreatedEvent, ResponseErrorEvent, ResponseFailedEvent,
+		Reasoning, ReasoningEffort, ReasoningItem, ReasoningItemContent, ReasoningTextContent,
+		Response, ResponseCompletedEvent, ResponseContentPartAddedEvent, ResponseContentPartDoneEvent,
+		ResponseCreatedEvent, ResponseErrorEvent, ResponseFailedEvent,
 		ResponseFunctionCallArgumentsDeltaEvent, ResponseFunctionCallArgumentsDoneEvent,
-		ResponseIncompleteEvent, ResponseOutputItemAddedEvent, ResponseOutputItemDoneEvent,
-		ResponseTextDeltaEvent, ResponseTextParam, ResponseUsage, Role, Status,
+		ResponseInProgressEvent, ResponseIncompleteEvent, ResponseOutputItemAddedEvent,
+		ResponseOutputItemDoneEvent, ResponseRefusalDeltaEvent, ResponseRefusalDoneEvent,
+		ResponseTextDeltaEvent, ResponseTextDoneEvent, ResponseTextParam, ResponseUsage, Role, Status,
 		TextResponseFormatConfiguration, Tool, ToolChoiceFunction, ToolChoiceOptions, ToolChoiceParam,
 	};
 	use serde::{Deserialize, Serialize};
@@ -590,6 +993,9 @@ pub mod typed {
 		/// An event that is emitted when a response is created.
 		#[serde(rename = "response.created")]
 		ResponseCreated(openai_responses::ResponseCreatedEvent),
+		/// Emitted when a response is in progress (intermediate progress event).
+		#[serde(rename = "response.in_progress")]
+		ResponseInProgress(openai_responses::ResponseInProgressEvent),
 		/// Emitted when a new output item is added.
 		#[serde(rename = "response.output_item.added")]
 		ResponseOutputItemAdded(openai_responses::ResponseOutputItemAddedEvent),
@@ -599,6 +1005,15 @@ pub mod typed {
 		/// Emitted when there is an additional text delta.
 		#[serde(rename = "response.output_text.delta")]
 		ResponseOutputTextDelta(openai_responses::ResponseTextDeltaEvent),
+		/// Emitted when text content is finalized.
+		#[serde(rename = "response.output_text.done")]
+		ResponseOutputTextDone(openai_responses::ResponseTextDoneEvent),
+		/// Emitted when there is a partial refusal text.
+		#[serde(rename = "response.refusal.delta")]
+		ResponseRefusalDelta(openai_responses::ResponseRefusalDeltaEvent),
+		/// Emitted when refusal text is finalized.
+		#[serde(rename = "response.refusal.done")]
+		ResponseRefusalDone(openai_responses::ResponseRefusalDoneEvent),
 		/// Emitted when there is a partial function-call arguments delta.
 		#[serde(rename = "response.function_call_arguments.delta")]
 		ResponseFunctionCallArgumentsDelta(openai_responses::ResponseFunctionCallArgumentsDeltaEvent),
@@ -644,14 +1059,50 @@ mod tests {
 	}
 
 	#[test]
+	fn instructions_round_trip_through_messages() {
+		let mut request: Request = serde_json::from_value(serde_json::json!({
+			"model": "gpt-4.1",
+			"instructions": "original instruction",
+			"input": [
+				{"role": "system", "content": "input system message"},
+				{"role": "user", "content": "hello"},
+			],
+		}))
+		.unwrap();
+		let mut messages = request.get_messages();
+		assert_eq!(messages[0].role.as_str(), "system");
+		assert_eq!(messages[1].role.as_str(), "system");
+		messages[0].content = strng::literal!("masked instruction");
+		messages[1].content = strng::literal!("masked input system message");
+
+		request.set_messages(messages);
+
+		assert_eq!(request.instructions.as_deref(), Some("masked instruction"));
+		let input = match &request.input {
+			RequestInput::Items(items) => items,
+			RequestInput::Text(_) => panic!("rewritten messages should use structured input"),
+		};
+		assert_eq!(input.len(), 2);
+		assert_eq!(input[0].0["role"], "system");
+		assert_eq!(input[0].0["content"][0]["type"], "input_text");
+		assert_eq!(
+			input[0].0["content"][0]["text"],
+			"masked input system message"
+		);
+		assert_eq!(input[1].0["role"], "user");
+	}
+
+	#[test]
 	fn test_response_tool_calls_populated_when_flag_true() {
 		let response = response_with_output(vec![OutputItem::FunctionCall(FunctionToolCall {
 			arguments: r#"{"location":"San Francisco"}"#.to_string(),
 			call_id: "call_123".to_string(),
 			namespace: None,
 			name: "get_weather".to_string(),
+			caller: None,
 			id: Some("fc_123".to_string()),
 			status: Some(OutputStatus::Completed),
+			r#async: None,
 		})]);
 
 		let llm_response = response.to_llm_response(crate::LogContentFields {
@@ -679,8 +1130,10 @@ mod tests {
 			call_id: "call_123".to_string(),
 			namespace: None,
 			name: "get_weather".to_string(),
+			caller: None,
 			id: Some("fc_123".to_string()),
 			status: Some(OutputStatus::Completed),
+			r#async: None,
 		})]);
 
 		let llm_response = response.to_llm_response(crate::LogContentFields::default());

@@ -8,8 +8,8 @@ use secrecy::SecretString;
 use crate::llm::{AIProvider, NamedAIProvider};
 use crate::serdes::FileInlineOrRemote;
 use crate::types::agent::{
-	Backend, BackendTrafficPolicy, ListenerTarget, PathMatch, PolicyPhase, PolicyTarget, PolicyType,
-	ResourceName, RouteBackendTarget, Target, TrafficPolicy,
+	Backend, BackendTrafficPolicy, BindProtocol, ListenerTarget, PathMatch, PolicyPhase,
+	PolicyTarget, PolicyType, ResourceName, RouteBackendTarget, Target, TrafficPolicy,
 };
 use crate::types::local::NormalizedLocalConfig;
 use crate::*;
@@ -111,6 +111,8 @@ fn test_oidc_policy() -> super::FilterOrPolicy {
 			client_secret: SecretString::new("client-secret".into()),
 			redirect_uri: "http://localhost:3000/oauth/callback".into(),
 			scopes: vec![],
+			login: None,
+			logout: None,
 		}),
 		..Default::default()
 	}
@@ -168,7 +170,8 @@ async fn normalize_test_yaml(yaml: &str) -> anyhow::Result<NormalizedLocalConfig
 async fn normalize_test_config(yaml_str: &str) -> anyhow::Result<NormalizedLocalConfig> {
 	let client = test_client();
 	let resources = crate::resource_manager::ResourceFetcher::direct(client);
-	let config = crate::config::parse_config(yaml_str.to_string(), None).unwrap();
+	let mut config = crate::config::parse_config(yaml_str.to_string(), None).unwrap();
+	config.oidc_cookie_encoder = test_config().oidc_cookie_encoder;
 
 	NormalizedLocalConfig::from(
 		&config,
@@ -198,8 +201,8 @@ async fn tls_cert_and_key_can_share_pem_bundle() {
 
 	let path = bundle.path().to_path_buf();
 	super::LocalTLSServerConfig {
-		cert: path.clone(),
-		key: path,
+		cert: Some(path.clone()),
+		key: Some(path),
 		..Default::default()
 	}
 	.into_server_tls_config_with_resources(
@@ -263,7 +266,7 @@ binds:
 		.backends
 		.iter()
 		.find_map(|backend| match &backend.backend {
-			Backend::Dynamic(name, ()) => Some(name),
+			Backend::Dynamic(name, _) => Some(name),
 			_ => None,
 		})
 		.expect("normalized dynamic backend");
@@ -271,6 +274,58 @@ binds:
 		backend.to_string(),
 		"/ns/name/bind/1080/listener0/default/route0/backend0"
 	);
+}
+
+#[tokio::test]
+async fn test_local_dynamic_backend_target_expression_normalizes() {
+	let normalized = normalize_test_yaml(
+		r#"
+binds:
+- port: 1080
+  listeners:
+  - routes:
+    - backends:
+      - dynamic:
+          target: extproc.workerTarget
+"#,
+	)
+	.await
+	.expect("dynamic backend with a target expression should normalize");
+
+	let expr = normalized
+		.backends
+		.iter()
+		.find_map(|backend| match &backend.backend {
+			Backend::Dynamic(_, expr) => Some(expr.clone()),
+			_ => None,
+		})
+		.expect("normalized dynamic backend")
+		.expect("target expression should be set");
+	assert_eq!(expr.original_expression, "extproc.workerTarget");
+}
+
+#[tokio::test]
+async fn test_named_dynamic_backend_target_expression_normalizes() {
+	let normalized = normalize_test_yaml(
+		r#"
+backends:
+- name: worker
+  dynamic:
+    target: extproc.workerTarget
+"#,
+	)
+	.await
+	.expect("named dynamic backend with a target expression should normalize");
+
+	let expr = normalized
+		.backends
+		.iter()
+		.find_map(|backend| match &backend.backend {
+			Backend::Dynamic(_, expr) => expr.as_ref(),
+			_ => None,
+		})
+		.expect("named dynamic backend target expression should be set");
+	assert_eq!(expr.original_expression, "extproc.workerTarget");
 }
 
 #[test]
@@ -306,6 +361,34 @@ binds:
 		err.to_string().contains("at most one wildcard bind"),
 		"{err:?}"
 	);
+}
+
+#[tokio::test]
+async fn test_auto_bind_allows_tls_routes_and_one_explicit_tcp_listener() {
+	let normalized = normalize_test_yaml(
+		r#"
+binds:
+- port: 1080
+  protocol: AUTO
+  listeners:
+  - protocol: HTTP
+    routes:
+    - backends:
+      - dynamic: {}
+  - protocol: TLS
+    hostname: "*"
+    tcpRoutes:
+    - backends:
+      - host: "127.0.0.1:1"
+  - protocol: TCP
+    tcpRoutes:
+    - backends:
+      - host: "127.0.0.1:2"
+"#,
+	)
+	.await
+	.expect("TLS passthrough and explicit TCP listener should normalize");
+	assert_eq!(normalized.binds[0].protocol, BindProtocol::auto);
 }
 
 #[tokio::test]
@@ -412,6 +495,154 @@ async fn test_basic_config() {
 }
 
 #[tokio::test]
+async fn test_ui_oidc_config() {
+	test_config_parsing("ui_oidc").await;
+}
+
+#[tokio::test]
+async fn test_spiffe_tls_config_normalizes() {
+	// A SPIFFE-sourced HTTPS listener needs no cert/key files and should normalize without
+	// contacting the Workload API (the connection is established lazily at runtime). SPIFFE must be enabled
+	// (spiffe.endpoint) for a listener to reference it.
+	normalize_test_config(
+		r#"
+config:
+  spiffe:
+    endpoint: unix:///run/spire/agent.sock
+binds:
+- port: 3000
+  listeners:
+  - protocol: HTTPS
+    tls:
+      spiffe: {}
+    routes:
+    - backends:
+      - host: example.com:80
+"#,
+	)
+	.await
+	.expect("spiffe TLS listener should normalize");
+}
+
+// `spiffe` sources its own identity and negotiation profile, so combining it with cert/key/root,
+// tls.mode, insecure, or the cipher/kx profile knobs must be rejected rather than silently ignored.
+#[rstest::rstest]
+#[case::listener_cert_key(
+	r#"
+binds:
+- port: 3000
+  listeners:
+  - protocol: HTTPS
+    tls:
+      cert: examples/tls/certs/cert.pem
+      key: examples/tls/certs/key.pem
+      spiffe: {}
+    routes:
+    - backends:
+      - host: example.com:80
+"#,
+	"mutually exclusive"
+)]
+#[case::listener_mode(
+	r#"
+binds:
+- port: 3000
+  listeners:
+  - protocol: HTTPS
+    tls:
+      mode: dynamicCa
+      spiffe: {}
+    routes:
+    - backends:
+      - host: example.com:80
+"#,
+	"cannot be combined with tls.mode"
+)]
+#[case::listener_tls_profile(
+	r#"
+binds:
+- port: 3000
+  listeners:
+  - protocol: HTTPS
+    tls:
+      spiffe: {}
+      keyExchangeGroups:
+      - X25519
+    routes:
+    - backends:
+      - host: example.com:80
+"#,
+	"cipherSuites/minTLSVersion/maxTLSVersion/keyExchangeGroups"
+)]
+#[case::backend_insecure(
+	r#"
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - policies:
+        backendTLS:
+          spiffe: {}
+          insecure: true
+      backends:
+      - host: example.com:443
+"#,
+	"mutually exclusive"
+)]
+#[case::backend_key_exchange_groups(
+	r#"
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - policies:
+        backendTLS:
+          spiffe: {}
+          keyExchangeGroups:
+          - X25519
+      backends:
+      - host: example.com:443
+"#,
+	"keyExchangeGroups"
+)]
+#[tokio::test]
+async fn spiffe_rejected_incompatible_option(#[case] yaml: &str, #[case] expected_error: &str) {
+	let err = normalize_test_config(yaml)
+		.await
+		.expect_err("incompatible SPIFFE option combination must be rejected");
+	assert!(
+		err.to_string().contains(expected_error),
+		"unexpected error: {err}"
+	);
+}
+
+#[tokio::test]
+async fn test_spiffe_backend_tls_config_normalizes() {
+	// A SPIFFE-sourced upstream (backend) mTLS policy needs no cert/key files; the ClientConfig is
+	// built lazily from the SPIFFE Workload API at connection time. SPIFFE must be enabled (spiffe.endpoint).
+	normalize_test_config(
+		r#"
+config:
+  spiffe:
+    endpoint: unix:///run/spire/agent.sock
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - policies:
+        backendTLS:
+          spiffe: {}
+          subjectAltNames:
+          - spiffe://example.org/ns/test/sa/upstream
+      backends:
+      - host: example.com:443
+"#,
+	)
+	.await
+	.expect("spiffe backend TLS should normalize");
+}
+
+#[tokio::test]
 async fn test_mcp_config() {
 	test_config_parsing("mcp").await;
 }
@@ -439,6 +670,11 @@ async fn test_llm_simple_config() {
 #[tokio::test]
 async fn test_llm_provider_reference_config() {
 	test_config_parsing("llm_provider_reference").await;
+}
+
+#[tokio::test]
+async fn test_keyed_rate_limit_config() {
+	test_config_parsing("keyed_rate_limit").await;
 }
 
 #[tokio::test]
@@ -768,19 +1004,19 @@ llm:
 		"LLM request route should route through the LLMRouter backend"
 	);
 	assert!(
-		llm_route
-			.backends
-			.iter()
-			.any(|backend| matches!(&backend.target, RouteBackendTarget::Backend(name) if name.as_str() == "/llm:router")),
-		"LLM request route should target the LLMRouter backend"
-	);
+        llm_route
+            .backends
+            .iter()
+            .any(|backend| matches!(&backend.target, RouteBackendTarget::Backend(name) if name.as_str() == "/llm:router")),
+        "LLM request route should target the LLMRouter backend"
+    );
 	assert!(
-		normalized
-			.backends
-			.iter()
-			.any(|backend| matches!(&backend.backend, Backend::LLMRouter(name, _) if name.name.as_str() == "llm:router")),
-		"normalized config should contain the LLMRouter backend"
-	);
+        normalized
+            .backends
+            .iter()
+            .any(|backend| matches!(&backend.backend, Backend::LLMRouter(name, _) if name.name.as_str() == "llm:router")),
+        "normalized config should contain the LLMRouter backend"
+    );
 	assert!(
 		!routes
 			.iter()
@@ -814,7 +1050,11 @@ llm:
 	let AIProvider::Custom(custom_provider) = &provider.provider else {
 		panic!("expected custom provider");
 	};
-	assert_eq!(custom_provider.model.as_deref(), Some("upstream-custom"));
+	assert_eq!(
+		custom_provider.model_override.as_deref(),
+		Some("upstream-custom")
+	);
+	assert_eq!(provider.path_prefix.as_deref(), Some("/"));
 	assert!(custom_provider.formats.iter().any(|format| format.format
 		== crate::llm::custom::ProviderFormat::Messages
 		&& format.path.as_deref() == Some("/api/messages")));
@@ -825,6 +1065,54 @@ llm:
 			.expect("expected host override"),
 		"custom.example.com",
 		8080,
+	);
+}
+
+#[tokio::test]
+async fn test_llm_openai_inline_moderation_config() {
+	let normalized = normalize_test_yaml(
+		r#"
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - backends:
+      - ai:
+          name: openai
+          provider:
+            openAI:
+              model: gpt-5
+              moderation:
+                policy:
+                  input:
+                    mode: block
+                  output:
+                    mode: score
+"#,
+	)
+	.await
+	.expect("OpenAI inline moderation config should normalize");
+
+	let provider = selected_ai_provider(&normalized);
+	let AIProvider::OpenAI(openai_provider) = &provider.provider else {
+		panic!("expected OpenAI provider");
+	};
+	let moderation = openai_provider
+		.moderation
+		.as_ref()
+		.expect("expected inline moderation config");
+	assert_eq!(moderation.model.as_str(), "omni-moderation-latest");
+	let policy = moderation
+		.policy
+		.as_ref()
+		.expect("expected moderation policy");
+	assert_eq!(
+		policy.input.as_ref().map(|config| config.mode),
+		Some(crate::llm::openai::ModerationMode::Block)
+	);
+	assert_eq!(
+		policy.output.as_ref().map(|config| config.mode),
+		Some(crate::llm::openai::ModerationMode::Score)
 	);
 }
 
@@ -921,72 +1209,16 @@ async fn test_mcp_simple_config() {
 }
 
 #[tokio::test]
-async fn test_llm_mcp_same_port_share_listener_routes() {
-	let normalized = normalize_test_yaml(
-		r#"
-llm:
-  port: 3000
-  models:
-  - name: gpt-4
-    provider: openAI
-mcp:
-  targets:
-  - name: time
-    stdio:
-      cmd: uvx
-"#,
-	)
-	.await
-	.expect("same-port LLM and MCP should normalize");
-
-	assert_eq!(normalized.binds.len(), 1);
-	assert_eq!(normalized.binds[0].address.port(), 3000);
-	assert_eq!(
-		normalized.binds[0]
-			.listeners
-			.iter()
-			.map(|listener| listener.key.as_str())
-			.collect::<Vec<_>>(),
-		vec!["llm"],
-	);
-	assert_eq!(normalized.listener_routes.len(), 1);
-	assert_eq!(normalized.listener_routes[0].0.as_str(), "llm");
-	let routes = &normalized.listener_routes[0].1;
-	assert!(
-		routes
-			.iter()
-			.any(|route| route.key.as_str() == "llm:request")
-	);
-	let mcp_route = routes
-		.iter()
-		.find(|route| route.key.as_str() == "mcp:default")
-		.expect("expected MCP route on shared listener");
-	assert_eq!(
-		mcp_route
-			.matches
-			.iter()
-			.map(|route_match| match &route_match.path {
-				PathMatch::PathPrefix(path) => path.as_str(),
-				other => panic!("expected path prefix match, got {other:?}"),
-			})
-			.collect::<Vec<_>>(),
-		vec!["/mcp", "/sse", "/.well-known"],
-	);
-}
-
-#[tokio::test]
-async fn test_llm_mcp_same_port_rejects_llm_tls() {
+async fn test_llm_mcp_same_port_is_rejected() {
 	let err = normalize_test_yaml(
 		r#"
 llm:
   port: 3000
-  tls:
-    cert: inline
-    key: inline
   models:
   - name: gpt-4
     provider: openAI
 mcp:
+  port: 3000
   targets:
   - name: time
     stdio:
@@ -994,13 +1226,58 @@ mcp:
 "#,
 	)
 	.await
-	.expect_err("same-port LLM and MCP should reject llm.tls");
+	.expect_err("same-port LLM and MCP should be rejected");
 	assert!(
 		err
 			.to_string()
-			.contains("top-level llm and mcp cannot share a port when llm.tls is configured"),
+			.contains("top-level llm and mcp cannot use the same port 3000"),
 		"{err:?}"
 	);
+}
+
+#[tokio::test]
+async fn test_gateway_bind_address_is_per_gateway() {
+	let normalized = normalize_test_yaml(
+		r#"
+gateways:
+  private:
+    port: 3000
+    bindAddress: 127.0.0.1
+  shared:
+    port: 4000
+    bindAddress: 0.0.0.0
+    listeners:
+    - name: first
+      hostname: first.example.com
+    - name: second
+      hostname: second.example.com
+"#,
+	)
+	.await
+	.expect("gateways with different bind addresses should normalize");
+	assert_eq!(normalized.binds.len(), 2);
+	let private = normalized
+		.binds
+		.iter()
+		.find(|b| b.address.port() == 3000)
+		.unwrap();
+	let shared = normalized
+		.binds
+		.iter()
+		.find(|b| b.address.port() == 4000)
+		.unwrap();
+	assert_eq!(private.address, "127.0.0.1:3000".parse().unwrap());
+	assert_eq!(shared.address, "0.0.0.0:4000".parse().unwrap());
+	assert_eq!(shared.listeners.iter().count(), 2);
+}
+
+#[tokio::test]
+async fn test_gateway_bind_address_rejects_invalid_ip() {
+	let err =
+		normalize_test_yaml("gateways:\n  private:\n    port: 3000\n    bindAddress: localhost\n")
+			.await
+			.expect_err("bindAddress must be an IP address");
+	assert!(err.to_string().contains("IP address"), "{err:?}");
 }
 
 #[tokio::test]
@@ -1083,6 +1360,9 @@ ui:
 	));
 	assert!(ui_route.matches.iter().any(
 		|route_match| matches!(&route_match.path, PathMatch::PathPrefix(path) if path.as_str() == "/ui")
+	));
+	assert!(ui_route.matches.iter().any(
+		|route_match| matches!(&route_match.path, PathMatch::PathPrefix(path) if path.as_str() == "/api/budgets")
 	));
 	assert!(ui_route.matches.iter().any(
 		|route_match| matches!(&route_match.path, PathMatch::Exact(path) if path.as_str() == "/oauth/callback")
@@ -1415,6 +1695,34 @@ binds:
 	normalize_test_config(input)
 		.await
 		.expect("service backends should allow inference routing");
+}
+
+#[tokio::test]
+async fn test_session_affinity_service_backend_config() {
+	let input = r#"
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - backends:
+      - service:
+          name: default/my-model
+          port: 8000
+        policies:
+          sessionAffinity:
+            source: request.headers["x-session-id"]
+"#;
+
+	let normalized = normalize_test_config(input)
+		.await
+		.expect("service backends should allow session affinity");
+	let policies = &normalized.listener_routes[0].1[0].backends[0].inline_policies;
+	assert!(
+		policies
+			.iter()
+			.any(|policy| matches!(policy, BackendTrafficPolicy::SessionAffinity(_))),
+		"expected a normalized session affinity policy"
+	);
 }
 
 #[tokio::test]
@@ -2308,9 +2616,7 @@ binds:
 fn test_de_backend_auth_accepts_each_shape() {
 	use serde::de::IntoDeserializer;
 
-	use crate::http::auth::BackendAuthKind;
-
-	let parse = |v: serde_json::Value| -> crate::http::auth::BackendAuth {
+	let parse = |v: serde_json::Value| -> super::LocalBackendAuth {
 		super::de_backend_auth::<serde_json::Value>(v.into_deserializer())
 			.unwrap()
 			.unwrap()
@@ -2319,19 +2625,22 @@ fn test_de_backend_auth_accepts_each_shape() {
 	let copilot_scalar = parse(serde_json::json!("copilot"));
 	assert!(matches!(
 		copilot_scalar.kind,
-		Some(BackendAuthKind::Copilot)
+		Some(super::LocalBackendAuthKind::Copilot)
 	));
 	assert!(copilot_scalar.credentials.is_empty());
 
 	let plain_key = parse(serde_json::json!({"key": "plain-secret"}));
 	assert!(matches!(
 		plain_key.kind,
-		Some(BackendAuthKind::Key { location: None, .. })
+		Some(super::LocalBackendAuthKind::Key { location: None, .. })
 	));
 	assert!(plain_key.credentials.is_empty());
 
 	let full_key = parse(serde_json::json!({"key": {"value": "explicit-secret"}}));
-	assert!(matches!(full_key.kind, Some(BackendAuthKind::Key { .. })));
+	assert!(matches!(
+		full_key.kind,
+		Some(super::LocalBackendAuthKind::Key { .. })
+	));
 	assert!(full_key.credentials.is_empty());
 
 	let full_with_credentials = parse(serde_json::json!({
@@ -2340,7 +2649,7 @@ fn test_de_backend_auth_accepts_each_shape() {
 	}));
 	assert!(matches!(
 		full_with_credentials.kind,
-		Some(BackendAuthKind::Key { .. })
+		Some(super::LocalBackendAuthKind::Key { .. })
 	));
 	assert_eq!(full_with_credentials.credentials.len(), 1);
 
@@ -2372,4 +2681,64 @@ fn local_capacity_round_trips() {
 	assert_eq!(p.inflight_cap, Some(10));
 	assert_eq!(p.tpm_per_minute, Some(50000));
 	assert_eq!(p.cooldown, Some(Duration::from_secs(3)));
+}
+
+/// A file-backed `backendAuth` key has to participate in config reloads, the
+/// same way `backendTLS` files and `jwtSign.signingKey` already do. Before this
+/// was resolved through the resource manager, the path was consumed during
+/// deserialization: the value was correct at startup and then frozen, so a
+/// rotated Kubernetes Secret was never picked up and the gateway kept
+/// presenting a retired credential until something else forced a reload.
+#[tokio::test]
+async fn backend_auth_key_file_is_a_tracked_resource() {
+	let dir = tempfile::tempdir().unwrap();
+	let token = dir.path().join("token");
+	// Trailing newline on purpose: `echo` and Kubernetes Secrets both add one,
+	// and the value must still be trimmed.
+	fs::write(&token, "first-token\n").unwrap();
+
+	let manager = crate::resource_manager::ResourceManager::new(test_client()).unwrap();
+	let resources = crate::resource_manager::ResourceFetcher::managed(manager.clone());
+	let mut changes = manager.subscribe_changes();
+
+	let yaml = format!(
+		r#"
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - backends:
+      - host: 127.0.0.1:8080
+        policies:
+          backendAuth:
+            key:
+              file: {}
+"#,
+		token.display()
+	);
+	NormalizedLocalConfig::from(
+		&test_config(),
+		&resources,
+		ListenerTarget {
+			gateway_name: "name".into(),
+			gateway_namespace: "ns".into(),
+			listener_name: None,
+			port: None,
+		},
+		&yaml,
+	)
+	.await
+	.expect("config with a file-backed backendAuth key should load");
+
+	// Mark whatever the initial fetch produced as seen, so the assertion below
+	// can only pass on a notification caused by the rewrite.
+	let _ = changes.borrow_and_update();
+
+	// Rewriting the file must reach the manager, which is what triggers a
+	// reload and re-reads the credential.
+	fs::write(&token, "second-token\n").unwrap();
+	tokio::time::timeout(std::time::Duration::from_secs(10), changes.changed())
+		.await
+		.expect("a change to the key file should notify the resource manager")
+		.expect("resource change channel should stay open");
 }

@@ -33,6 +33,7 @@ func allEnvVarsSet() map[string]string {
 		"AGW_NO_LISTENERS_DUMMY_PORT":                  "8443",
 		"AGW_ENABLE_INFER_EXT":                         "true",
 		"AGW_ENABLE_AGENTGATEWAY_MODELS":               "true",
+		"AGW_ENABLE_X_BACKEND":                         "true",
 		"AGW_LOG_LEVEL":                                "debug",
 		"AGW_DISCOVERY_NAMESPACE_SELECTORS":            `[{"matchLabels":{"app":"test"}}]`,
 		"AGW_ENABLE_BUILTIN_DEFAULT_METRICS":           "true",
@@ -46,6 +47,8 @@ func allEnvVarsSet() map[string]string {
 		"AGW_PROXY_IMAGE_REGISTRY":                     "my-registry",
 		"AGW_PROXY_IMAGE_REPOSITORY":                   "my-repo",
 		"AGW_PROXY_IMAGE_TAG":                          "my-tag",
+		"AGW_CONTROLLER_NAME":                          "example.com/my-controller",
+		"AGW_AGENTGATEWAY_CLASS_NAME":                  "my-gateway-class",
 	}
 }
 
@@ -80,6 +83,7 @@ func TestSettings(t *testing.T) {
 				NoListenersDummyPort:                 443,
 				EnableInferExt:                       false,
 				EnableAgentgatewayModels:             false,
+				EnableXBackend:                       false,
 				LogLevel:                             "info",
 				DiscoveryNamespaceSelectors:          "[]",
 				EnableBuiltinDefaultMetrics:          false,
@@ -92,6 +96,8 @@ func TestSettings(t *testing.T) {
 				GatewayClassParametersRefs:           GatewayClassParametersRefs{},
 				ProxyImageRegistry:                   "cr.agentgateway.dev",
 				ProxyImageRepository:                 "agentgateway",
+				ControllerName:                       "agentgateway.dev/agentgateway",
+				AgentgatewayClassName:                "agentgateway",
 			},
 		},
 		{
@@ -115,6 +121,7 @@ func TestSettings(t *testing.T) {
 				NoListenersDummyPort:                 8443,
 				EnableInferExt:                       true,
 				EnableAgentgatewayModels:             true,
+				EnableXBackend:                       true,
 				LogLevel:                             "debug",
 				DiscoveryNamespaceSelectors:          `[{"matchLabels":{"app":"test"}}]`,
 				EnableBuiltinDefaultMetrics:          true,
@@ -127,6 +134,8 @@ func TestSettings(t *testing.T) {
 				ProxyImageRegistry:                   "my-registry",
 				ProxyImageRepository:                 "my-repo",
 				ProxyImageTag:                        new("my-tag"),
+				ControllerName:                       "example.com/my-controller",
+				AgentgatewayClassName:                "my-gateway-class",
 				GatewayClassParametersRefs: GatewayClassParametersRefs{
 					"kgateway": {
 						Name:      "custom-gwp",
@@ -217,6 +226,8 @@ func TestSettings(t *testing.T) {
 				GatewayClassParametersRefs:           GatewayClassParametersRefs{},
 				ProxyImageRegistry:                   "cr.agentgateway.dev",
 				ProxyImageRepository:                 "agentgateway",
+				ControllerName:                       "agentgateway.dev/agentgateway",
+				AgentgatewayClassName:                "agentgateway",
 			},
 		},
 	}

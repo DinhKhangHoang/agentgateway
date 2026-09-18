@@ -7,12 +7,12 @@ use rmcp::model::{
 	RequestId, ServerJsonRpcMessage,
 };
 use rmcp::transport::common::http_header::{
-	EVENT_STREAM_MIME_TYPE, HEADER_MCP_METHOD, HEADER_MCP_NAME, HEADER_MCP_PARAM_PREFIX,
-	HEADER_MCP_PROTOCOL_VERSION, HEADER_SESSION_ID, JSON_MIME_TYPE,
+	BASE64_HEADER_PREFIX, BASE64_HEADER_SUFFIX, EVENT_STREAM_MIME_TYPE, HEADER_MCP_METHOD,
+	HEADER_MCP_NAME, HEADER_MCP_PARAM_PREFIX, HEADER_MCP_PROTOCOL_VERSION, HEADER_SESSION_ID,
+	JSON_MIME_TYPE,
 };
-use rmcp::transport::common::mcp_headers::{decode_header_value, encode_header_value};
 
-use crate::http::{DropBody, Request, Response};
+use crate::http::{Request, Response};
 use crate::mcp::handler::RelayInputs;
 use crate::mcp::session::SessionManager;
 use crate::mcp::{REMOVED_METHODS_2026_07_28, is_modern_version};
@@ -95,7 +95,7 @@ impl StreamableHttpService {
 			},
 			// if we're not in stateful mode, we don't support GET or DELETE because there is no session
 			(http::Method::GET, true) => self.handle_get(request, inputs).await,
-			(http::Method::DELETE, true) => self.handle_delete(request).await,
+			(http::Method::DELETE, true) => self.handle_delete(request, inputs).await,
 			_ => Err(ProxyError::MCP(mcp::Error::MethodNotAllowed)),
 		}
 	}
@@ -127,12 +127,16 @@ impl StreamableHttpService {
 		}
 
 		let limit = http::buffer_limit(&request);
-		let (mut part, body) = request.into_parts();
+		let (mut part, mut body) = request.into_parts();
+		let cached = body.remove_extension::<mcp::CachedRequest>();
 		let bytes = match http::read_body_with_limit(body, limit).await {
 			Ok(b) => b,
 			Err(e) => return mcp::Error::Deserialize(e).into(),
 		};
-		let message = match serde_json::from_slice::<ClientJsonRpcMessage>(&bytes) {
+		let message = match cached
+			.map(|cached| Ok(cached.0))
+			.unwrap_or_else(|| serde_json::from_slice(&bytes))
+		{
 			Ok(m) => m,
 			Err(e) => {
 				return match unknown_method_error(&part.headers, &bytes) {
@@ -141,16 +145,17 @@ impl StreamableHttpService {
 				};
 			},
 		};
-		// Raw body is only needed for the `unknown_method_error` recovery above; release it now
-		// so the buffer is not pinned across the upstream round-trip below.
-		drop(bytes);
 		let request_id = request_id(&message);
 		let protocol = validate_request_protocol(&part.headers, &message, request_id.clone())?;
 		validate_standard_headers(&part.headers, &message, &protocol)?;
 		part.extensions.insert(protocol.clone());
+		// Keep the original HTTP bytes for detached authorization and guardrail CEL.
+		// They must not be reconstructed from the subsequently rewritten MCP message.
+		let mut ctx = crate::mcp::upstream::IncomingRequestContext::new(&part);
+		*ctx.request.body_mut() = Some(bytes);
 
 		if !self.config.stateful_mode {
-			return self.serve_stateless(inputs, part, message, protocol).await;
+			return self.serve_stateless(inputs, ctx, message, protocol).await;
 		}
 
 		let session_id = part
@@ -169,11 +174,11 @@ impl StreamableHttpService {
 				return mcp::Error::UnknownSession.into();
 			};
 
-			return Box::pin(session.send(part, message)).await;
+			return Box::pin(session.send(ctx, message)).await;
 		}
 
 		if !protocol.uses_sessions() {
-			return self.serve_stateless(inputs, part, message, protocol).await;
+			return self.serve_stateless(inputs, ctx, message, protocol).await;
 		}
 
 		// No session header... we need to create one, if it is an initialize.
@@ -188,22 +193,25 @@ impl StreamableHttpService {
 			return mcp::Error::MissingSessionHeader.into();
 		}
 		let idle_ttl = inputs.backend.session_idle_ttl;
+		let backend_id = inputs.backend_id.clone();
 		let relay = inputs.build_new_connections()?;
 		let mut session = self.session_manager.create_session(relay);
-		let mut resp = Box::pin(session.send(part, message)).await?;
+		let mut resp = Box::pin(session.send(ctx, message)).await?;
 
 		let Ok(sid) = session.id.parse() else {
 			return mcp::Error::InvalidSessionIdHeader.into();
 		};
 		resp.headers_mut().insert(HEADER_SESSION_ID, sid);
-		self.session_manager.insert_session(session, idle_ttl);
+		self
+			.session_manager
+			.insert_session(backend_id, session, idle_ttl);
 		Ok(resp)
 	}
 
 	async fn serve_stateless(
 		&self,
 		inputs: RelayInputs,
-		part: ::http::request::Parts,
+		part: crate::mcp::upstream::IncomingRequestContext,
 		message: ClientJsonRpcMessage,
 		protocol: RequestProtocol,
 	) -> Result<Response, ProxyError> {
@@ -219,7 +227,7 @@ impl StreamableHttpService {
 			return Box::pin(session.stateless_send_and_initialize(part, message, initialize_upstream))
 				.await;
 		}
-		let cleanup_part = part.clone();
+		let cleanup_part = part.request.clone().into_parts().0;
 		let response =
 			Box::pin(session.stateless_send_and_initialize(part, message, initialize_upstream)).await;
 
@@ -231,7 +239,7 @@ impl StreamableHttpService {
 			// Clean up upstream resources (e.g., stdio processes)
 			let _ = session.delete_session(cleanup_part).await;
 		});
-		response.map(|r| r.map(|b| DropBody::new(b, tx)))
+		response.map(|r| r.map(|body| body.with_drop_guard(tx)))
 	}
 
 	pub async fn handle_get(
@@ -267,7 +275,11 @@ impl StreamableHttpService {
 		session.get_stream(parts).await
 	}
 
-	pub async fn handle_delete(&self, request: Request) -> Result<Response, ProxyError> {
+	pub async fn handle_delete(
+		&self,
+		request: Request,
+		inputs: RelayInputs,
+	) -> Result<Response, ProxyError> {
 		// Session deletion is legacy-only (SEP-2567 removed sessions for modern).
 		reject_modern_session_request(request.headers())?;
 		// check session id
@@ -283,7 +295,7 @@ impl StreamableHttpService {
 		Ok(
 			self
 				.session_manager
-				.delete_session(&session_id, parts)
+				.delete_session(&inputs.backend_id, &session_id, parts)
 				.await
 				.unwrap_or_else(accepted_response),
 		)
@@ -382,14 +394,14 @@ fn validate_standard_header(
 	Ok(())
 }
 
-fn request_id(message: &ClientJsonRpcMessage) -> Option<RequestId> {
+pub(crate) fn request_id(message: &ClientJsonRpcMessage) -> Option<RequestId> {
 	match message {
 		ClientJsonRpcMessage::Request(req) => Some(req.id.clone()),
 		_ => None,
 	}
 }
 
-fn message_method(message: &ClientJsonRpcMessage) -> Option<&str> {
+pub(crate) fn message_method(message: &ClientJsonRpcMessage) -> Option<&str> {
 	match message {
 		ClientJsonRpcMessage::Request(req) => Some(req.request.method()),
 		ClientJsonRpcMessage::Notification(notification) => Some(match &notification.notification {
@@ -397,8 +409,8 @@ fn message_method(message: &ClientJsonRpcMessage) -> Option<&str> {
 			ClientNotification::ProgressNotification(n) => n.method.as_str(),
 			ClientNotification::InitializedNotification(n) => n.method.as_str(),
 			ClientNotification::RootsListChangedNotification(n) => n.method.as_str(),
-			ClientNotification::TaskStatusNotification(n) => n.method.as_str(),
 			ClientNotification::CustomNotification(n) => n.method.as_str(),
+			_ => return None,
 		}),
 		_ => None,
 	}
@@ -414,6 +426,9 @@ fn message_name(message: &ClientJsonRpcMessage) -> Option<&str> {
 		ClientRequest::ReadResourceRequest(r) => Some(&r.params.uri),
 		ClientRequest::SubscribeRequest(r) => Some(&r.params.uri),
 		ClientRequest::UnsubscribeRequest(r) => Some(&r.params.uri),
+		ClientRequest::GetTaskRequest(r) => Some(&r.params.task_id),
+		ClientRequest::UpdateTaskRequest(r) => Some(&r.params.task_id),
+		ClientRequest::CancelTaskRequest(r) => Some(&r.params.task_id),
 		_ => None,
 	}
 }
@@ -494,13 +509,14 @@ fn validate_request_protocol(
 		return Err(mcp::Error::VersionMismatch(request_id).into());
 	}
 
-	// Completeness checks header or body. A body-only modern version is still a
-	// modern request, but it is missing the required protocol header.
+	// A body-only modern version is still a modern request, but it is missing the required
+	// protocol header. Notifications do not carry request metadata, so the header is their only
+	// version signal.
 	let declares_modern_version = header_version
 		.as_ref()
 		.or(body_version.as_ref())
 		.is_some_and(is_modern_version);
-	if declares_modern_version && (header_version.is_none() || body_version.is_none()) {
+	if declares_modern_version && header_version.is_none() {
 		return Err(mcp::Error::InvalidProtocolVersion.into());
 	}
 
@@ -539,10 +555,41 @@ fn message_protocol_version(message: &ClientJsonRpcMessage) -> Option<ProtocolVe
 			ClientRequest::InitializeRequest(init) => Some(init.params.protocol_version.clone()),
 			_ => req.request.get_meta().protocol_version(),
 		},
-		ClientJsonRpcMessage::Notification(notification) => {
-			notification.notification.get_meta().protocol_version()
-		},
+		ClientJsonRpcMessage::Notification(_) => None,
 		_ => None,
+	}
+}
+
+fn encode_header_value(value: &str) -> String {
+	use base64::Engine;
+	use base64::prelude::BASE64_STANDARD;
+	let bytes = value.as_bytes();
+	let requires_base64 = !value.is_empty()
+		&& (matches!(bytes.first(), Some(b' ' | b'\t'))
+			|| matches!(bytes.last(), Some(b' ' | b'\t'))
+			|| value
+				.chars()
+				.any(|c| (c as u32) < 0x20 || (c as u32) > 0x7e)
+			|| (value.starts_with(BASE64_HEADER_PREFIX) && value.ends_with(BASE64_HEADER_SUFFIX)));
+	if requires_base64 {
+		format!(
+			"{BASE64_HEADER_PREFIX}{}{BASE64_HEADER_SUFFIX}",
+			BASE64_STANDARD.encode(value)
+		)
+	} else {
+		value.to_owned()
+	}
+}
+
+fn decode_header_value(value: &str) -> Option<String> {
+	use base64::Engine;
+	use base64::prelude::BASE64_STANDARD;
+	match value
+		.strip_prefix(BASE64_HEADER_PREFIX)
+		.and_then(|inner| inner.strip_suffix(BASE64_HEADER_SUFFIX))
+	{
+		Some(inner) => String::from_utf8(BASE64_STANDARD.decode(inner).ok()?).ok(),
+		None => Some(value.to_owned()),
 	}
 }
 

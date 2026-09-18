@@ -147,6 +147,7 @@ type TLSInfo struct {
 	IstioWorkloadCert   bool
 	IstioMutual         bool
 	DynamicCA           bool
+	Spiffe              bool
 }
 
 // PortBindings is a wrapper type that contains the listener on the gateway, as well as the status for the listener.
@@ -160,7 +161,7 @@ func (g PortBindings) ResourceName() string {
 }
 
 func (g PortBindings) Equals(other PortBindings) bool {
-	return g.GatewayListener.Equals(other.GatewayListener) &&
+	return g.GatewayListener.Equals(&other.GatewayListener) &&
 		g.Port == other.Port
 }
 
@@ -182,7 +183,7 @@ func (g GatewayListener) ResourceName() string {
 	return g.Name
 }
 
-func (g GatewayListener) Equals(other GatewayListener) bool {
+func (g *GatewayListener) Equals(other *GatewayListener) bool {
 	if (g.TLSInfo != nil) != (other.TLSInfo != nil) {
 		return false
 	}
@@ -193,7 +194,8 @@ func (g GatewayListener) Equals(other GatewayListener) bool {
 			g.TLSInfo.MtlsFallbackEnabled != other.TLSInfo.MtlsFallbackEnabled ||
 			g.TLSInfo.IstioWorkloadCert != other.TLSInfo.IstioWorkloadCert ||
 			g.TLSInfo.IstioMutual != other.TLSInfo.IstioMutual ||
-			g.TLSInfo.DynamicCA != other.TLSInfo.DynamicCA {
+			g.TLSInfo.DynamicCA != other.TLSInfo.DynamicCA ||
+			g.TLSInfo.Spiffe != other.TLSInfo.Spiffe {
 			return false
 		}
 	}
@@ -274,7 +276,7 @@ func GatewayTransformationFunc(cfg GatewayCollectionConfig) func(ctx krt.Handler
 			obj.GetAnnotations()[annotations.InternalPorts],
 			func(p int32) bool {
 				for _, l := range kgw.Listeners {
-					if int32(l.Port) == p {
+					if l.Port == p {
 						return true
 					}
 				}
@@ -356,7 +358,7 @@ func GatewayTransformationFunc(cfg GatewayCollectionConfig) func(ctx krt.Handler
 		// Ref: https://gateway-api.sigs.k8s.io/geps/gep-1713/#listener-precedence
 		// - ListenerSet ordered by creation time (oldest first)
 		// - ListenerSet ordered alphabetically by “{namespace}/{name}”
-		slices.SortFunc(listenersFromSets, func(a, b ListenerSet) int {
+		slices.SortStableFunc(listenersFromSets, func(a, b ListenerSet) int {
 			// primary sort: creation timestamp (oldest first)
 			if r := a.ParentInfo.CreationTimestamp.Compare(b.ParentInfo.CreationTimestamp.Time); r != 0 {
 				return r
@@ -365,7 +367,10 @@ func GatewayTransformationFunc(cfg GatewayCollectionConfig) func(ctx krt.Handler
 			if r := cmp.Compare(a.Parent.Namespace, b.Parent.Namespace); r != 0 {
 				return r
 			}
-			return cmp.Compare(a.Parent.Name, b.Parent.Name)
+			if r := cmp.Compare(a.Parent.Name, b.Parent.Name); r != 0 {
+				return r
+			}
+			return cmp.Compare(a.ListenerIndex, b.ListenerIndex)
 		})
 
 		for _, ls := range listenersFromSets {
@@ -385,14 +390,6 @@ func GatewayTransformationFunc(cfg GatewayCollectionConfig) func(ctx krt.Handler
 			})
 		}
 		validateListenerConflicts(result)
-		if ports := internalPortDisagreements(result); len(ports) > 0 {
-			gwReporter.SetCondition(reporter.GatewayCondition{
-				Type:    gwv1.GatewayConditionAccepted,
-				Status:  metav1.ConditionFalse,
-				Reason:  gwv1.GatewayReasonInvalid,
-				Message: fmt.Sprintf("conflicting %s annotation: port(s) %v are marked internal by some listeners but standard by others", annotations.InternalPorts, ports),
-			})
-		}
 		uniqueListenerSets := sets.New[utils.TypedNamespacedName]()
 		for _, ls := range result {
 			if !(ls.Valid && ls.Conflict == "" && ls.ParentObject.Kind == wellknown.ListenerSetGVK.Kind) {
@@ -410,6 +407,7 @@ func GatewayTransformationFunc(cfg GatewayCollectionConfig) func(ctx krt.Handler
 type portProtocol struct {
 	hostnames sets.String
 	protocol  gwv1.ProtocolType
+	internal  bool
 }
 
 type ListenerConflict string
@@ -417,40 +415,18 @@ type ListenerConflict string
 const (
 	ListenerConflictHostname = "hostname"
 	ListenerConflictProtocol = "protocol"
+	ListenerConflictBindMode = "bind-mode"
 )
-
-// internalPortDisagreements returns the sorted set of ports for which non-conflicting
-// listeners disagree on internal vs standard bind mode. A bind is per-port and shared,
-// so such a port cannot be resolved to a single mode and must be reported as invalid.
-func internalPortDisagreements(listeners []*GatewayListener) []int32 {
-	var sawInternal, sawStandard sets.Set[gwv1.PortNumber]
-	sawInternal = sets.New[gwv1.PortNumber]()
-	sawStandard = sets.New[gwv1.PortNumber]()
-	for _, l := range listeners {
-		if l.Conflict != "" {
-			continue
-		}
-		if l.ParentInfo.Internal {
-			sawInternal.Insert(l.ParentInfo.Port)
-		} else {
-			sawStandard.Insert(l.ParentInfo.Port)
-		}
-	}
-	var conflicting []int32
-	for port := range sawInternal {
-		if sawStandard.Contains(port) {
-			conflicting = append(conflicting, int32(port))
-		}
-	}
-	slices.Sort(conflicting)
-	return conflicting
-}
 
 func validateListenerConflicts(listeners []*GatewayListener) {
 	portMap := make(map[gwv1.PortNumber]*portProtocol)
 	for _, listener := range listeners {
 		if p, ok := portMap[listener.ParentInfo.Port]; ok {
-			if p.protocol == listener.ParentInfo.Protocol {
+			if p.internal != listener.ParentInfo.Internal {
+				// Listeners are ordered by Gateway API precedence before validation.
+				// Preserve the winning bind mode and reject only the later listener.
+				listener.Conflict = ListenerConflictBindMode
+			} else if p.protocol == listener.ParentInfo.Protocol {
 				if slices.ContainsFunc(listener.ParentInfo.Hostnames, p.hostnames.Contains) {
 					listener.Conflict = ListenerConflictHostname
 				} else {
@@ -463,6 +439,7 @@ func validateListenerConflicts(listeners []*GatewayListener) {
 			portMap[listener.ParentInfo.Port] = &portProtocol{
 				hostnames: sets.New(listener.ParentInfo.Hostnames...),
 				protocol:  listener.ParentInfo.Protocol,
+				internal:  listener.ParentInfo.Internal,
 			}
 		}
 	}
@@ -471,6 +448,7 @@ func validateListenerConflicts(listeners []*GatewayListener) {
 type ListenerSet struct {
 	Name          string               `json:"name"`
 	Parent        types.NamespacedName `json:"parent"`
+	ListenerIndex int                  `json:"listenerIndex"`
 	ParentInfo    ParentInfo           `json:"parentInfo"`
 	TLSInfo       *TLSInfo             `json:"tlsInfo"`
 	GatewayParent types.NamespacedName `json:"gatewayParent"`
@@ -492,7 +470,8 @@ func (g ListenerSet) Equals(other ListenerSet) bool {
 			g.TLSInfo.MtlsFallbackEnabled != other.TLSInfo.MtlsFallbackEnabled ||
 			g.TLSInfo.IstioWorkloadCert != other.TLSInfo.IstioWorkloadCert ||
 			g.TLSInfo.IstioMutual != other.TLSInfo.IstioMutual ||
-			g.TLSInfo.DynamicCA != other.TLSInfo.DynamicCA {
+			g.TLSInfo.DynamicCA != other.TLSInfo.DynamicCA ||
+			g.TLSInfo.Spiffe != other.TLSInfo.Spiffe {
 			return false
 		}
 	}
@@ -500,6 +479,7 @@ func (g ListenerSet) Equals(other ListenerSet) bool {
 		g.Name == other.Name &&
 		g.GatewayParent == other.GatewayParent &&
 		g.Parent == other.Parent &&
+		g.ListenerIndex == other.ListenerIndex &&
 		g.ParentInfo.Equals(other.ParentInfo)
 }
 
@@ -553,7 +533,7 @@ func ListenerSetBuilder(
 		obj.GetAnnotations()[annotations.InternalPorts],
 		func(p int32) bool {
 			for _, l := range ls.Listeners {
-				if port, err := kubeutils.DetectListenerPortNumber(l.Protocol, l.Port); err == nil && int32(port) == p {
+				if port, err := kubeutils.DetectListenerPortNumber(l.Protocol, l.Port); err == nil && port == p {
 					return true
 				}
 			}
@@ -578,16 +558,17 @@ func ListenerSetBuilder(
 
 		allowed, _ := GenerateSupportedKinds(standardListener, enableAgentgatewayModels)
 		pri := ParentInfo{
-			ParentGateway:    config.NamespacedName(parentGwObj),
-			ListenerKey:      name,
-			AllowedKinds:     allowed,
-			Hostnames:        hostnames,
-			OriginalHostname: string(ptr.OrEmpty(l.Hostname)),
-			SectionName:      l.Name,
-			Port:             l.Port,
-			Protocol:         l.Protocol,
-			TLSPassthrough:   l.TLS != nil && l.TLS.Mode != nil && *l.TLS.Mode == gwv1.TLSModePassthrough,
-			Internal:         internalPorts.Has(l.Port),
+			ParentGateway:     config.NamespacedName(parentGwObj),
+			ListenerKey:       name,
+			AllowedKinds:      allowed,
+			Hostnames:         hostnames,
+			OriginalHostname:  string(ptr.OrEmpty(l.Hostname)),
+			SectionName:       l.Name,
+			Port:              l.Port,
+			Protocol:          l.Protocol,
+			TLSPassthrough:    l.TLS != nil && l.TLS.Mode != nil && *l.TLS.Mode == gwv1.TLSModePassthrough,
+			Internal:          internalPorts.Has(l.Port),
+			CreationTimestamp: obj.CreationTimestamp,
 		}
 
 		res := ListenerSet{
@@ -596,6 +577,7 @@ func ListenerSetBuilder(
 			TLSInfo:       tlsInfo,
 			Parent:        config.NamespacedName(obj),
 			GatewayParent: config.NamespacedName(parentGwObj),
+			ListenerIndex: i,
 			ParentInfo:    pri,
 		}
 		result = append(result, res)

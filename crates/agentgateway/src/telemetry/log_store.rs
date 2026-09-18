@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use std::{env, thread};
 
@@ -20,9 +20,16 @@ static REQUEST_LOG_STORE: OnceLock<RequestLogStore> = OnceLock::new();
 static REQUEST_LOG_STORE_BACKLOG: AtomicUsize = AtomicUsize::new(0);
 
 #[apply(schema!)]
+#[derive(Eq, PartialEq)]
 pub struct Config {
 	/// Connection URL for the request log database. A postgres:// or postgresql:// URL uses Postgres; any other value is treated as a SQLite database.
 	pub url: String,
+	/// Maximum number of connections to open in this database's connection pool. Defaults to 5.
+	/// When the request log and config stores have matching database settings, they share one pool
+	/// with this limit.
+	#[serde(default)]
+	#[cfg_attr(feature = "schema", schemars(range(min = 1)))]
+	pub max_connections: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -31,7 +38,7 @@ pub struct RequestLogStore {
 }
 
 impl RequestLogStore {
-	pub fn emit(&self, record: StoredRequestLog) {
+	pub(super) fn emit(&self, record: PendingRequestLog) {
 		REQUEST_LOG_STORE_BACKLOG.fetch_add(1, Ordering::Relaxed);
 		if let Err(err) = self.tx.send(LogStoreMsg::Record(record)) {
 			REQUEST_LOG_STORE_BACKLOG.fetch_sub(1, Ordering::Relaxed);
@@ -76,7 +83,7 @@ pub async fn setup_with_pool(
 	})
 }
 
-pub fn emit(record: StoredRequestLog) {
+pub(super) fn emit(record: PendingRequestLog) {
 	if let Some(store) = REQUEST_LOG_STORE.get() {
 		store.emit(record);
 	}
@@ -154,7 +161,7 @@ const LOG_STORE_BATCH_SIZE_ENV: &str = "REQUEST_LOG_STORE_BATCH_SIZE";
 
 #[allow(clippy::large_enum_variant)] // The StoredRequestLog, which is used 99.9% of the time, is the large one
 enum LogStoreMsg {
-	Record(StoredRequestLog),
+	Record(PendingRequestLog),
 	Search {
 		request: SearchRequest,
 		tx: QueryResponse<SearchResponse>,
@@ -320,7 +327,14 @@ async fn process_log_store_msg(
 	msg: LogStoreMsg,
 ) -> bool {
 	match msg {
-		LogStoreMsg::Record(record) => {
+		LogStoreMsg::Record(pending) => {
+			let mut record = pending.record;
+			record.payload = super::log::database_llm_payload(
+				pending.llm_mode,
+				pending.input_messages.as_deref().map(Vec::as_slice),
+				pending.llm_response.as_ref(),
+			);
+			record.has_payload = record.payload.is_some();
 			batch.push(record);
 			false
 		},
@@ -368,6 +382,15 @@ async fn flush_log_store_batch(backend: &Backend, batch: &mut Vec<StoredRequestL
 		"flushed request log database batch"
 	);
 	batch.clear();
+}
+
+// Keep captured content in its original form until it reaches the database worker.
+// Normalization and JSON serialization can be expensive for large prompts and completions.
+pub(super) struct PendingRequestLog {
+	pub record: StoredRequestLog,
+	pub llm_mode: Option<crate::types::frontend::DatabaseLlmMode>,
+	pub input_messages: Option<Arc<Vec<agent_llm::types::NormalizedMessage>>>,
+	pub llm_response: Option<crate::cel::LLMContext>,
 }
 
 #[derive(Clone, Debug)]
@@ -564,6 +587,8 @@ pub struct LogEntry {
 	pub span_id: Option<String>,
 	pub http_status: Option<i64>,
 	pub error: Option<String>,
+	pub prompt_preview: Option<String>,
+	pub turn: TurnEntry,
 	pub gen_ai: GenAiEntry,
 	pub usage: UsageEntry,
 	pub cost: Option<f64>,
@@ -572,6 +597,76 @@ pub struct LogEntry {
 	pub attributes: Option<Value>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub payload: Option<PayloadEntry>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnEntry {
+	pub input: Option<TurnKind>,
+	pub output: Option<TurnKind>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TurnKind {
+	User,
+	Assistant,
+	ToolCall,
+	ToolResult,
+}
+
+fn prompt_preview(prompt: Option<&Value>) -> Option<String> {
+	let messages = prompt?.as_array()?;
+	messages.iter().rev().find_map(|message| {
+		if message.get("role").and_then(Value::as_str) != Some("user") {
+			return None;
+		}
+		let text = message
+			.get("parts")?
+			.as_array()?
+			.iter()
+			.filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+			.filter_map(|part| part.get("text").and_then(Value::as_str))
+			.collect::<Vec<_>>()
+			.join("\n");
+		let text = text.trim();
+		if text.is_empty() {
+			None
+		} else if text.chars().nth(180).is_some() {
+			Some(format!("{}...", text.chars().take(177).collect::<String>()))
+		} else {
+			Some(text.to_string())
+		}
+	})
+}
+
+fn turn_kind(messages: Option<&Value>) -> Option<TurnKind> {
+	// Classify the final meaningful normalized part; reasoning and system text are not turns.
+	messages?.as_array()?.iter().rev().find_map(|message| {
+		let role = message.get("role").and_then(Value::as_str)?;
+		message
+			.get("parts")?
+			.as_array()?
+			.iter()
+			.rev()
+			.find_map(|part| match part.get("type").and_then(Value::as_str)? {
+				"toolCall" => Some(TurnKind::ToolCall),
+				"toolResult" => Some(TurnKind::ToolResult),
+				"text"
+					if part
+						.get("text")
+						.and_then(Value::as_str)
+						.is_some_and(|text| !text.trim().is_empty()) =>
+				{
+					match role {
+						"user" => Some(TurnKind::User),
+						"assistant" => Some(TurnKind::Assistant),
+						_ => None,
+					}
+				},
+				_ => None,
+			})
+	})
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -686,7 +781,10 @@ impl Backend {
 	) -> anyhow::Result<Self> {
 		let pool = match pool {
 			Some(pool) => pool,
-			None => crate::database::DatabasePool::connect(&cfg.url).await?,
+			None => {
+				crate::database::DatabasePool::connect_with_max_connections(&cfg.url, cfg.max_connections)
+					.await?
+			},
 		};
 		match pool {
 			crate::database::DatabasePool::Sqlite(pool) => {

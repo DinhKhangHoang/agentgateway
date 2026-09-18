@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_core::version::BuildInfo;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, Uri};
 use axum::response::sse::Event;
 use axum::response::{IntoResponse, Redirect, Response, Sse};
@@ -10,8 +10,6 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
 use include_dir::Dir;
-#[cfg(feature = "ui")]
-use include_dir::include_dir;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -24,7 +22,7 @@ use crate::config_store::{
 	ConfigResource, ConfigResourceError, ConfigResourceKind, ConfigResourceStore,
 	ConfigResourceUpsertRequest, ConfigResourcesResponse, PreparedResource,
 };
-use crate::llm::cost::ModelCatalog;
+use crate::llm::catalog::ModelCatalog;
 use crate::{Config, ConfigSource, ConfigStoreMode, yamlviajson};
 
 const BASE_COSTS_FILE: &str = "base-costs.json";
@@ -49,6 +47,16 @@ impl App {
 			.ok_or(ErrorResponse::String("local config not setup".to_string()))
 	}
 
+	fn ensure_writable(&self) -> Result<(), ErrorResponse> {
+		if self.state.storage.mode == ConfigStoreMode::ReadOnly {
+			return Err(ErrorResponse::Status(
+				StatusCode::FORBIDDEN,
+				"UI is configured as read-only".to_string(),
+			));
+		}
+		Ok(())
+	}
+
 	fn config_resource_store(&self) -> Result<ConfigResourceStore, ErrorResponse> {
 		if self.state.storage.mode != ConfigStoreMode::Hybrid {
 			return Err(ErrorResponse::Status(
@@ -63,21 +71,19 @@ impl App {
 	}
 }
 
-#[cfg(feature = "ui")]
-static ASSETS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../ui/out");
-
-#[cfg(not(feature = "ui"))]
-static ASSETS_DIR: Dir<'static> = Dir::new("", &[]);
+pub(crate) static EMPTY_ASSETS_DIR: Dir<'static> = Dir::new("", &[]);
 
 pub fn router(
 	cfg: Arc<Config>,
 	model_catalog: Arc<ModelCatalog>,
 	config_resource_store: Option<ConfigResourceStore>,
 	resource_manager: crate::resource_manager::ResourceManager,
+	assets_dir: &'static Dir<'static>,
 ) -> Router {
-	let ui_service = tower::service_fn(move |req| serve_ui_asset(req, &ASSETS_DIR));
+	let ui_service = tower::service_fn(move |req| serve_ui_asset(req, assets_dir));
 	Router::new()
-		// Redirect to the UI
+		// OIDC intercepts this path to start login; without OIDC, return to the UI.
+		.route("/api/auth/login", get(|| async { Redirect::to("/ui") }))
 		.route("/api/runtime", get(get_runtime))
 		.route("/api/config", get(get_config).post(write_config))
 		.route("/api/config/effective", get(get_effective_config))
@@ -99,6 +105,7 @@ pub fn router(
 		.route("/api/logs/analytics/summary", post(analytics_summary))
 		.route("/api/costs/models", get(cost_models))
 		.route("/api/costs/refresh-base", post(refresh_base_costs))
+		.route("/api/budgets/status", get(budget_status))
 		.nest_service("/ui", ui_service)
 		.route("/", get(|| async { Redirect::permanent("/ui") }))
 		.with_state(App {
@@ -112,8 +119,19 @@ pub fn router(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeInfo {
+	user: Option<RuntimeUser>,
 	build: RuntimeBuildInfo,
 	ui: RuntimeUiInfo,
+}
+
+/// Display-only identity from standardAttributes.user, with optional JWT profile details.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeUser {
+	pub subject: Option<String>,
+	pub name: Option<String>,
+	pub email: Option<String>,
+	pub can_logout: bool,
 }
 
 #[derive(Serialize)]
@@ -198,25 +216,76 @@ impl From<ConfigResourcesResponse> for UiConfigResourcesResponse {
 	}
 }
 
-async fn get_runtime(State(app): State<App>) -> Json<RuntimeInfo> {
+async fn get_runtime(State(app): State<App>, req: axum::extract::Request) -> impl IntoResponse {
+	let req = req.map(crate::http::Body::new);
+	// Use the same compiled, reloadable mapping as request logs, even when log
+	// storage is disabled. This is display metadata, not an authentication check.
+	let attributes = app.state.logging.database_fields.load();
+	let executor = cel::Executor::new_request(&req);
+	let session = req
+		.extensions()
+		.get::<crate::http::oidc::AuthenticatedSession>();
+	let claims = req.extensions().get::<crate::http::jwt::Claims>();
+	let subject = attributes
+		.add
+		.iter()
+		.find(|(name, _)| name.as_ref() == "agentgateway.user")
+		.and_then(|(_, expression)| executor.eval(expression).ok())
+		.and_then(|value| match value {
+			cel::Value::String(value) => Some(value.trim().to_owned()),
+			_ => None,
+		})
+		.filter(|value| !value.is_empty())
+		.or_else(|| {
+			// A custom display mapping must not hide the account menu and logout
+			// for an authenticated OIDC session. Other identities retain that mapping.
+			session?;
+			claims?
+				.inner
+				.get("sub")?
+				.as_str()
+				.map(str::trim)
+				.filter(|value| !value.is_empty())
+				.map(str::to_owned)
+		});
+	let user = subject.map(|subject| {
+		let [name, email, username] = ["name", "email", "preferred_username"].map(|key| {
+			claims
+				.and_then(|claims| claims.inner.get(key))
+				.and_then(serde_json::Value::as_str)
+				.map(str::trim)
+				.filter(|v| !v.is_empty())
+				.map(str::to_owned)
+		});
+		RuntimeUser {
+			subject: Some(subject),
+			name: name.or(username),
+			email,
+			can_logout: session.is_some_and(|session| session.can_logout),
+		}
+	});
 	let build = BuildInfo::new();
-	Json(RuntimeInfo {
-		build: RuntimeBuildInfo {
-			version: build.version,
-			git_revision: build.git_revision,
-			rust_version: build.rust_version,
-			build_profile: build.build_profile,
-			build_target: build.build_target,
-		},
-		ui: RuntimeUiInfo {
-			gateway_mode: if app.state.xds.address.is_some() {
-				GatewayRuntimeMode::Xds
-			} else {
-				GatewayRuntimeMode::Standalone
+	(
+		[("cache-control", "no-store")],
+		Json(RuntimeInfo {
+			user,
+			build: RuntimeBuildInfo {
+				version: build.version,
+				git_revision: build.git_revision,
+				rust_version: build.rust_version,
+				build_profile: build.build_profile,
+				build_target: build.build_target,
 			},
-			config_store_mode: app.state.storage.mode,
-		},
-	})
+			ui: RuntimeUiInfo {
+				gateway_mode: if app.state.xds.address.is_some() {
+					GatewayRuntimeMode::Xds
+				} else {
+					GatewayRuntimeMode::Standalone
+				},
+				config_store_mode: app.state.storage.mode,
+			},
+		}),
+	)
 }
 
 async fn serve_ui_asset(
@@ -302,6 +371,7 @@ async fn write_config(
 	State(app): State<App>,
 	Json(config_json): Json<Value>,
 ) -> Result<Json<Value>, ErrorResponse> {
+	app.ensure_writable()?;
 	persist_file_config(&app, &config_json).await?;
 	Ok(Json(
 		serde_json::json!({"status": "success", "message": "Configuration written successfully"}),
@@ -322,16 +392,7 @@ async fn persist_file_config(app: &App, config_json: &Value) -> Result<(), Error
 	let yaml_content = yamlviajson::to_string(&config_json).map_err(ErrorResponse::Anyhow)?;
 	let yaml_file_content = format!("{CONFIG_SCHEMA_HEADER}{yaml_content}");
 
-	let resources =
-		crate::resource_manager::ResourceFetcher::cached_or_direct(app.resource_manager.clone());
-	if let Err(e) = Box::pin(crate::types::local::NormalizedLocalConfig::from(
-		&app.state,
-		&resources,
-		app.state.gateway(),
-		yaml_content.as_str(),
-	))
-	.await
-	{
+	if let Err(e) = validate_config_in_task(app, yaml_content).await {
 		return Err(ErrorResponse::String(e.to_string()));
 	}
 
@@ -387,6 +448,7 @@ async fn upsert_config_resources_by_kind(
 	Path(kind): Path<String>,
 	Json(request): Json<ConfigResourceUpsertRequest>,
 ) -> Result<Json<UiConfigResourcesResponse>, ErrorResponse> {
+	app.ensure_writable()?;
 	let kind = kind
 		.parse::<ConfigResourceKind>()
 		.map_err(resource_api_error)?;
@@ -398,10 +460,10 @@ async fn upsert_config_resources(
 	kind: ConfigResourceKind,
 	mut request: ConfigResourceUpsertRequest,
 ) -> Result<UiConfigResourcesResponse, ErrorResponse> {
-	if app.state.storage.mode == ConfigStoreMode::Hybrid && kind == ConfigResourceKind::McpSettings {
+	if app.state.storage.mode == ConfigStoreMode::Hybrid && kind.settings_fields().is_some() {
 		let file_config = read_file_config(app).await?;
 		for resource in &mut request.resources {
-			remove_file_owned_mcp_settings(&file_config, &mut resource.value)?;
+			remove_file_owned_settings(kind, &file_config, &mut resource.value)?;
 		}
 	}
 	let prepared =
@@ -413,9 +475,6 @@ async fn upsert_config_resources(
 				.map_err(resource_api_error)?;
 		}
 		persist_file_config(app, &config).await?;
-		if kind == ConfigResourceKind::ModelCatalog {
-			reload_file_model_catalog(app, &config).await?;
-		}
 		return Ok(UiConfigResourcesResponse {
 			resources: prepared.into_iter().map(UiConfigResource::from).collect(),
 		});
@@ -430,9 +489,6 @@ async fn upsert_config_resources(
 		.upsert_prepared(prepared)
 		.await
 		.map_err(resource_api_error)?;
-	if kind == ConfigResourceKind::ModelCatalog {
-		reload_model_catalog(app, &candidate).await?;
-	}
 	Ok(response.into())
 }
 
@@ -441,11 +497,17 @@ async fn update_config_resource(
 	Path((kind, id)): Path<(String, String)>,
 	Json(mut resource): Json<crate::config_store::ConfigResourceUpsert>,
 ) -> Result<Json<UiConfigResourcesResponse>, ErrorResponse> {
+	app.ensure_writable()?;
 	let kind = kind
 		.parse::<ConfigResourceKind>()
 		.map_err(resource_api_error)?;
-	if app.state.storage.mode == ConfigStoreMode::Hybrid && kind == ConfigResourceKind::McpSettings {
-		remove_file_owned_mcp_settings(&read_file_config(&app).await?, &mut resource.value)?;
+	let file_config = if app.state.storage.mode == ConfigStoreMode::File {
+		Some(read_file_config(&app).await?)
+	} else {
+		None
+	};
+	if app.state.storage.mode == ConfigStoreMode::Hybrid && kind.settings_fields().is_some() {
+		remove_file_owned_settings(kind, &read_file_config(&app).await?, &mut resource.value)?;
 	}
 	let stored_resources = if app.state.storage.mode == ConfigStoreMode::Hybrid {
 		Some(
@@ -470,11 +532,26 @@ async fn update_config_resource(
 					"config resource not found: {kind}/{id}"
 				))));
 			}
+			let created_at = if let Some(config) = file_config.as_ref() {
+				crate::config_store::file_api_key_created_at(config, &id)
+			} else {
+				stored_resources
+					.as_ref()
+					.and_then(|resources| {
+						resources
+							.iter()
+							.find(|resource| resource.kind == kind && resource.id == id)
+					})
+					.and_then(|resource| {
+						crate::config_store::api_key_created_at(&resource.value)
+							.or_else(|| Some(resource.created_at.timestamp()))
+					})
+			};
 			vec![if app.state.storage.mode == ConfigStoreMode::File {
-				crate::config_store::prepare_file_api_key_update(id.clone(), resource.value)
+				crate::config_store::prepare_file_api_key_update(id.clone(), resource.value, created_at)
 					.map_err(resource_api_error)?
 			} else {
-				crate::config_store::prepare_api_key_update(id.clone(), resource.value)
+				crate::config_store::prepare_api_key_update(id.clone(), resource.value, created_at)
 					.map_err(resource_api_error)?
 			}]
 		},
@@ -489,15 +566,12 @@ async fn update_config_resource(
 		},
 	};
 	if app.state.storage.mode == ConfigStoreMode::File {
-		let mut config = read_file_config(&app).await?;
+		let mut config = file_config.expect("file mode loads the file config");
 		for resource in &prepared {
 			crate::config_store::upsert_file_config_resource(&mut config, resource, Some(id.as_str()))
 				.map_err(resource_api_error)?;
 		}
 		persist_file_config(&app, &config).await?;
-		if kind == ConfigResourceKind::ModelCatalog {
-			reload_file_model_catalog(&app, &config).await?;
-		}
 		return Ok(Json(UiConfigResourcesResponse {
 			resources: prepared.into_iter().map(UiConfigResource::from).collect(),
 		}));
@@ -547,23 +621,25 @@ async fn update_config_resource(
 	Ok(Json(response.into()))
 }
 
-fn remove_file_owned_mcp_settings(
+fn remove_file_owned_settings(
+	kind: ConfigResourceKind,
 	file_config: &Value,
 	value: &mut Value,
 ) -> Result<(), ErrorResponse> {
+	let (section, fields) = kind.settings_fields().expect("settings resource");
 	let value = value.as_object_mut().ok_or_else(|| {
-		resource_api_error(ConfigResourceError::InvalidRequest(
-			"mcp.settings/default must be an object".to_string(),
-		))
+		resource_api_error(ConfigResourceError::InvalidRequest(format!(
+			"{kind}/default must be an object"
+		)))
 	})?;
-	let file_mcp = file_config.get("mcp").and_then(Value::as_object);
-	for field in crate::config_store::MCP_SETTINGS_FIELDS {
-		let Some(file_value) = file_mcp.and_then(|mcp| mcp.get(field)) else {
+	let file_settings = file_config.get(section).and_then(Value::as_object);
+	for &field in fields {
+		let Some(file_value) = file_settings.and_then(|settings| settings.get(field)) else {
 			continue;
 		};
 		if value.get(field).is_some_and(|value| value != file_value) {
 			return Err(resource_api_error(ConfigResourceError::Conflict(format!(
-				"file-owned mcp.settings/default field cannot be updated in hybrid mode: {field}"
+				"file-owned {kind}/default field cannot be updated in hybrid mode: {field}"
 			))));
 		}
 		value.remove(field);
@@ -575,6 +651,7 @@ async fn delete_config_resource(
 	State(app): State<App>,
 	Path((kind, id)): Path<(String, String)>,
 ) -> Result<Json<Value>, ErrorResponse> {
+	app.ensure_writable()?;
 	let kind = kind
 		.parse::<ConfigResourceKind>()
 		.map_err(resource_api_error)?;
@@ -588,9 +665,6 @@ async fn delete_config_resource(
 			))));
 		}
 		persist_file_config(&app, &config).await?;
-		if kind == ConfigResourceKind::ModelCatalog {
-			reload_file_model_catalog(&app, &config).await?;
-		}
 		return Ok(Json(
 			serde_json::json!({"status": "success", "message": "Configuration resource deleted successfully"}),
 		));
@@ -609,41 +683,9 @@ async fn delete_config_resource(
 	let candidate = crate::config_store::apply_delete(resources, kind, &id);
 	validate_materialized_config(&app, &candidate).await?;
 	store.delete(kind, &id).await.map_err(resource_api_error)?;
-	if kind == ConfigResourceKind::ModelCatalog {
-		reload_model_catalog(&app, &candidate).await?;
-	}
 	Ok(Json(
 		serde_json::json!({"status": "success", "message": "Configuration resource deleted successfully"}),
 	))
-}
-
-async fn reload_model_catalog(
-	app: &App,
-	resources: &[crate::config_store::ConfigResource],
-) -> Result<(), ErrorResponse> {
-	let mut sources =
-		crate::config_store::model_catalog_sources(resources).map_err(resource_api_error)?;
-	sources.extend(app.state.model_catalog.sources.clone());
-	app
-		.model_catalog
-		.replace_sources(sources)
-		.await
-		.map_err(resource_api_error)
-}
-
-async fn reload_file_model_catalog(app: &App, config: &Value) -> Result<(), ErrorResponse> {
-	let sources = config
-		.pointer("/config/modelCatalog")
-		.cloned()
-		.map(serde_json::from_value)
-		.transpose()
-		.map_err(|err| resource_api_error(anyhow::Error::from(err)))?
-		.unwrap_or_default();
-	app
-		.model_catalog
-		.replace_sources(sources)
-		.await
-		.map_err(resource_api_error)
 }
 
 async fn validate_materialized_config(
@@ -653,16 +695,28 @@ async fn validate_materialized_config(
 	let base = app.cfg()?.read_to_string().await?;
 	let config_content = crate::config_store::materialize_config(base.as_str(), resources)
 		.map_err(resource_api_error)?;
+	validate_config_in_task(app, config_content)
+		.await
+		.map_err(|err| ErrorResponse::Status(StatusCode::UNPROCESSABLE_ENTITY, err.to_string()))?;
+	Ok(())
+}
+
+async fn validate_config_in_task(app: &App, config: String) -> anyhow::Result<()> {
+	let state = app.state.clone();
 	let resources =
 		crate::resource_manager::ResourceFetcher::cached_or_direct(app.resource_manager.clone());
-	crate::types::local::NormalizedLocalConfig::from(
-		&app.state,
-		&resources,
-		app.state.gateway(),
-		config_content.as_str(),
-	)
-	.await
-	.map_err(|err| ErrorResponse::Status(StatusCode::UNPROCESSABLE_ENTITY, err.to_string()))?;
+	let gateway = state.gateway();
+
+	// Boxing these futures keeps their state on the heap, but each nested `poll` still adds its
+	// native stack frame to the gateway and HTTP frames already handling this request. In debug
+	// builds the generated config-conversion frames are particularly large, so start a new task to
+	// have Tokio poll the conversion from the scheduler root instead.
+	tokio::spawn(async move {
+		crate::types::local::NormalizedLocalConfig::from(&state, &resources, gateway, config.as_str())
+			.await
+			.map(|_| ())
+	})
+	.await??;
 	Ok(())
 }
 
@@ -679,6 +733,7 @@ fn resource_api_error(err: impl Into<anyhow::Error>) -> ErrorResponse {
 }
 
 async fn refresh_base_costs(State(app): State<App>) -> Result<Json<Value>, ErrorResponse> {
+	app.ensure_writable()?;
 	let configured_file = app.state.model_catalog.sources.iter().find_map(|source| {
 		if let crate::ModelCatalogSource::File { file } = source {
 			Some(file)
@@ -687,7 +742,7 @@ async fn refresh_base_costs(State(app): State<App>) -> Result<Json<Value>, Error
 		}
 	});
 	if configured_file.is_none() && app.state.storage.mode == ConfigStoreMode::Hybrid {
-		let refreshed = crate::llm::cost::refresh::fetch_models_dev_base_catalog().await?;
+		let refreshed = crate::llm::catalog::refresh::fetch_base_catalog().await?;
 		let resources = app
 			.config_resource_store()?
 			.list(None)
@@ -738,9 +793,9 @@ async fn refresh_base_costs(State(app): State<App>) -> Result<Json<Value>, Error
 		dir.join(BASE_COSTS_FILE)
 	};
 
-	let refreshed = crate::llm::cost::refresh::refresh_models_dev_base_catalog(
+	let refreshed = crate::llm::catalog::refresh::refresh_base_catalog(
 		&base_costs_file,
-		app.model_catalog.as_ref(),
+		configured_file.map(|_| app.model_catalog.as_ref()),
 	)
 	.await?;
 
@@ -759,8 +814,26 @@ async fn refresh_base_costs(State(app): State<App>) -> Result<Json<Value>, Error
 
 async fn cost_models(
 	State(app): State<App>,
-) -> Result<Json<crate::llm::cost::ModelCatalogModels>, ErrorResponse> {
+) -> Result<Json<crate::llm::catalog::ModelCatalogModels>, ErrorResponse> {
 	Ok(Json(app.model_catalog.list_models()))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BudgetStatusQuery {
+	api_key_name: Option<String>,
+}
+
+async fn budget_status(
+	State(app): State<App>,
+	Query(query): Query<BudgetStatusQuery>,
+) -> Result<Json<crate::http::budget::BudgetStatusResponse>, ErrorResponse> {
+	Ok(Json(
+		app
+			.state
+			.budget_policy
+			.status(query.api_key_name.as_deref())?,
+	))
 }
 
 #[derive(serde::Deserialize)]
@@ -915,4 +988,123 @@ async fn tail_logs(
 	});
 
 	Ok(Sse::new(ReceiverStream::new(rx)))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::client::{self, Client};
+
+	fn test_app(read_only: bool) -> App {
+		let mut config =
+			crate::config::parse_config("{}".to_string(), None).expect("parse default config");
+		if read_only {
+			config.storage.mode = ConfigStoreMode::ReadOnly;
+		}
+		let client = Client::new(
+			&client::Config {
+				resolver_cfg: hickory_resolver::config::ResolverConfig::default(),
+				resolver_opts: hickory_resolver::config::ResolverOpts::default(),
+			},
+			None,
+			crate::BackendConfig::default(),
+			None,
+		);
+		App {
+			state: Arc::new(config),
+			config_resource_store: None,
+			resource_manager: crate::resource_manager::ResourceManager::new(client)
+				.expect("resource manager"),
+			model_catalog: Arc::new(crate::llm::catalog::ModelCatalog::default()),
+		}
+	}
+
+	#[tokio::test]
+	async fn runtime_user_uses_standard_attributes_without_log_storage() {
+		let app = test_app(false);
+		assert!(app.state.logging.database.is_none());
+		for (expression, jwt, expected_subject, can_logout) in [
+			(None, true, Some("jwt-user"), false),
+			(None, true, Some("jwt-user"), true),
+			(None, false, Some("basic-user"), false),
+			(
+				Some("request.headers['x-display-user']"),
+				true,
+				Some("custom-user"),
+				false,
+			),
+			(Some("null"), true, None, false),
+			(Some("null"), true, Some("jwt-user"), true),
+			(
+				Some("request.headers['missing']"),
+				true,
+				Some("jwt-user"),
+				true,
+			),
+			(Some("42"), true, None, false),
+			(Some("request.headers['missing']"), true, None, false),
+		] {
+			// Reuse the app to verify updates replace the mapping used by the handler.
+			app.state.logging.database_fields.store(Arc::new(
+				crate::config::standard_attributes(Some(&crate::RawStandardAttributes {
+					user: expression.map(str::to_owned),
+					group: None,
+				}))
+				.unwrap(),
+			));
+			let mut req = axum::extract::Request::builder()
+				.uri("http://localhost/api/runtime")
+				.header("x-display-user", "custom-user")
+				.body(axum::body::Body::empty())
+				.unwrap();
+			if jwt {
+				req.extensions_mut().insert(crate::http::jwt::Claims {
+					inner: serde_json::json!({"sub": "jwt-user", "name": "Display Name", "email": "user@example.com"}).as_object().unwrap().clone(),
+					..Default::default()
+				});
+			} else {
+				req.extensions_mut().insert(crate::http::basicauth::Claims {
+					username: "basic-user".into(),
+				});
+			}
+			if can_logout {
+				req
+					.extensions_mut()
+					.insert(crate::http::oidc::AuthenticatedSession { can_logout });
+			}
+			let response = get_runtime(State(app.clone()), req).await.into_response();
+			assert_eq!(response.headers()["cache-control"], "no-store");
+			let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+				.await
+				.unwrap();
+			let runtime: Value = serde_json::from_slice(&body).unwrap();
+			let expected = expected_subject
+				.map(|subject| {
+					serde_json::json!({
+						"subject": subject,
+						"canLogout": can_logout,
+						"name": if jwt { Some("Display Name") } else { None },
+						"email": if jwt { Some("user@example.com") } else { None },
+					})
+				})
+				.unwrap_or(Value::Null);
+			assert_eq!(runtime["user"], expected, "expression: {expression:?}");
+		}
+	}
+
+	#[tokio::test]
+	async fn ensure_writable_blocks_when_read_only() {
+		let app = test_app(true);
+		let response = app
+			.ensure_writable()
+			.expect_err("should be forbidden")
+			.into_response();
+		assert_eq!(response.status(), StatusCode::FORBIDDEN);
+	}
+
+	#[tokio::test]
+	async fn ensure_writable_allows_when_not_read_only() {
+		let app = test_app(false);
+		assert!(app.ensure_writable().is_ok());
+	}
 }

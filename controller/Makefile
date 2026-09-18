@@ -36,9 +36,8 @@ z := $(shell mkdir -p $(OUTPUT_DIR))
 BUILDX_BUILD ?= docker buildx build -q
 
 # A 'v'-prefixed semver used only locally. Most calling GHA jobs customize
-# this. Exported for use in goreleaser.yaml. Because our docker images are
-# tagged with a 'v' prefix, we use the prefix here and strip the 'v' prefix
-# where actual semver is desired.
+# this. Because our docker images are tagged with a 'v' prefix, we use the
+# prefix here and strip the 'v' prefix where actual semver is desired.
 VERSION ?= v1.0.1-dev
 TAG ?= $(VERSION)
 export VERSION
@@ -74,9 +73,6 @@ TEST_ASSET_DIR ?= $(ROOTDIR)/_test
 BUG_REPORT_DIR := $(TEST_ASSET_DIR)/bug_report
 $(BUG_REPORT_DIR):
 	mkdir -p $(BUG_REPORT_DIR)
-
-# Base Alpine image used for all containers. Exported for use in goreleaser.yaml.
-export ALPINE_BASE_IMAGE ?= alpine:3.17.6
 
 DEPSGOBIN ?= $(OUTPUT_DIR)
 ANALYZE_ARGS ?= --fix --verbose --max-issues-per-linter 0 --max-same-issues 0
@@ -140,11 +136,11 @@ analyze: ensure-custom-golangci-lint  ## Run golangci-lint. Override options wit
 .PHONY: ensure-custom-golangci-lint
 ensure-custom-golangci-lint:
 	@expected_go_version="$$(go env GOVERSION)"; \
-	current_go_version="$$( $(CUSTOM_GOLANGCI_LINT_BIN) version 2>/dev/null | sed -n 's/.* built with \(go[0-9.]*\).*/\1/p' )"; \
+	current_go_version="$$( $(CUSTOM_GOLANGCI_LINT_BIN) version 2>/dev/null | sed -n 's/.* built with \(go[^[:space:]]*\).*/\1/p' )"; \
 	if [ ! -x "$(CUSTOM_GOLANGCI_LINT_BIN)" ] || [ "$$current_go_version" != "$$expected_go_version" ]; then \
 		echo "Rebuilding golangci-lint custom with $$expected_go_version..."; \
 		rm -f "$(CUSTOM_GOLANGCI_LINT_BIN)"; \
-		golangci-lint custom; \
+		GOTOOLCHAIN="$$expected_go_version" golangci-lint custom; \
 	fi
 
 .PHONY: lint-actions
@@ -772,7 +768,8 @@ bump-gtw: ## Bump Gateway API deps to $DEP_REF (or $DEP_VERSION). Example: make 
 
 .PHONY: bump-gie
 bump-gie: ## Bump Gateway API Inference Extension to $DEP_REF (or $DEP_VERSION). Example: make bump-gie DEP_REF=198e6cab...
-	@if [ -z "$${DEP_REF:-}" ] && [ -n "$${DEP_VERSION:-}" ]; then DEP_REF="$$DEP_VERSION"; fi; \
+	@set -e; \
+	if [ -z "$${DEP_REF:-}" ] && [ -n "$${DEP_VERSION:-}" ]; then DEP_REF="$$DEP_VERSION"; fi; \
 	if [ -z "$${DEP_REF:-}" ]; then \
 	  echo "DEP_REF is not set (or DEP_VERSION). e.g. make bump-gie DEP_REF=v0.5.1 or DEP_REF=198e6cab6774..."; \
 	  exit 2; \

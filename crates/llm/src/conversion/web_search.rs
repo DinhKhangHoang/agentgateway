@@ -35,7 +35,7 @@
 use std::time::Instant;
 
 use agent_core::strng;
-use axum_core::body::Body;
+use agent_http::Body;
 use serde_json::Value;
 
 use crate::parse;
@@ -168,6 +168,7 @@ fn chat_shaper(
 		buffer_limit,
 		move |ev| -> Vec<(&'static str, Value)> {
 			match ev {
+				parse::sse::SseJsonEvent::Eof | parse::sse::SseJsonEvent::Error => return vec![],
 				parse::sse::SseJsonEvent::Done => {
 					// FR-7.10 fallback: no usage marker AND text emitted AND not
 					// yet accounted → ceil(text_chars/4) token estimate. The
@@ -284,6 +285,7 @@ fn messages_shaper(
 				}};
 			}
 			match ev {
+				parse::sse::SseJsonEvent::Eof | parse::sse::SseJsonEvent::Error => return out,
 				parse::sse::SseJsonEvent::Done => {
 					if !st.sent_stop {
 						close_text(&mut st, &mut out);
@@ -705,6 +707,7 @@ fn responses_shaper(
 		move |ev| -> Vec<(&'static str, responses_types::typed::ResponseStreamEvent)> {
 			let mut out: Vec<(&'static str, responses_types::typed::ResponseStreamEvent)> = vec![];
 			match ev {
+				parse::sse::SseJsonEvent::Eof | parse::sse::SseJsonEvent::Error => return out,
 				parse::sse::SseJsonEvent::Done => {
 					if !accounted && text_chars > 0 {
 						let est = ((text_chars as f64) / 4.0).ceil() as u64;
@@ -772,6 +775,7 @@ fn responses_shaper(
 											Some(responses_types::typed::ErrorObject {
 												code: "internal_server_error".to_string(),
 												message: msg,
+												misalignment: None,
 											}),
 											None,
 										),

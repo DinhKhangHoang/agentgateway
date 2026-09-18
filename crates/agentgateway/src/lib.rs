@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::fs::File;
@@ -15,6 +17,7 @@ use indexmap::IndexMap;
 pub use schemars::JsonSchema;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde_with::serde_as;
 pub use serdes::*;
 
 use crate::store::Stores;
@@ -29,8 +32,10 @@ pub mod client;
 pub mod config;
 pub mod config_store;
 pub mod control;
+pub mod crypto;
 pub mod database;
 pub mod http;
+pub mod import;
 pub mod json;
 pub mod llm;
 pub mod management;
@@ -170,6 +175,9 @@ pub struct RawConfig {
 	xds_address: Option<String>,
 	/// Authentication token for communicating with the xDS control plane.
 	xds_auth_token: Option<String>,
+	/// Local SPIFFE Workload API configuration
+	/// When set, listeners and backends may source their TLS identity from SPIFFE.
+	spiffe: Option<RawSpiffeConfig>,
 	/// Kubernetes namespace for this gateway instance.
 	namespace: Option<String>,
 	/// Name of this gateway. Required when xDS is configured.
@@ -194,6 +202,10 @@ pub struct RawConfig {
 	standard_attributes: Option<RawStandardAttributes>,
 	/// Stats/metrics server address in the format "ip:port", "localhost:port", "unix:/path/to/socket", or "off"
 	stats_addr: Option<String>,
+	/// Histogram representation to collect. Native histograms are exposed only through the
+	/// Prometheus protobuf format. Defaults to classic.
+	#[serde(default)]
+	histograms: HistogramMode,
 	/// Readiness probe server address in the format "ip:port", "localhost:port", "unix:/path/to/socket", or "off"
 	readiness_addr: Option<String>,
 
@@ -202,6 +214,10 @@ pub struct RawConfig {
 
 	/// MCP gateway settings.
 	mcp: Option<RawMcpConfig>,
+
+	/// Additional request headers whose values should be redacted from trace and debug output.
+	#[serde(default)]
+	sensitive_headers: Vec<String>,
 
 	/// Custom CEL functions available to all CEL expressions. These can define re-usable snippets that
 	/// can be used in any expressions.
@@ -264,7 +280,7 @@ pub struct BackendConfig {
 	/// TCP keepalive configuration for upstream connections.
 	#[serde(default)]
 	keepalives: types::agent::KeepaliveConfig,
-	/// Maximum time to wait when establishing a connection to an upstream. Defaults to 10 seconds.
+	/// Maximum time to wait when establishing a connection to an upstream. Defaults to 11 seconds.
 	#[serde(with = "serde_dur")]
 	#[cfg_attr(feature = "schema", schemars(with = "String"))]
 	#[serde(default = "defaults::connect_timeout")]
@@ -280,6 +296,18 @@ pub struct BackendConfig {
 	/// If unset, there is no limit
 	#[serde(default)]
 	pool_max_size: Option<usize>,
+	/// Interval between HTTP/2 PING frames sent to upstream connections for liveness detection.
+	/// PINGs are sent even on idle connections to proactively evict dead connections from the pool.
+	/// Disabled by default ("0s"). Note: many gRPC servers enforce a minimum ping interval
+	/// and will reject connections that ping more frequently.
+	#[serde(default, with = "serde_dur")]
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	h2_keepalive_interval: Duration,
+	/// Timeout waiting for a PING ACK before considering the connection dead and closing it.
+	/// Only applies when h2_keepalive_interval is set. Defaults to 5s.
+	#[serde(default = "defaults::h2_keepalive_timeout", with = "serde_dur")]
+	#[cfg_attr(feature = "schema", schemars(with = "String"))]
+	h2_keepalive_timeout: Duration,
 }
 
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq)]
@@ -306,6 +334,8 @@ impl Default for BackendConfig {
 			connect_timeout: defaults::connect_timeout(),
 			pool_idle_timeout: defaults::pool_idle_timeout(),
 			pool_max_size: None,
+			h2_keepalive_interval: Duration::ZERO,
+			h2_keepalive_timeout: defaults::h2_keepalive_timeout(),
 		}
 	}
 }
@@ -314,15 +344,27 @@ mod defaults {
 	use std::time::Duration;
 
 	pub fn connect_timeout() -> Duration {
-		Duration::from_secs(10)
+		// Most systems use 10s. Using 11s makes timeouts from this setting distinguishable
+		// from another layer's 10s timeout.
+		Duration::from_secs(11)
 	}
 	pub fn pool_idle_timeout() -> Duration {
 		Duration::from_secs(90)
+	}
+	pub fn h2_keepalive_timeout() -> Duration {
+		Duration::from_secs(5)
 	}
 
 	pub fn max_buffer_size() -> usize {
 		2_097_152
 	}
+
+	/// Semi-trusted, controller-configured gRPC services that return body mutations do not impose
+	/// a message-size limit.
+	///
+	/// Tonic otherwise defaults to a 4 MiB receive limit, which is too small for services that may
+	/// legitimately return buffered HTTP or MCP bodies.
+	pub const GRPC_MAX_DECODING_MESSAGE_SIZE: usize = usize::MAX;
 
 	pub fn tls_handshake_timeout() -> Duration {
 		Duration::from_secs(15)
@@ -422,6 +464,8 @@ pub enum ConfigStoreMode {
 	File,
 	/// Read a file baseline and store UI-managed overlay resources in the configured database.
 	Hybrid,
+	/// Disallow write operations to the config from the UI
+	ReadOnly,
 }
 
 #[apply(schema_de!)]
@@ -437,6 +481,18 @@ pub enum LoggingFormat {
 	#[default]
 	Text,
 	Json,
+}
+
+#[apply(schema!)]
+#[derive(Default, Copy, Eq, PartialEq)]
+pub enum HistogramMode {
+	/// Collect classic histogram buckets only.
+	#[default]
+	Classic,
+	/// Collect native histogram buckets only.
+	Native,
+	/// Collect both classic and native histogram buckets.
+	Both,
 }
 
 #[apply(schema_de!)]
@@ -471,6 +527,12 @@ pub struct RawLoggingFields {
 		schemars(with = "std::collections::HashMap<String, String>")
 	)]
 	add: IndexMap<String, String>,
+}
+
+#[apply(schema_de!)]
+pub struct RawSpiffeConfig {
+	/// SPIFFE Workload API Endpoint (e.g. `unix:///run/spire/agent.sock`).
+	endpoint: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -586,6 +648,7 @@ impl schemars::JsonSchema for StringBoolFloat {
 	}
 }
 
+#[serde_as]
 #[derive(serde::Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
@@ -602,6 +665,7 @@ pub struct Config {
 	pub num_worker_threads: usize,
 	pub admin_addr: Address,
 	pub stats_addr: Address,
+	pub histograms: HistogramMode,
 	pub readiness_addr: Address,
 	// For waypoint identification
 	pub self_addr: Option<types::discovery::WaypointIdentity>,
@@ -609,12 +673,16 @@ pub struct Config {
 	/// XDS address to use. If unset, XDS will not be used.
 	pub xds: XDSConfig,
 	pub ca: Option<caclient::Config>,
+	/// Connection to the local SPIFFE Workload API, enabling SPIFFE-sourced TLS on binds.
+	pub spiffe: Option<control::spiffe::Config>,
 
 	pub tracing: Option<trc::DeprecatedConfig>,
 	pub metrics: crate::telemetry::log::MetricsConfig,
 	pub logging: crate::telemetry::log::Config,
 	pub database: Option<telemetry::log_store::Config>,
 	pub storage: StorageConfig,
+	#[serde_as(as = "Vec<serde_with::DisplayFromStr>")]
+	pub sensitive_headers: Vec<::http::HeaderName>,
 
 	pub dns: client::Config,
 	pub proxy_metadata: ProxyMetadata,
@@ -625,6 +693,9 @@ pub struct Config {
 	/// Handle for tasks/spans emitted on the admin runtime.
 	#[serde(skip)]
 	pub admin_runtime_handle: Option<tokio::runtime::Handle>,
+	/// Process-wide budget policy used by standalone configuration.
+	#[serde(skip)]
+	pub budget_policy: Arc<http::budget::BudgetPolicy>,
 
 	pub backend: BackendConfig,
 	pub mcp: McpConfig,
@@ -645,7 +716,7 @@ pub struct StorageConfig {
 }
 
 /// A source of model cost catalog data.
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(untagged)]
 pub enum ModelCatalogSource {
@@ -659,7 +730,7 @@ pub enum ModelCatalogSource {
 	},
 	InlineCatalog {
 		/// Model cost catalog provided inline as structured data.
-		inline: llm::cost::Catalog,
+		inline: llm::catalog::Catalog,
 	},
 }
 
@@ -702,6 +773,8 @@ impl Config {
 		Some(local::AttachedPolicyContext {
 			oidc_policy_id: crate::http::oidc::PolicyId::policy(&policy_key),
 			oidc_cookie_encoder: self.oidc_cookie_encoder.as_ref(),
+			budget_policy: &self.budget_policy,
+			database_configured: self.database.is_some(),
 		})
 	}
 }
@@ -722,6 +795,9 @@ pub struct XDSConfig {
 	pub address: Option<String>,
 	pub auth: AuthSource,
 	pub ca_cert: RootCert,
+	/// Additional headers sent with every xDS request.
+	#[serde(serialize_with = "crate::serdes::ser_sensitive_header_vec")]
+	pub headers: Vec<(String, String)>,
 	pub namespace: Strng,
 	pub gateway: Strng,
 
@@ -769,16 +845,14 @@ pub struct ProxyInputs {
 	pub upstream: client::Client,
 
 	pub metrics: Arc<metrics::Metrics>,
-	pub model_catalog: Arc<llm::cost::ModelCatalog>,
+	pub model_catalog: Arc<llm::catalog::ModelCatalog>,
 
 	pub admin: Option<management::admin::AdminService>,
 	pub mcp_state: mcp::App,
 	pub ca: Option<Arc<CaClient>>,
-
-	/// Shared cap on concurrent in-flight LLM usage reports. It lives here
-	/// rather than on the per-request carrier because a per-request limiter
-	/// would be no cap at all.
-	pub llm_usage_report_in_flight: llm::policy::usage_report::InFlightLimiter,
+	pub spiffe: Option<Arc<control::spiffe::SpiffeClient>>,
+	pub admission: Arc<proxy::admission::AdmissionRegistry>,
+	pub llm_usage_report_in_flight: Arc<tokio::sync::Semaphore>,
 }
 
 impl ProxyInputs {
@@ -787,14 +861,16 @@ impl ProxyInputs {
 	/// This constructor is intended for use cases where the gateway is embedded
 	/// directly into another application, bypassing [`app::run`] which creates
 	/// its own admin servers, signal handlers, and XDS state management.
+	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		cfg: Arc<Config>,
 		stores: Stores,
 		upstream: client::Client,
 		metrics: Arc<metrics::Metrics>,
 		mcp_state: mcp::App,
-		model_catalog: Option<llm::cost::ModelCatalog>,
+		model_catalog: Option<llm::catalog::ModelCatalog>,
 		ca: Option<Arc<CaClient>>,
+		spiffe: Option<Arc<control::spiffe::SpiffeClient>>,
 	) -> Self {
 		Self {
 			cfg,
@@ -805,7 +881,9 @@ impl ProxyInputs {
 			admin: None,
 			mcp_state,
 			ca,
-			llm_usage_report_in_flight: Default::default(),
+			spiffe,
+			admission: Default::default(),
+			llm_usage_report_in_flight: Arc::new(tokio::sync::Semaphore::new(64)),
 		}
 	}
 }

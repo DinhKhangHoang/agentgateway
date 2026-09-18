@@ -1,15 +1,33 @@
+#[cfg(test)]
+#[path = "openai_compat_tests.rs"]
+mod tests;
+
 pub mod from_responses {
 	use types::completions::typed as completions;
 	use types::responses::typed as responses;
 
 	use crate::{AIError, json, types};
 
+	pub struct TranslatedRequest {
+		pub request: completions::Request,
+		pub namespaces: crate::conversion::namespace_tools::NamespaceToolMap,
+	}
+
 	/// Translate an OpenAI Responses request into an OpenAI-compatible chat completions request.
 	pub fn translate(req: &types::responses::Request) -> Result<Vec<u8>, AIError> {
-		let typed =
+		let translated = translate_request(req)?;
+		serde_json::to_vec(&translated.request).map_err(AIError::RequestMarshal)
+	}
+
+	pub fn translate_request(req: &types::responses::Request) -> Result<TranslatedRequest, AIError> {
+		let mut typed =
 			json::convert::<_, responses::CreateResponse>(req).map_err(AIError::RequestMarshal)?;
-		let xlated = translate_internal(typed);
-		serde_json::to_vec(&xlated).map_err(AIError::RequestMarshal)
+		let namespaces =
+			crate::conversion::namespace_tools::NamespaceToolMap::rewrite_request(&mut typed)?;
+		Ok(TranslatedRequest {
+			request: translate_internal(typed),
+			namespaces,
+		})
 	}
 
 	fn translate_internal(req: responses::CreateResponse) -> completions::Request {
@@ -244,22 +262,30 @@ pub mod from_responses {
 						},
 					},
 					Item::FunctionCall(call) => {
-						messages.push(completions::RequestMessage::Assistant(
-							completions::RequestAssistantMessage {
-								tool_calls: Some(vec![completions::MessageToolCalls::Function(
-									completions::MessageToolCall {
-										id: call.call_id.clone(),
-										function: completions::FunctionCall {
-											name: call.name.clone(),
-											arguments: call.arguments.clone(),
-										},
-									},
-								)]),
-								..Default::default()
+						let tool_call = completions::MessageToolCalls::Function(completions::MessageToolCall {
+							id: call.call_id.clone(),
+							function: completions::FunctionCall {
+								name: call.name.clone(),
+								arguments: call.arguments.clone(),
 							},
-						));
+						});
+						if let Some(completions::RequestMessage::Assistant(message)) = messages.last_mut()
+							&& let Some(tool_calls) = &mut message.tool_calls
+						{
+							tool_calls.push(tool_call);
+						} else {
+							messages.push(completions::RequestMessage::Assistant(
+								completions::RequestAssistantMessage {
+									tool_calls: Some(vec![tool_call]),
+									..Default::default()
+								},
+							));
+						}
 					},
 					Item::FunctionCallOutput(output) => {
+						let Some(call_id) = output.call_id.filter(|call_id| !call_id.is_empty()) else {
+							continue;
+						};
 						let output_text = match output.output {
 							responses::FunctionCallOutput::Text(text) => text,
 							responses::FunctionCallOutput::Content(parts) => parts
@@ -274,26 +300,31 @@ pub mod from_responses {
 						messages.push(completions::RequestMessage::Tool(
 							completions::RequestToolMessage {
 								content: completions::RequestToolMessageContent::Text(output_text),
-								tool_call_id: output.call_id,
+								tool_call_id: call_id,
 							},
 						));
 					},
 					Item::CustomToolCall(call) => {
 						let arguments = serde_json::to_string(&call.input).unwrap_or_else(|_| "{}".to_string());
-						messages.push(completions::RequestMessage::Assistant(
-							completions::RequestAssistantMessage {
-								tool_calls: Some(vec![completions::MessageToolCalls::Function(
-									completions::MessageToolCall {
-										id: call.id.clone(),
-										function: completions::FunctionCall {
-											name: call.name.clone(),
-											arguments,
-										},
-									},
-								)]),
-								..Default::default()
+						let tool_call = completions::MessageToolCalls::Function(completions::MessageToolCall {
+							id: call.id.clone(),
+							function: completions::FunctionCall {
+								name: call.name.clone(),
+								arguments,
 							},
-						));
+						});
+						if let Some(completions::RequestMessage::Assistant(message)) = messages.last_mut()
+							&& let Some(tool_calls) = &mut message.tool_calls
+						{
+							tool_calls.push(tool_call);
+						} else {
+							messages.push(completions::RequestMessage::Assistant(
+								completions::RequestAssistantMessage {
+									tool_calls: Some(vec![tool_call]),
+									..Default::default()
+								},
+							));
+						}
 					},
 					Item::CustomToolCallOutput(output) => {
 						let text = match &output.output {
@@ -411,6 +442,7 @@ pub mod from_responses {
 			response_format,
 			stream: Some(stream),
 			model: req.model.clone(),
+			moderation: None,
 			temperature: req.temperature,
 			top_p: req.top_p,
 			max_completion_tokens: req.max_output_tokens,
@@ -444,7 +476,7 @@ pub mod to_responses {
 	use std::time::Instant;
 
 	use agent_core::strng;
-	use axum_core::body::Body;
+	use agent_http::Body;
 	use bytes::Bytes;
 	use rand::RngExt;
 	use types::completions::typed as completions;
@@ -454,17 +486,23 @@ pub mod to_responses {
 	use crate::types::ResponseType;
 	use crate::{AIError, StreamingUsageGuard, json, logged_response_parsing, parse, types};
 
+	type LoggedToolCall = (Option<String>, Option<String>, String);
+	type LoggedToolCalls = HashMap<u32, LoggedToolCall>;
+
 	/// Translate an OpenAI-compatible chat completions response into an OpenAI Responses response.
-	pub fn translate_response(bytes: &Bytes, model: &str) -> Result<Box<dyn ResponseType>, AIError> {
+	pub fn translate_response(
+		bytes: &Bytes,
+		model: &str,
+		namespaces: Option<&crate::conversion::namespace_tools::NamespaceToolMap>,
+	) -> Result<Box<dyn ResponseType>, AIError> {
 		let resp = serde_json::from_slice::<completions::Response>(bytes)
 			.map_err(logged_response_parsing(bytes))?;
-		let typed = translate_response_internal(resp, model);
-		let mut passthrough =
-			json::convert::<_, types::responses::Response>(&typed).map_err(AIError::ResponseParsing)?;
-		passthrough.rest = serde_json::Value::Object(serde_json::Map::new());
-		if let Some(usage) = passthrough.usage.as_mut() {
-			usage.rest = serde_json::Value::Object(serde_json::Map::new());
+		let mut typed = translate_response_internal(resp, model);
+		if let Some(namespaces) = namespaces {
+			namespaces.restore_response(&mut typed);
 		}
+		let passthrough =
+			json::convert::<_, types::responses::Response>(&typed).map_err(AIError::ResponseParsing)?;
 		Ok(Box::new(passthrough))
 	}
 
@@ -502,6 +540,7 @@ pub mod to_responses {
 									id: Some(f.id.clone()),
 									status: Some(responses::OutputStatus::Completed),
 									namespace: None,
+									r#async: None,
 								},
 							));
 						},
@@ -543,6 +582,7 @@ pub mod to_responses {
 			Some(completions::FinishReason::ContentFilter) => Some(responses::ErrorObject {
 				code: "content_filter".to_string(),
 				message: "Content filtered".to_string(),
+				misalignment: None,
 			}),
 			_ => None,
 		};
@@ -578,7 +618,13 @@ pub mod to_responses {
 		response
 	}
 
-	pub fn translate_stream(b: Body, buffer_limit: usize, log: StreamingUsageGuard) -> Body {
+	pub fn translate_stream(
+		b: Body,
+		buffer_limit: usize,
+		log: StreamingUsageGuard,
+		log_content: crate::LogContentFields,
+		namespaces: Option<std::sync::Arc<crate::conversion::namespace_tools::NamespaceToolMap>>,
+	) -> Body {
 		use responses::{
 			AssistantRole, FunctionToolCall, OutputContent, OutputItem, OutputMessage, OutputStatus,
 			OutputTextContent, ResponseContentPartAddedEvent, ResponseFunctionCallArgumentsDeltaEvent,
@@ -586,6 +632,7 @@ pub mod to_responses {
 		};
 
 		let mut saw_token = false;
+		let mut last_token_at: Option<Instant> = None;
 		let mut sent_created = false;
 		let mut sent_content_part = false;
 		let mut flushed = false;
@@ -593,10 +640,15 @@ pub mod to_responses {
 		let mut sequence_number: u64 = 0;
 		let response_id = format!("resp_{:016x}", rand::rng().random::<u64>());
 		let message_item_id = format!("msg_{:016x}", rand::rng().random::<u64>());
-		let model_holder: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
+		let mut response_builder: Option<types::responses::ResponseBuilder> = None;
 
 		let mut next_output_index: u32 = 1;
 		let mut tool_calls: HashMap<u32, (String, String, String, u32)> = HashMap::new();
+		let mut logged_tool_calls: Option<LoggedToolCalls> = log_content.tool_calls.then(HashMap::new);
+		let mut completion = log_content.completion.then(String::new);
+		// The full text, for `output_text.done` and the finished items: clients
+		// (the SDKs' `get_final_response()`) read those, not the deltas.
+		let mut text = String::new();
 		let mut pending_stop_reason: Option<completions::FinishReason> = None;
 		let mut pending_usage: Option<completions::Usage> = None;
 
@@ -607,9 +659,14 @@ pub mod to_responses {
 				let mut events: Vec<(&'static str, ResponseStreamEvent)> = Vec::new();
 
 				match evt {
+					SseJsonEvent::Eof | SseJsonEvent::Error => return events,
 					SseJsonEvent::Done => {
+						// Fall through to namespace restoration for the terminal events too.
 						if !flushed {
 							flushed = true;
+							let response_builder = response_builder.get_or_insert_with(|| {
+								types::responses::ResponseBuilder::new(response_id.clone(), String::new())
+							});
 							flush_end(
 								&mut events,
 								&mut sequence_number,
@@ -618,12 +675,13 @@ pub mod to_responses {
 								&mut pending_usage,
 								&message_item_id,
 								&sent_content_part,
+								&text,
 								&log,
-								&response_id,
-								&model_holder.borrow(),
+								response_builder,
+								&mut completion,
+								&mut logged_tool_calls,
 							);
 						}
-						return events;
 					},
 					SseJsonEvent::Data(Err(e)) => {
 						tracing::warn!(
@@ -635,13 +693,27 @@ pub mod to_responses {
 					SseJsonEvent::Data(Ok(chunk)) => {
 						if !sent_created {
 							sent_created = true;
-							*model_holder.borrow_mut() = chunk.model.clone();
-
-							let response_builder =
-								types::responses::ResponseBuilder::new(response_id.clone(), chunk.model.clone());
+							let response_builder = response_builder.insert(
+								types::responses::ResponseBuilder::new(response_id.clone(), chunk.model.clone()),
+							);
 
 							sequence_number += 1;
 							events.push(("event", response_builder.created_event(sequence_number)));
+
+							// `response.in_progress` follows `response.created` in the API's event order.
+							sequence_number += 1;
+							events.push((
+								"event",
+								ResponseStreamEvent::ResponseInProgress(responses::ResponseInProgressEvent {
+									sequence_number,
+									response: response_builder.response(
+										responses::Status::InProgress,
+										None,
+										None,
+										None,
+									),
+								}),
+							));
 
 							sequence_number += 1;
 							events.push((
@@ -673,6 +745,10 @@ pub mod to_responses {
 
 						if let Some(choice) = chunk.choices.first() {
 							if let Some(content) = &choice.delta.content {
+								if let Some(completion) = completion.as_mut() {
+									completion.push_str(content);
+								}
+								text.push_str(content);
 								if !sent_content_part {
 									sent_content_part = true;
 									sequence_number += 1;
@@ -692,11 +768,18 @@ pub mod to_responses {
 									));
 								}
 
-								if !saw_token {
-									saw_token = true;
-									log.update(|r| {
-										r.response.first_token = Some(Instant::now());
-									});
+								{
+									let now = Instant::now();
+									if !saw_token {
+										saw_token = true;
+										last_token_at = Some(now);
+										log.update(|r| {
+											r.response.first_token = Some(now);
+										});
+									} else if let Some(prev) = last_token_at.replace(now) {
+										let gap = now.duration_since(prev);
+										log.update(|r| r.response.inter_chunk_latencies.record(gap));
+									}
 								}
 
 								sequence_number += 1;
@@ -716,6 +799,20 @@ pub mod to_responses {
 							if let Some(tcs) = &choice.delta.tool_calls {
 								for tc in tcs {
 									let tool_index = tc.index;
+									if let Some(logged_tool_calls) = logged_tool_calls.as_mut() {
+										let logged_entry = logged_tool_calls.entry(tool_index).or_default();
+										if let Some(id) = &tc.id {
+											logged_entry.0 = Some(id.clone());
+										}
+										if let Some(function) = &tc.function {
+											if let Some(name) = &function.name {
+												logged_entry.1 = Some(name.clone());
+											}
+											if let Some(args) = &function.arguments {
+												logged_entry.2.push_str(args);
+											}
+										}
+									}
 
 									let is_new = !tool_calls.contains_key(&tool_index);
 
@@ -736,11 +833,16 @@ pub mod to_responses {
 									}
 
 									if is_new {
+										let now = Instant::now();
 										if !saw_token {
 											saw_token = true;
+											last_token_at = Some(now);
 											log.update(|r| {
-												r.response.first_token = Some(Instant::now());
+												r.response.first_token = Some(now);
 											});
+										} else if let Some(prev) = last_token_at.replace(now) {
+											let gap = now.duration_since(prev);
+											log.update(|r| r.response.inter_chunk_latencies.record(gap));
 										}
 
 										sequence_number += 1;
@@ -757,6 +859,7 @@ pub mod to_responses {
 													caller: None,
 													id: Some(entry.0.clone()),
 													status: Some(OutputStatus::InProgress),
+													r#async: None,
 												}),
 											}),
 										));
@@ -789,6 +892,9 @@ pub mod to_responses {
 
 						if !flushed && pending_stop_reason.is_some() && pending_usage.is_some() {
 							flushed = true;
+							let response_builder = response_builder
+								.as_ref()
+								.expect("response builder is set after the first chunk");
 							flush_end(
 								&mut events,
 								&mut sequence_number,
@@ -797,14 +903,21 @@ pub mod to_responses {
 								&mut pending_usage,
 								&message_item_id,
 								&sent_content_part,
+								&text,
 								&log,
-								&response_id,
-								&model_holder.borrow(),
+								response_builder,
+								&mut completion,
+								&mut logged_tool_calls,
 							);
 						}
 					},
 				}
 
+				if let Some(namespaces) = &namespaces {
+					for (_, event) in &mut events {
+						namespaces.restore_event(event);
+					}
+				}
 				events
 			},
 		)
@@ -826,19 +939,53 @@ pub mod to_responses {
 		pending_usage: &mut Option<completions::Usage>,
 		message_item_id: &str,
 		sent_content_part: &bool,
+		text: &str,
 		log: &StreamingUsageGuard,
-		response_id: &str,
-		model: &str,
+		response_builder: &types::responses::ResponseBuilder,
+		completion: &mut Option<String>,
+		logged_tool_calls: &mut Option<LoggedToolCalls>,
 	) {
 		use responses::{
 			AssistantRole, ErrorObject, FunctionToolCall, IncompleteDetails, InputTokenDetails,
-			OutputContent, OutputItem, OutputMessage, OutputStatus, OutputTextContent,
-			OutputTokenDetails, ResponseContentPartDoneEvent, ResponseFunctionCallArgumentsDoneEvent,
-			ResponseOutputItemDoneEvent, ResponseStreamEvent, ResponseUsage,
+			OutputContent, OutputItem, OutputMessage, OutputMessageContent, OutputStatus,
+			OutputTextContent, OutputTokenDetails, ResponseContentPartDoneEvent,
+			ResponseFunctionCallArgumentsDoneEvent, ResponseOutputItemDoneEvent, ResponseStreamEvent,
+			ResponseTextDoneEvent, ResponseUsage,
 		};
 
 		let stop_reason = pending_stop_reason.take();
 		let usage = pending_usage.take();
+		let response_status = match stop_reason.as_ref() {
+			Some(completions::FinishReason::Stop)
+			| Some(completions::FinishReason::ToolCalls)
+			| Some(completions::FinishReason::FunctionCall)
+			| None => responses::Status::Completed,
+			Some(completions::FinishReason::Length) => responses::Status::Incomplete,
+			Some(completions::FinishReason::ContentFilter) => responses::Status::Failed,
+		};
+		let finish_reason = crate::types::serialize_str(&response_status);
+		let tool_parts = logged_tool_calls.as_mut().and_then(|logged_tool_calls| {
+			crate::conversion::completions::finalize_streaming_tool_calls(
+				logged_tool_calls
+					.drain()
+					.map(|(idx, (id, name, arguments))| (idx, id, name, arguments)),
+			)
+		});
+		let mut tool_parts = tool_parts;
+		let mut finish_reason = finish_reason;
+		log.update(|r| {
+			if let Some(completion) = completion.take() {
+				r.response.completion = Some(vec![completion]);
+			}
+			crate::conversion::completions::build_output_messages(
+				&mut r.response,
+				tool_parts.take(),
+				finish_reason.take(),
+			);
+		});
+
+		// Finished items, in output order — what `response.completed` carries.
+		let mut output: Vec<OutputItem> = Vec::new();
 
 		let mut sorted_tools: Vec<_> = tool_calls.drain().collect();
 		sorted_tools.sort_by_key(|(_, (_, _, _, output_index))| *output_index);
@@ -858,26 +1005,42 @@ pub mod to_responses {
 				),
 			));
 
+			let item = OutputItem::FunctionCall(FunctionToolCall {
+				arguments: buffer,
+				call_id: item_id.clone(),
+				namespace: None,
+				name,
+				caller: None,
+				id: Some(item_id),
+				status: Some(OutputStatus::Completed),
+				r#async: None,
+			});
 			*sequence_number += 1;
 			events.push((
 				"event",
 				ResponseStreamEvent::ResponseOutputItemDone(ResponseOutputItemDoneEvent {
 					sequence_number: *sequence_number,
 					output_index,
-					item: OutputItem::FunctionCall(FunctionToolCall {
-						arguments: buffer,
-						call_id: item_id.clone(),
-						namespace: None,
-						name,
-						caller: None,
-						id: Some(item_id),
-						status: Some(OutputStatus::Completed),
-					}),
+					item: item.clone(),
 				}),
 			));
+			output.push(item);
 		}
 
+		let mut content = Vec::new();
 		if *sent_content_part {
+			*sequence_number += 1;
+			events.push((
+				"event",
+				ResponseStreamEvent::ResponseOutputTextDone(ResponseTextDoneEvent {
+					sequence_number: *sequence_number,
+					item_id: message_item_id.to_string(),
+					output_index: 0,
+					content_index: 0,
+					text: text.to_string(),
+					logprobs: None,
+				}),
+			));
 			*sequence_number += 1;
 			events.push((
 				"event",
@@ -889,27 +1052,34 @@ pub mod to_responses {
 					part: OutputContent::OutputText(OutputTextContent {
 						annotations: Vec::new(),
 						logprobs: None,
-						text: String::new(),
+						text: text.to_string(),
 					}),
 				}),
 			));
+			content.push(OutputMessageContent::OutputText(OutputTextContent {
+				annotations: Vec::new(),
+				logprobs: None,
+				text: text.to_string(),
+			}));
 		}
 
+		let message = OutputItem::Message(OutputMessage {
+			content,
+			id: message_item_id.to_string(),
+			role: AssistantRole::Assistant,
+			phase: None,
+			status: OutputStatus::Completed,
+		});
 		*sequence_number += 1;
 		events.push((
 			"event",
 			ResponseStreamEvent::ResponseOutputItemDone(ResponseOutputItemDoneEvent {
 				sequence_number: *sequence_number,
 				output_index: 0,
-				item: OutputItem::Message(OutputMessage {
-					content: Vec::new(),
-					id: message_item_id.to_string(),
-					role: AssistantRole::Assistant,
-					phase: None,
-					status: OutputStatus::Completed,
-				}),
+				item: message.clone(),
 			}),
 		));
+		output.insert(0, message);
 
 		if let Some(ref u) = usage {
 			log.update(|r| {
@@ -958,11 +1128,8 @@ pub mod to_responses {
 			},
 		});
 
-		let response_builder =
-			types::responses::ResponseBuilder::new(response_id.to_string(), model.to_string());
-
 		*sequence_number += 1;
-		let done_event = match stop_reason {
+		let mut done_event = match stop_reason {
 			Some(completions::FinishReason::Stop)
 			| Some(completions::FinishReason::ToolCalls)
 			| Some(completions::FinishReason::FunctionCall)
@@ -980,9 +1147,17 @@ pub mod to_responses {
 				ErrorObject {
 					code: "content_filter".to_string(),
 					message: "Content filtered".to_string(),
+					misalignment: None,
 				},
 			),
 		};
+
+		match &mut done_event {
+			ResponseStreamEvent::ResponseCompleted(e) => e.response.output = output,
+			ResponseStreamEvent::ResponseIncomplete(e) => e.response.output = output,
+			ResponseStreamEvent::ResponseFailed(e) => e.response.output = output,
+			_ => {},
+		}
 
 		events.push(("event", done_event));
 	}

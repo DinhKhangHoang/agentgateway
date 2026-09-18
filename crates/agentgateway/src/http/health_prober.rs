@@ -319,6 +319,8 @@ async fn dispatch_probe(
             provider.path_override.as_deref(),
             provider.path_prefix.as_deref(),
             provider.host_override.is_some(),
+            None,
+            None,
         )
         .map_err(|e| anyhow::anyhow!("probe setup_request: {e}"))?;
 
@@ -382,7 +384,7 @@ async fn dispatch_probe(
     let call = crate::client::Call {
         req,
         target,
-        transport,
+        connection: transport.into(),
     };
 
     let resp = match tokio::time::timeout(timeout, inputs.upstream.call(call)).await {

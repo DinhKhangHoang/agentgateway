@@ -26,11 +26,16 @@ use crate::rt::{TokioExecutor, TokioIo, TokioTimer};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct TestKey {
 	authority: http::uri::Authority,
+	connect_timeout: Option<Duration>,
 }
 
 impl Key for TestKey {
 	fn expected_capacity(&self) -> ExpectedCapacity {
 		ExpectedCapacity::Http2
+	}
+
+	fn connect_timeout(&self) -> Option<Duration> {
+		self.connect_timeout
 	}
 }
 
@@ -51,6 +56,29 @@ impl Service<http::Extensions> for TestConnector {
 	fn call(&mut self, _req: http::Extensions) -> Self::Future {
 		let addr = self.addr;
 		Box::pin(async move { TcpStream::connect(addr).await.map(TokioIo::new) })
+	}
+}
+
+#[derive(Clone)]
+struct StallOnceConnector {
+	inner: TestConnector,
+	attempts: Arc<AtomicUsize>,
+}
+
+impl Service<http::Extensions> for StallOnceConnector {
+	type Response = TokioIo<TcpStream>;
+	type Error = io::Error;
+	type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+	fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+		Poll::Ready(Ok(()))
+	}
+
+	fn call(&mut self, req: http::Extensions) -> Self::Future {
+		if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+			return Box::pin(std::future::pending());
+		}
+		self.inner.call(req)
 	}
 }
 
@@ -229,6 +257,7 @@ async fn h2_stream_capacity_must_follow_request_body_lifetime() {
 	let uri: Uri = format!("http://{}/hold", server.addr).parse().expect("uri");
 	let key = TestKey {
 		authority: uri.authority().expect("authority").clone(),
+		connect_timeout: None,
 	};
 
 	let client = build_client(server.addr);
@@ -299,6 +328,7 @@ async fn empty_request_and_response_reuse_single_h2_connection() {
 		.expect("uri");
 	let key = TestKey {
 		authority: uri.authority().expect("authority").clone(),
+		connect_timeout: None,
 	};
 	let client = build_client(server.addr);
 
@@ -339,6 +369,7 @@ async fn h2_response_body_lifetime_must_hold_capacity() {
 		.expect("uri");
 	let key = TestKey {
 		authority: hold_uri.authority().expect("authority").clone(),
+		connect_timeout: None,
 	};
 	let client = build_client(server.addr);
 
@@ -409,6 +440,7 @@ async fn released_response_bodies_allow_reuse_without_new_connection() {
 		.expect("uri");
 	let key = TestKey {
 		authority: hold_uri.authority().expect("authority").clone(),
+		connect_timeout: None,
 	};
 	let client = build_client(server.addr);
 
@@ -463,6 +495,55 @@ async fn released_response_bodies_allow_reuse_without_new_connection() {
 		1,
 		"released response bodies should let the client reuse the original h2 connection",
 	);
+
+	server.shutdown().await;
+}
+
+#[tokio::test]
+async fn connection_timeout_releases_pool_capacity() {
+	let (server, _response_txs) = TestServer::spawn(1, 0).await;
+	let uri: Uri = format!("http://{}/", server.addr).parse().expect("uri");
+	let key = TestKey {
+		authority: uri.authority().expect("authority").clone(),
+		connect_timeout: Some(Duration::from_millis(100)),
+	};
+	let mut builder = Client::<(), TestKey>::builder(TokioExecutor::new());
+	builder.pool_timer(TokioTimer::new());
+	builder.pool_expected_http2_capacity(1);
+	builder.connect_timeout(Duration::from_secs(10));
+	let attempts = Arc::new(AtomicUsize::new(0));
+	let client: Client<_, TestKey> = builder.build(StallOnceConnector {
+		inner: TestConnector { addr: server.addr },
+		attempts: attempts.clone(),
+	});
+
+	let err = tokio::time::timeout(
+		Duration::from_secs(1),
+		client.request(make_h2_request(
+			&uri,
+			&key,
+			axum_core::body::Body::new(Empty::<Bytes>::new()),
+		)),
+	)
+	.await
+	.expect("connection timeout did not fire")
+	.expect_err("stalled handshake unexpectedly succeeded");
+	assert!(err.is_connect_timeout(), "unexpected error: {err:?}");
+
+	let response = tokio::time::timeout(
+		Duration::from_secs(1),
+		client.request(make_h2_request(
+			&uri,
+			&key,
+			axum_core::body::Body::new(Empty::<Bytes>::new()),
+		)),
+	)
+	.await
+	.expect("recovery request timed out")
+	.expect("recovery request failed");
+	assert_eq!(response.status(), 200);
+	server.wait_for_accepted(1).await;
+	assert_eq!(attempts.load(Ordering::SeqCst), 2);
 
 	server.shutdown().await;
 }

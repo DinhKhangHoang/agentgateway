@@ -37,6 +37,7 @@ impl StateManager {
 		config_metrics: Arc<agent_xds::Metrics>,
 		awaiting_ready: tokio::sync::watch::Sender<()>,
 		config_resource_store: Option<config_store::ConfigResourceStore>,
+		model_catalog: Arc<crate::llm::catalog::ModelCatalog>,
 	) -> anyhow::Result<Self> {
 		let xds = &config.xds;
 		let stores = Stores::new_with_dynamic_ca_cert_cache(
@@ -46,12 +47,22 @@ impl StateManager {
 		);
 		let resource_manager = crate::resource_manager::ResourceManager::new(client.clone())?;
 		let xds_client = if let Some(addr) = &xds.address {
+			let headers = xds
+				.headers
+				.iter()
+				.map(|(name, value)| {
+					Ok((
+						name.parse::<::http::header::HeaderName>()?,
+						value.parse::<::http::HeaderValue>()?,
+					))
+				})
+				.collect::<anyhow::Result<Vec<_>>>()?;
 			let connector = control::grpc_connector(
 				client.clone(),
 				addr.clone(),
 				xds.auth.clone(),
 				xds.ca_cert.clone(),
-				vec![],
+				headers,
 			)
 			.await?;
 			Some(
@@ -74,6 +85,7 @@ impl StateManager {
 				stores: stores.clone(),
 				cfg: cfg.clone(),
 				config_resource_store: config_resource_store.clone(),
+				model_catalog,
 				client,
 				resource_manager: resource_manager.clone(),
 				gateway: ListenerTarget {
@@ -115,6 +127,7 @@ pub struct LocalClient {
 	config: Arc<crate::Config>,
 	pub cfg: ConfigSource,
 	pub config_resource_store: Option<config_store::ConfigResourceStore>,
+	pub model_catalog: Arc<crate::llm::catalog::ModelCatalog>,
 	pub stores: Stores,
 	pub client: Client,
 	pub resource_manager: crate::resource_manager::ResourceManager,
@@ -242,10 +255,20 @@ impl LocalClient {
 			config_content.as_str(),
 		)
 		.await?;
+		let model_catalog = config
+			.model_catalog
+			.unwrap_or_else(|| self.config.model_catalog.sources.clone());
+		self.model_catalog.replace_sources(model_catalog).await?;
+		self
+			.config
+			.logging
+			.database_fields
+			.store(config.standard_attributes);
 		info!("loaded config from {:?}", self.cfg);
 
-		// Sync the state
-		let next_binds = self.stores.binds.sync_local(
+		// Sync binds first, but always run discovery sync even when a new bind cannot open.
+		// Propagating bind errors before discovery sync would skip workload/service state.
+		let bind_result = self.stores.binds.sync_local(
 			config.binds,
 			config.listener_routes,
 			config.listener_tcp_routes,
@@ -259,6 +282,11 @@ impl LocalClient {
 				.stores
 				.discovery
 				.sync_local(config.services, config.workloads, prev.discovery)?;
+		let next_binds = bind_result?;
+		self
+			.config
+			.budget_policy
+			.apply_registration(config.budget_registration)?;
 
 		Ok(PreviousState {
 			binds: next_binds,
@@ -441,6 +469,17 @@ mod tests {
 	fn local_config(remove_field: &str) -> String {
 		format!(
 			r#"
+config:
+  standardAttributes:
+    user: '"{remove_field}"'
+  modelCatalog:
+  - inline:
+      providers:
+        custom:
+          models:
+            {remove_field}:
+              rates:
+                input: "1"
 frontendPolicies:
   accessLog:
     remove:
@@ -487,6 +526,24 @@ frontendPolicies:
 		})
 		.await
 		.unwrap_or_else(|_| panic!("timed out waiting for access log remove {remove_field}"));
+	}
+
+	async fn wait_for_catalog_model(catalog: &crate::llm::catalog::ModelCatalog, model: &str) {
+		tokio::time::timeout(Duration::from_secs(5), async {
+			loop {
+				if catalog
+					.list_models()
+					.providers
+					.iter()
+					.any(|provider| provider.models.iter().any(|candidate| candidate == model))
+				{
+					return;
+				}
+				tokio::time::sleep(Duration::from_millis(10)).await;
+			}
+		})
+		.await
+		.unwrap_or_else(|_| panic!("timed out waiting for catalog model {model}"));
 	}
 
 	#[tokio::test]
@@ -560,10 +617,12 @@ frontendPolicies:
 		let metrics = Arc::new(agent_xds::Metrics::new(&mut registry));
 		let client = test_client();
 		let resource_manager = crate::resource_manager::ResourceManager::new(client.clone()).unwrap();
+		let model_catalog = crate::llm::catalog::ModelCatalog::empty();
 		let local_client = LocalClient {
 			config: config.clone(),
 			cfg: ConfigSource::File(path.clone()),
 			config_resource_store: None,
+			model_catalog: model_catalog.clone(),
 			stores: stores.clone(),
 			client,
 			resource_manager,
@@ -571,23 +630,62 @@ frontendPolicies:
 			metrics,
 		};
 
-		local_client.run().await.unwrap();
+		local_client.clone().run().await.unwrap();
 		wait_for_access_log_remove(&config, &stores, "first").await;
+		wait_for_catalog_model(&model_catalog, "first").await;
+		let first_attributes = config.logging.database_fields.load_full();
 
 		fs_err::tokio::write(&path, local_config("ready"))
 			.await
 			.unwrap();
 		wait_for_access_log_remove(&config, &stores, "ready").await;
+		wait_for_catalog_model(&model_catalog, "ready").await;
 
 		replace_config(&path, "second").await;
 		wait_for_access_log_remove(&config, &stores, "second").await;
+		wait_for_catalog_model(&model_catalog, "second").await;
 
 		fs_err::tokio::write(&path, local_config("ready-again"))
 			.await
 			.unwrap();
 		wait_for_access_log_remove(&config, &stores, "ready-again").await;
+		wait_for_catalog_model(&model_catalog, "ready-again").await;
 
 		replace_config(&path, "third").await;
 		wait_for_access_log_remove(&config, &stores, "third").await;
+		wait_for_catalog_model(&model_catalog, "third").await;
+		let current_attributes = config.logging.database_fields.load_full();
+		let request = crate::http::Request::new(crate::http::Body::empty());
+		let exec = crate::cel::Executor::new_request(&request);
+		for (snapshot, expected) in [(&first_attributes, "first"), (&current_attributes, "third")] {
+			let expression = snapshot
+				.add
+				.iter()
+				.find(|(name, _)| name.as_ref() == "agentgateway.user")
+				.unwrap()
+				.1;
+			assert_eq!(
+				exec.eval(expression).unwrap().as_string().unwrap(),
+				expected
+			);
+		}
+
+		// Reject invalid expressions without publishing a partial attribute update.
+		let invalid = local_config("invalid").replace("'\"invalid\"'", "'('");
+		fs_err::tokio::write(&path, invalid).await.unwrap();
+		assert!(
+			local_client
+				.reload_config(PreviousState::default())
+				.await
+				.is_err()
+		);
+		let retained = config.logging.database_fields.load_full();
+		let expression = retained
+			.add
+			.iter()
+			.find(|(name, _)| name.as_ref() == "agentgateway.user")
+			.unwrap()
+			.1;
+		assert_eq!(exec.eval(expression).unwrap().as_string().unwrap(), "third");
 	}
 }

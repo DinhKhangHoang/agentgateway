@@ -113,21 +113,19 @@ fn detect_encoding(ce: &ContentEncoding) -> EncodingDecision {
 /// Use this for streaming responses (SSE, large files) where you can't buffer the entire body.
 /// If encoding is None or identity, returns the body unchanged.
 /// If encoding is unsupported or multi-encoded, returns an error.
-pub fn decompress_body<B>(
-	body: B,
+pub fn decompress_body(
+	mut body: crate::http::Body,
 	encoding: Option<&ContentEncoding>,
-) -> Result<(axum_core::body::Body, Option<&'static str>), Error>
-where
-	B: Body<Data = Bytes> + Send + Unpin + 'static,
-	B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-{
+) -> Result<(crate::http::Body, Option<&'static str>), Error> {
 	match encoding {
-		None => Ok((axum_core::body::Body::new(body), None)),
+		None => Ok((body, None)),
 		Some(ce) => match detect_encoding(ce) {
 			EncodingDecision::Single(enc) => {
-				decompress_body_with_encoding(body, enc).map(|b| (b, Some(enc)))
+				let decoded = decompress_body_with_encoding(body.take_content(), enc)?;
+				body.replace_content(decoded.into());
+				Ok((body, Some(enc)))
 			},
-			EncodingDecision::None => Ok((axum_core::body::Body::new(body), None)),
+			EncodingDecision::None => Ok((body, None)),
 			EncodingDecision::Multiple | EncodingDecision::Unsupported => Err(Error::UnsupportedEncoding),
 		},
 	}
@@ -156,18 +154,20 @@ where
 }
 
 pub async fn to_bytes_with_decompression(
-	body: axum_core::body::Body,
+	body: crate::http::Body,
 	encoding: Option<&ContentEncoding>,
 	limit: usize,
 ) -> Result<(Option<&'static str>, Bytes), Error> {
 	match encoding {
 		None => {
 			// No encoding - use optimized direct body read
-			Ok((None, read_body_with_limit(body, limit).await?))
+			Ok((None, body.into_bytes(limit).await.map_err(map_body_error)?))
 		},
 		Some(ce) => match detect_encoding(ce) {
-			EncodingDecision::Single(enc) => Ok((Some(enc), decode_body(body, enc, limit).await?)),
-			EncodingDecision::None => Ok((None, read_body_with_limit(body, limit).await?)),
+			EncodingDecision::Single(enc) => {
+				Ok((Some(enc), decode_body(body.into_boxed(), enc, limit).await?))
+			},
+			EncodingDecision::None => Ok((None, body.into_bytes(limit).await.map_err(map_body_error)?)),
 			EncodingDecision::Multiple | EncodingDecision::Unsupported => Err(Error::UnsupportedEncoding),
 		},
 	}
@@ -188,6 +188,31 @@ pub async fn encode_body(body: &[u8], encoding: &str) -> Result<Bytes, axum_core
 	read_to_bytes(encoder, body.len() / 2)
 		.await
 		.map_err(Into::into)
+}
+
+/// Compress a body as it is sent instead of buffering it again.
+///
+/// Buffered LLM responses use this at the final response boundary: policies need plaintext while
+/// evaluating and replacing `response.body`, but the selected upstream encoding must be restored
+/// after those policies have finished.
+pub fn encode_body_stream(
+	body: axum_core::body::Body,
+	encoding: &str,
+) -> Result<axum_core::body::Body, Error> {
+	let byte_stream = TryStreamExt::map_err(body.into_data_stream(), std::io::Error::other);
+	let stream_reader = BufReader::new(StreamReader::new(byte_stream));
+
+	let encoder: Box<dyn AsyncRead + Unpin + Send> = match encoding {
+		GZIP => Box::new(GzipEncoder::new(stream_reader)),
+		DEFLATE => Box::new(ZlibEncoder::new(stream_reader)),
+		BR => Box::new(BrotliEncoder::new(stream_reader)),
+		ZSTD => Box::new(ZstdEncoder::new(stream_reader)),
+		_ => return Err(Error::UnsupportedEncoding),
+	};
+
+	Ok(axum_core::body::Body::from_stream(ReaderStream::new(
+		encoder,
+	)))
 }
 
 async fn decode_body<B>(body: B, encoding: &str, limit: usize) -> Result<Bytes, Error>
@@ -215,7 +240,7 @@ where
 }
 
 async fn read_body_with_limit(body: axum_core::body::Body, limit: usize) -> Result<Bytes, Error> {
-	crate::http::read_body_with_limit(body, limit)
+	axum::body::to_bytes(body, limit)
 		.await
 		.map_err(map_body_error)
 }

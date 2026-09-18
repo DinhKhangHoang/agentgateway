@@ -1,5 +1,4 @@
 use axum::http::StatusCode;
-use axum::response::Response;
 use axum_core::response::IntoResponse;
 use bytes::Bytes;
 use http::Method;
@@ -82,14 +81,18 @@ pub(crate) async fn handle_mcp_request(
 					warn!("client_registration error: {}", e);
 					StatusCode::INTERNAL_SERVER_ERROR
 				})
-				.into_response(),
+				.into_response()
+				.map(Body::new),
 		)),
 		path
 			if path == "/.well-known/oauth-protected-resource"
 				|| path.starts_with("/.well-known/oauth-protected-resource/") =>
 		{
 			Ok(Some(
-				protected_resource_metadata(req, auth).await.into_response(),
+				protected_resource_metadata(req, auth)
+					.await
+					.into_response()
+					.map(Body::new),
 			))
 		},
 		// Entra rejects the RFC 8707 `resource` parameter (AADSTS9010010), so the gateway
@@ -106,7 +109,8 @@ pub(crate) async fn handle_mcp_request(
 						warn!("entra authorize error: {}", e);
 						StatusCode::INTERNAL_SERVER_ERROR
 					})
-					.into_response(),
+					.into_response()
+					.map(Body::new),
 			))
 		},
 		path
@@ -121,7 +125,8 @@ pub(crate) async fn handle_mcp_request(
 						warn!("entra token error: {}", e);
 						StatusCode::INTERNAL_SERVER_ERROR
 					})
-					.into_response(),
+					.into_response()
+					.map(Body::new),
 			))
 		},
 		path
@@ -135,7 +140,8 @@ pub(crate) async fn handle_mcp_request(
 						warn!("authorization_server_metadata error: {}", e);
 						StatusCode::INTERNAL_SERVER_ERROR
 					})
-					.into_response(),
+					.into_response()
+					.map(Body::new),
 			))
 		},
 		_ => {
@@ -197,13 +203,13 @@ pub(super) async fn protected_resource_metadata(
 		.header("access-control-allow-origin", "*")
 		.header("access-control-allow-methods", "GET, OPTIONS")
 		.header("access-control-allow-headers", "content-type")
-		.body(axum::body::Body::from(Bytes::from(
+		.body(Body::from(Bytes::from(
 			serde_json::to_string(&json_body).unwrap_or_default(),
 		)))
 		.unwrap_or_else(|_| {
 			::http::Response::builder()
 				.status(StatusCode::INTERNAL_SERVER_ERROR)
-				.body(axum::body::Body::empty())
+				.body(Body::empty())
 				.unwrap()
 		})
 }
@@ -231,6 +237,52 @@ fn strip_oauth_protected_resource_prefix(req: &Request) -> String {
 		// If the prefix is not found, return the original URI
 		uri.to_string()
 	}
+}
+
+fn issuer_from_authorization_server_metadata_request(req: &Request) -> Option<String> {
+	const OAUTH_PREFIX: &str = "/.well-known/oauth-authorization-server";
+	let external_uri = request_uri_for_oauth_metadata(req);
+	let issuer_path = issuer_path_from_metadata_path(external_uri.path(), OAUTH_PREFIX)
+		.or_else(|| issuer_path_from_metadata_path(req.uri().path(), OAUTH_PREFIX))?
+		.to_string();
+	Some(uri_with_path(external_uri, &issuer_path))
+}
+
+fn rewrite_authorization_server_issuer(
+	req: &Request,
+	auth: &McpAuthentication,
+	metadata: &mut serde_json::Value,
+) -> Result<(), ProxyError> {
+	if auth.provider.is_none() {
+		// Without a provider adapter, authorization server metadata should keep advertising the
+		// upstream IdP issuer (auth.issuer) rather than presenting the gateway as the
+		// authorization server issuer.
+		return Ok(());
+	}
+	let Some(issuer) = issuer_from_authorization_server_metadata_request(req) else {
+		return Ok(());
+	};
+	let Some(metadata) = metadata.as_object_mut() else {
+		return Err(ProxyError::ProcessingString(
+			"authorization server metadata must be a JSON object".to_string(),
+		));
+	};
+	metadata.insert("issuer".to_string(), serde_json::Value::String(issuer));
+	Ok(())
+}
+
+fn issuer_path_from_metadata_path<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+	if let Some(remaining_path) = path.strip_prefix(prefix)
+		&& (remaining_path.is_empty() || remaining_path.starts_with('/'))
+	{
+		return Some(remaining_path);
+	}
+
+	// Older MCP clients append the well-known suffix to the resource path instead of using
+	// RFC 8414's insertion-before-path form.
+	path
+		.strip_suffix(prefix)
+		.or_else(|| path.strip_suffix(&format!("{prefix}/")))
 }
 
 fn uri_with_path(uri: Uri, path: &str) -> String {
@@ -289,7 +341,7 @@ pub(super) async fn authorization_server_metadata(
 	};
 	let ureq = ::http::Request::builder()
 		.uri(metadata_uri)
-		.body(Body::empty())?;
+		.body(crate::http::Body::empty())?;
 	let upstream = client
 		.with_outbound(OutboundCallKind::Policy, OutboundCallSubtype::Oidc)
 		.simple_call(ureq)
@@ -422,13 +474,15 @@ pub(super) async fn authorization_server_metadata(
 		_ => {},
 	}
 
+	rewrite_authorization_server_issuer(req, auth, &mut resp)?;
+
 	let response = ::http::Response::builder()
 		.status(StatusCode::OK)
 		.header("content-type", "application/json")
 		.header("access-control-allow-origin", "*")
 		.header("access-control-allow-methods", "GET, OPTIONS")
 		.header("access-control-allow-headers", "content-type")
-		.body(axum::body::Body::from(Bytes::from(
+		.body(Body::from(Bytes::from(
 			serde_json::to_string(&resp).map_err(|e| ProxyError::Body(crate::http::Error::new(e)))?,
 		)))?;
 
@@ -446,7 +500,6 @@ pub(super) async fn client_registration(
 
 	// Normalize issuer URL by removing trailing slashes to avoid double-slash in path
 	let issuer = auth.issuer.trim_end_matches('/');
-	let body = std::mem::take(req.body_mut());
 	let registration_uri = match &auth.provider {
 		Some(McpIDP::Entra {}) => {
 			// Entra has no Dynamic Client Registration endpoint to proxy to; registration only
@@ -500,7 +553,7 @@ pub(super) async fn client_registration(
 	let ureq = ::http::Request::builder()
 		.uri(registration_uri)
 		.method(Method::POST)
-		.body(body)?;
+		.body(std::mem::take(req.body_mut()))?;
 
 	let mut upstream = client
 		.with_outbound(OutboundCallKind::Policy, OutboundCallSubtype::Oidc)
@@ -546,10 +599,10 @@ pub(super) fn entra_authorize(
 	)
 	.map_err(|e| ProxyError::ProcessingString(e.to_string()))?;
 	Ok(
-		Response::builder()
+		::http::Response::builder()
 			.status(StatusCode::FOUND)
 			.header(::http::header::LOCATION, location.to_string())
-			.body(axum::body::Body::empty())?,
+			.body(Body::empty())?,
 	)
 }
 
@@ -571,10 +624,10 @@ pub(super) async fn entra_token(
 	// CORS (including preflight) is the responsibility of the route's cors policy.
 	if req.method() != Method::POST {
 		return Ok(
-			Response::builder()
+			::http::Response::builder()
 				.status(StatusCode::METHOD_NOT_ALLOWED)
 				.header(::http::header::ALLOW, "POST")
-				.body(axum::body::Body::empty())?,
+				.body(Body::empty())?,
 		);
 	}
 
@@ -699,10 +752,10 @@ async fn build_mock_dcr_response(
 		serde_json::to_vec(&response_json).map_err(|e| ProxyError::ProcessingString(e.to_string()))?,
 	);
 	Ok(
-		Response::builder()
+		::http::Response::builder()
 			.status(::http::StatusCode::CREATED)
 			.header(::http::header::CONTENT_TYPE, "application/json")
-			.body(body_bytes.into())?,
+			.body(Body::from(body_bytes))?,
 	)
 }
 
@@ -724,6 +777,136 @@ mod tests {
 			request_uri_for_oauth_metadata(&req).to_string(),
 			"https://example.com/.well-known/oauth-protected-resource/mcp"
 		);
+	}
+
+	#[rstest::rstest]
+	#[case::root(
+		"https://gateway.example.com/.well-known/oauth-authorization-server",
+		"https://gateway.example.com"
+	)]
+	#[case::path(
+		"https://gateway.example.com/.well-known/oauth-authorization-server/example/mcp",
+		"https://gateway.example.com/example/mcp"
+	)]
+	#[case::explicit_port_and_encoded_path(
+		"https://gateway.example.com:8443/.well-known/oauth-authorization-server/tenant%2Fname",
+		"https://gateway.example.com:8443/tenant%2Fname"
+	)]
+	#[case::trailing_slash(
+		"https://gateway.example.com/.well-known/oauth-authorization-server/",
+		"https://gateway.example.com/"
+	)]
+	fn authorization_server_issuer_matches_metadata_request(
+		#[case] metadata_uri: &'static str,
+		#[case] expected: &str,
+	) {
+		let req = ::http::Request::builder()
+			.uri(metadata_uri)
+			.body(Body::empty())
+			.expect("request should build");
+
+		assert_eq!(
+			issuer_from_authorization_server_metadata_request(&req)
+				.expect("metadata request should have an issuer"),
+			expected
+		);
+	}
+
+	#[test]
+	fn authorization_server_issuer_uses_forwarded_scheme() {
+		let req = ::http::Request::builder()
+			.uri("http://gateway.example.com/.well-known/oauth-authorization-server/example/mcp")
+			.header("x-forwarded-proto", "https")
+			.body(Body::empty())
+			.expect("request should build");
+
+		assert_eq!(
+			issuer_from_authorization_server_metadata_request(&req)
+				.expect("metadata request should have an issuer"),
+			"https://gateway.example.com/example/mcp"
+		);
+	}
+
+	#[test]
+	fn authorization_server_issuer_ignores_unexpected_path() {
+		let req = ::http::Request::builder()
+			.uri("https://gateway.example.com/example/mcp")
+			.body(Body::empty())
+			.expect("request should build");
+
+		assert!(issuer_from_authorization_server_metadata_request(&req).is_none());
+	}
+
+	#[rstest::rstest]
+	#[case::without_trailing_slash(
+		"https://gateway.example.com/mcp/.well-known/oauth-authorization-server"
+	)]
+	#[case::with_trailing_slash(
+		"https://gateway.example.com/mcp/.well-known/oauth-authorization-server/"
+	)]
+	fn authorization_server_issuer_supports_legacy_suffix_form(#[case] original_url: &str) {
+		let mut req = ::http::Request::builder()
+			.uri("http://backend.internal/.well-known/oauth-authorization-server")
+			.body(Body::empty())
+			.expect("request should build");
+		req.extensions_mut().insert(filters::OriginalUrl(
+			original_url.parse().expect("original URL should parse"),
+		));
+
+		assert_eq!(
+			issuer_from_authorization_server_metadata_request(&req)
+				.expect("metadata request should have an issuer"),
+			"https://gateway.example.com/mcp"
+		);
+	}
+
+	#[test]
+	fn authorization_server_metadata_replaces_or_inserts_issuer() {
+		let mut auth = default_auth();
+		auth.provider = Some(McpIDP::Entra {});
+		let req = ::http::Request::builder()
+			.uri("https://gateway.example.com/.well-known/oauth-authorization-server/example/mcp")
+			.body(Body::empty())
+			.expect("request should build");
+
+		for mut metadata in [
+			serde_json::json!({"issuer": "https://idp.example.com"}),
+			serde_json::json!({"issuer": 42}),
+			serde_json::json!({}),
+		] {
+			rewrite_authorization_server_issuer(&req, &auth, &mut metadata)
+				.expect("issuer should be authoritative");
+			assert_eq!(
+				metadata["issuer"],
+				"https://gateway.example.com/example/mcp"
+			);
+		}
+	}
+
+	#[test]
+	fn authorization_server_metadata_preserves_issuer_without_provider() {
+		let req = ::http::Request::builder()
+			.uri("https://gateway.example.com/.well-known/oauth-authorization-server/example/mcp")
+			.body(Body::empty())
+			.expect("request should build");
+		let mut metadata = serde_json::json!({"issuer": "https://idp.example.com"});
+
+		rewrite_authorization_server_issuer(&req, &default_auth(), &mut metadata)
+			.expect("metadata should remain valid");
+		assert_eq!(metadata["issuer"], "https://idp.example.com");
+	}
+
+	#[test]
+	fn authorization_server_metadata_rejects_non_object() {
+		let mut auth = default_auth();
+		auth.provider = Some(McpIDP::Entra {});
+		let req = ::http::Request::builder()
+			.uri("https://gateway.example.com/.well-known/oauth-authorization-server/example/mcp")
+			.body(Body::empty())
+			.expect("request should build");
+		let mut metadata = serde_json::json!([]);
+
+		assert!(rewrite_authorization_server_issuer(&req, &auth, &mut metadata).is_err());
 	}
 
 	#[test]
@@ -795,6 +978,7 @@ mod tests {
 					Vec::new(),
 					crate::http::jwt::Mode::Strict,
 					crate::http::auth::AuthorizationLocation::default(),
+					false,
 				)),
 				mode: crate::types::agent::McpAuthenticationMode::Strict,
 				client_id: None,
@@ -829,6 +1013,7 @@ mod tests {
 				vec![],
 				crate::http::jwt::Mode::Strict,
 				crate::http::auth::AuthorizationLocation::bearer_header(),
+				false,
 			)),
 			mode: crate::types::agent::McpAuthenticationMode::Strict,
 			client_id: None,
@@ -972,6 +1157,7 @@ mod tests {
 				vec![],
 				crate::http::jwt::Mode::Strict,
 				crate::http::auth::AuthorizationLocation::bearer_header(),
+				false,
 			)),
 			mode: crate::types::agent::McpAuthenticationMode::Strict,
 			client_id: Some("client-id-guid".to_string()),

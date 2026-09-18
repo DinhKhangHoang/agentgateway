@@ -2,22 +2,27 @@ pub mod aws;
 pub mod azure;
 mod copilot;
 pub mod gcp;
+pub(crate) mod jws;
+pub mod jwt_sign;
 pub mod oauth;
 
 use std::borrow::Cow;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ::http::HeaderValue;
+use anyhow::Context;
 pub use aws::{AwsAssumeRole, AwsAuth};
 pub use azure::AzureAuth;
 use cookie::Cookie;
 pub use gcp::GcpAuth;
+pub use jws::JwtSigningAlg;
+pub(crate) use jws::signing_alg_from_proto;
+pub use jwt_sign::JwtSignAuth;
 pub use oauth::{
 	CrossAppAccessAuth, OAuthClientAuth, OAuthClientAuthMethod, OAuthGrantType,
 	OAuthTokenExchangeAuth, PrivateKeyJwt,
 };
 use secrecy::{ExposeSecret, SecretString};
-use url::form_urlencoded;
 
 use crate::http::Request;
 use crate::http::jwt::Claims;
@@ -29,8 +34,42 @@ use crate::*;
 
 const CLOUD_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[apply(schema!)]
-#[cfg_attr(feature = "schema", schemars(rename = "BackendAuth"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct JwtClaimTimes {
+	issued_at: u64,
+	expires_at: u64,
+}
+
+fn unix_timestamp_now() -> anyhow::Result<u64> {
+	SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.context("system clock is before the unix epoch")
+		.map(|duration| duration.as_secs())
+}
+
+fn jwt_claim_times(
+	now: u64,
+	lifetime: Duration,
+	issued_at_backdate: Duration,
+) -> anyhow::Result<JwtClaimTimes> {
+	let issued_at = now.saturating_sub(issued_at_backdate.as_secs());
+	let expires_at = now
+		.checked_add(numeric_date_seconds(lifetime))
+		.context("JWT lifetime overflows the exp timestamp")?;
+
+	Ok(JwtClaimTimes {
+		issued_at,
+		expires_at,
+	})
+}
+
+fn numeric_date_seconds(duration: Duration) -> u64 {
+	duration
+		.as_secs()
+		.saturating_add(u64::from(duration.subsec_nanos() > 0))
+}
+
+#[apply(schema_ser!)]
 pub enum BackendAuthKind {
 	/// Forward the validated incoming JWT to the backend.
 	Passthrough {
@@ -41,11 +80,7 @@ pub enum BackendAuthKind {
 	/// Send a configured secret value to the backend.
 	Key {
 		/// Secret value to send to the backend.
-		#[cfg_attr(feature = "schema", schemars(with = "FileOrInline"))]
-		#[serde(
-			serialize_with = "ser_redact",
-			deserialize_with = "deser_key_from_file"
-		)]
+		#[serde(serialize_with = "ser_redact")]
 		value: SecretString,
 		/// Where to place the secret in the backend request.
 		#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,6 +98,9 @@ pub enum BackendAuthKind {
 	/// Authenticate to GitHub Copilot.
 	#[serde(rename = "copilot")]
 	Copilot,
+	/// Sign a short-lived JWT with a private key on each request.
+	#[serde(rename = "jwtSign")]
+	JwtSign(Box<jwt_sign::JwtSignAuth>),
 	/// Use OAuth token exchange flows to obtain a backend access token.
 	#[serde(rename = "oauthTokenExchange")]
 	OAuthTokenExchange(Box<OAuthTokenExchangeAuth>),
@@ -78,6 +116,24 @@ pub struct BackendAuth {
 	pub kind: Option<BackendAuthKind>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub credentials: Vec<BackendAuthCredential>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackendAuthError {
+	#[error(transparent)]
+	Local(anyhow::Error),
+	#[error(transparent)]
+	CredentialProvider(anyhow::Error),
+}
+
+impl BackendAuthError {
+	fn local(error: impl Into<anyhow::Error>) -> Self {
+		Self::Local(error.into())
+	}
+
+	fn credential_provider(error: impl Into<anyhow::Error>) -> Self {
+		Self::CredentialProvider(error.into())
+	}
 }
 
 impl BackendAuth {
@@ -163,9 +219,7 @@ pub async fn apply_backend_auth(
 		apply_backend_auth_kind(backend_info, kind, req).await?;
 	}
 	for credential in &auth.credentials {
-		credential
-			.location
-			.insert(req, credential.key.expose_secret())?;
+		insert_local_auth(&credential.location, req, credential.key.expose_secret())?;
 		// Credential locations are always explicitly configured. Mark Authorization writes
 		// so providers (e.g. Anthropic) do not rewrite or relocate the header. Other
 		// locations must not touch the marker set by the primary auth kind.
@@ -177,6 +231,14 @@ pub async fn apply_backend_auth(
 		}
 	}
 	Ok(())
+}
+
+fn insert_local_auth(
+	location: &AuthorizationLocation,
+	req: &mut Request,
+	value: &str,
+) -> Result<(), BackendAuthError> {
+	location.insert(req, value).map_err(BackendAuthError::local)
 }
 
 async fn apply_backend_auth_kind(
@@ -195,7 +257,7 @@ async fn apply_backend_auth_kind(
 				.get::<Claims>()
 				.map(|claim| claim.jwt.expose_secret().to_string())
 			{
-				resolved.insert(req, &token)?;
+				insert_local_auth(resolved, req, &token)?;
 			}
 			req
 				.extensions_mut()
@@ -207,15 +269,13 @@ async fn apply_backend_auth_kind(
 		} => {
 			let explicit = location.is_some();
 			let resolved = location.as_ref().unwrap_or(&DEFAULT_AUTHORIZATION_LOCATION);
-			resolved.insert(req, key.expose_secret())?;
+			insert_local_auth(resolved, req, key.expose_secret())?;
 			req
 				.extensions_mut()
 				.insert(AppliedBackendAuthLocation { explicit });
 		},
 		BackendAuthKind::Gcp(g) => {
-			gcp::insert_token(g, &backend_info.call_target, req.headers_mut())
-				.await
-				.map_err(ProxyError::BackendAuthenticationFailed)?;
+			gcp::insert_token(g, &backend_info.call_target, req.headers_mut()).await?;
 		},
 		BackendAuthKind::Aws(_) => {
 			// We handle this in 'apply_late_backend_auth' since it must come at the end (due to request signing)!
@@ -226,14 +286,22 @@ async fn apply_backend_auth_kind(
 				azure_auth,
 				&backend_info.call_target,
 			)
-			.await
-			.map_err(ProxyError::BackendAuthenticationFailed)?;
+			.await?;
 			req.headers_mut().insert(http::header::AUTHORIZATION, token);
 		},
 		BackendAuthKind::Copilot => {
 			copilot::insert_headers(req)
 				.await
-				.map_err(ProxyError::BackendAuthenticationFailed)?;
+				.map_err(BackendAuthError::local)?;
+		},
+		BackendAuthKind::JwtSign(cfg) => {
+			let token = cfg.sign().map_err(BackendAuthError::local)?;
+			let explicit = cfg.location().is_some();
+			let resolved = cfg.location().unwrap_or(&DEFAULT_AUTHORIZATION_LOCATION);
+			insert_local_auth(resolved, req, &token)?;
+			req
+				.extensions_mut()
+				.insert(AppliedBackendAuthLocation { explicit });
 		},
 		BackendAuthKind::OAuthTokenExchange(te_auth) => {
 			let explicit = oauth::apply_token_exchange(&backend_info.inputs, te_auth, req).await?;
@@ -319,6 +387,15 @@ impl AuthorizationLocation {
 		}
 	}
 
+	/// Returns true if credentials are read from the `Proxy-Authorization` header.
+	///
+	/// Per RFC 9110, credentials sent in `Proxy-Authorization` are addressed to the proxy itself,
+	/// so failures must be challenged with `407` + `Proxy-Authenticate` rather than
+	/// `401` + `WWW-Authenticate`.
+	pub fn is_proxy_header(&self) -> bool {
+		matches!(self, AuthorizationLocation::Header { name, .. } if name == http::header::PROXY_AUTHORIZATION)
+	}
+
 	pub fn extract<'a>(&self, req: &'a Request) -> Option<Cow<'a, str>> {
 		match self {
 			AuthorizationLocation::Header { name, prefix } => {
@@ -328,7 +405,9 @@ impl AuthorizationLocation {
 					None => Some(Cow::Borrowed(value)),
 				}
 			},
-			AuthorizationLocation::QueryParameter { name } => query_parameter(req, name),
+			AuthorizationLocation::QueryParameter { name } => {
+				crate::http::query_parameter(req.uri(), name)
+			},
 			AuthorizationLocation::Cookie { name } => crate::http::read_request_cookie(req, name),
 			AuthorizationLocation::Expression(expression) => crate::cel::Executor::new_request(req)
 				.eval(expression)
@@ -409,15 +488,6 @@ fn strip_prefix_ascii_case_insensitive<'a>(value: &'a str, prefix: &str) -> Opti
 	} else {
 		None
 	}
-}
-
-fn query_parameter<'a>(req: &'a Request, name: &str) -> Option<Cow<'a, str>> {
-	for (key, value) in form_urlencoded::parse(req.uri().query().unwrap_or_default().as_bytes()) {
-		if key == name {
-			return Some(value);
-		}
-	}
-	None
 }
 
 fn set_request_cookie(

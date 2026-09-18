@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use futures_core::stream::BoxStream;
 use futures_util::{StreamExt, TryFutureExt};
 use headers::HeaderMapExt;
+use http_body_util::BodyExt as _;
 use rmcp::model::{
 	ClientJsonRpcMessage, ClientNotification, ClientRequest, JsonRpcRequest, ServerJsonRpcMessage,
 };
@@ -244,6 +245,15 @@ impl Client {
 	) -> Result<(), UpstreamError> {
 		let stream = self.get_stream(ctx).await?;
 		stream.send_notification(req, ctx).await
+	}
+
+	pub async fn send_client_message(
+		&self,
+		message: ClientJsonRpcMessage,
+		ctx: &IncomingRequestContext,
+	) -> Result<(), UpstreamError> {
+		let stream = self.get_stream(ctx).await?;
+		stream.send_client_message(message, ctx).await
 	}
 }
 

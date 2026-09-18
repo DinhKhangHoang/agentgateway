@@ -32,10 +32,10 @@ func TestReferences(t *testing.T) {
 	})
 }
 
-func TestPolicyReferenceGrants(t *testing.T) {
+func TestReferenceGrants(t *testing.T) {
 	testutils.RunForDirectory(t, "testdata/references-policy-refgrants", func(t *testing.T, ctx plugins.PolicyCtx) (any, []ir.AgwResource) {
 		ctx.Collections.Settings.BackendRefGrantMode = apisettings.BackendRefGrantModeRouteAndPolicy
-		sq, ri := testutils.Syncer(t, ctx, "AgentgatewayPolicy")
+		sq, ri := testutils.Syncer(t, ctx, "AgentgatewayPolicy", "AgentgatewayBackend")
 		r := ri.Outputs.Resources.List()
 		r = slices.FilterInPlace(r, func(resource ir.AgwResource) bool {
 			x := ir.GetAgwResourceName(resource.Resource)
@@ -64,7 +64,7 @@ func TestRouteCollection(t *testing.T) {
 func TestModels(t *testing.T) {
 	testutils.RunForDirectory(t, "testdata/models", func(t *testing.T, ctx plugins.PolicyCtx) (any, []ir.AgwResource) {
 		ctx.Collections.Settings.EnableAgentgatewayModels = true
-		sq, ri := testutils.Syncer(t, ctx, "Gateway", "AgentgatewayModel", "HTTPRoute")
+		sq, ri := testutils.Syncer(t, ctx, "Gateway", "AgentgatewayModel", "HTTPRoute", "InferencePool")
 		r := ri.Outputs.Resources.List()
 		return sq.Dump(), slices.SortBy(r, func(a ir.AgwResource) string {
 			return a.ResourceName()
@@ -98,12 +98,13 @@ func TestGatewayCollection(t *testing.T) {
 
 func TestBackends(t *testing.T) {
 	testutils.RunForDirectory(t, "testdata/backends", func(t *testing.T, ctx plugins.PolicyCtx) (any, []any) {
+		ctx.Collections.Settings.EnableXBackend = true
 		dummyRoutes := setupDummyAncestorMapping(ctx)
 		ctx.Collections.HTTPRoutes = krt.JoinCollection([]krt.Collection[*gwv1.HTTPRoute]{
 			ctx.Collections.HTTPRoutes,
 			krt.NewStaticCollection(nil, dummyRoutes, ctx.Collections.KrtOpts.ToOptions("translator/GoldenHTTPRouteOverrides")...),
 		}, ctx.Collections.KrtOpts.ToOptions("translator/HTTPRoutesWithGoldenOverrides")...)
-		sq, ri := testutils.Syncer(t, ctx, "AgentgatewayBackend", "BackendTLSPolicy", "InferencePool")
+		sq, ri := testutils.Syncer(t, ctx, "AgentgatewayBackend", "BackendTLSPolicy", "InferencePool", "XBackend")
 		r := ri.Outputs.Resources.List()
 		r = slices.SortBy(r, func(a ir.AgwResource) string {
 			return a.ResourceName()
@@ -138,6 +139,9 @@ func setupDummyAncestorMapping(ctx plugins.PolicyCtx) []*gwv1.HTTPRoute {
 	for _, v := range ctx.Collections.Backends.List() {
 		bes = append(bes, v)
 	}
+	for _, v := range ctx.Collections.XBackends.List() {
+		bes = append(bes, v)
+	}
 	for _, v := range ctx.Collections.Services.List() {
 		bes = append(bes, v)
 	}
@@ -150,11 +154,9 @@ func setupDummyAncestorMapping(ctx plugins.PolicyCtx) []*gwv1.HTTPRoute {
 	dummyRoutes := []*gwv1.HTTPRoute{}
 	for idx, backend := range bes {
 		dummyRoutes = append(dummyRoutes, &gwv1.HTTPRoute{
-			TypeMeta: metav1.TypeMeta{},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("dummy-%d", idx),
-				Namespace: "default",
-			},
+			TypeMeta:  metav1.TypeMeta{},
+			Name:      fmt.Sprintf("dummy-%d", idx),
+			Namespace: "default",
 			Spec: gwv1.HTTPRouteSpec{
 				CommonRouteSpec: gwv1.CommonRouteSpec{
 					ParentRefs: []gwv1.ParentReference{{
@@ -163,15 +165,11 @@ func setupDummyAncestorMapping(ctx plugins.PolicyCtx) []*gwv1.HTTPRoute {
 				},
 				Rules: []gwv1.HTTPRouteRule{{
 					BackendRefs: []gwv1.HTTPBackendRef{{
-						BackendRef: gwv1.BackendRef{
-							BackendObjectReference: gwv1.BackendObjectReference{
-								Group:     new(gwv1.Group(backend.GetObjectKind().GroupVersionKind().Group)),
-								Kind:      new(gwv1.Kind(backend.GetObjectKind().GroupVersionKind().Kind)),
-								Name:      gwv1.ObjectName(backend.GetName()),
-								Namespace: new(gwv1.Namespace(backend.GetNamespace())),
-								Port:      nil,
-							},
-						},
+						Group:     new(gwv1.Group(backend.GetObjectKind().GroupVersionKind().Group)),
+						Kind:      new(gwv1.Kind(backend.GetObjectKind().GroupVersionKind().Kind)),
+						Name:      gwv1.ObjectName(backend.GetName()),
+						Namespace: new(gwv1.Namespace(backend.GetNamespace())),
+						Port:      nil,
 					}},
 				}},
 			},

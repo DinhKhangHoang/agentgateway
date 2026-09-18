@@ -7,7 +7,7 @@ fn req(v: Value) -> types::completions::Request {
 }
 
 fn to_gemini(v: Value) -> Value {
-	let bytes = from_completions::translate(&req(v), None).expect("translate ok");
+	let bytes = from_completions::translate(&req(v)).expect("translate ok");
 	serde_json::from_slice(&bytes).expect("valid json")
 }
 
@@ -30,7 +30,7 @@ fn resp(v: Value) -> Value {
 fn llm_resp(v: Value) -> crate::LLMResponse {
 	to_completions::translate_response(&gemini_response_bytes(v))
 		.expect("translate_response ok")
-		.to_llm_response(false)
+		.to_llm_response(crate::LogContentFields::default())
 }
 
 // ---------- Request: roles, system, content ----------
@@ -63,15 +63,12 @@ fn empty_messages_get_synthetic_user_entry() {
 
 #[test]
 fn gs_url_without_extension_or_hint_is_rejected() {
-	let err = from_completions::translate(
-		&req(json!({
-			"model": "gemini-2.5-flash",
-			"messages": [{ "role": "user", "content": [
-				{ "type": "image_url", "image_url": { "url": "gs://bucket/object" } }
-			]}]
-		})),
-		None,
-	);
+	let err = from_completions::translate(&req(json!({
+		"model": "gemini-2.5-flash",
+		"messages": [{ "role": "user", "content": [
+			{ "type": "image_url", "image_url": { "url": "gs://bucket/object" } }
+		]}]
+	})));
 	assert!(
 		err.is_err(),
 		"extension-less gs:// with no MIME hint must be rejected before egress"
@@ -93,6 +90,131 @@ fn gs_url_uses_explicit_mime_hint() {
 	);
 }
 
+// ---------- Request: content parts / files ----------
+
+fn file_content(file: Value) -> Value {
+	json!({
+		"model": "gemini-2.5-flash",
+		"messages": [{ "role": "user", "content": [
+			{ "type": "text", "text": "What is this document about?" },
+			{ "type": "file", "file": file }
+		]}]
+	})
+}
+
+#[test]
+fn file_data_url_becomes_inline_data() {
+	let g = to_gemini(file_content(json!({
+		"filename": "report.pdf",
+		"file_data": "data:application/pdf;base64,JVBERi0xLjQK"
+	})));
+	let part = &g["contents"][0]["parts"][1];
+	assert_eq!(part["inlineData"]["mimeType"], "application/pdf");
+	assert_eq!(part["inlineData"]["data"], "JVBERi0xLjQK");
+}
+
+#[test]
+fn file_gs_uri_takes_mime_from_filename() {
+	// The gs:// object has no extension, so the mime can only come from `filename`.
+	let g = to_gemini(file_content(json!({
+		"filename": "report.pdf",
+		"file_data": "gs://bucket/object"
+	})));
+	let part = &g["contents"][0]["parts"][1];
+	assert_eq!(part["fileData"]["fileUri"], "gs://bucket/object");
+	assert_eq!(part["fileData"]["mimeType"], "application/pdf");
+}
+
+#[test]
+fn file_gs_uri_without_extension_or_hint_is_rejected() {
+	let err = from_completions::translate(&req(file_content(json!({
+		"file_data": "gs://bucket/object"
+	}))));
+	assert!(
+		err.is_err(),
+		"extension-less gs:// file with no MIME hint must be rejected before egress"
+	);
+}
+
+#[test]
+fn data_url_without_media_type_falls_back_to_filename() {
+	let g = to_gemini(file_content(json!({
+		"filename": "report.pdf",
+		"file_data": "data:;base64,JVBERi0xLjQK"
+	})));
+	assert_eq!(
+		g["contents"][0]["parts"][1]["inlineData"]["mimeType"],
+		"application/pdf"
+	);
+}
+
+#[test]
+fn data_url_without_media_type_or_filename_is_rejected() {
+	let err = from_completions::translate(&req(file_content(
+		json!({ "file_data": "data:;base64,JVBERi0xLjQK" }),
+	)));
+	assert!(
+		err.is_err(),
+		"an empty mimeType is rejected by Vertex, so it must not be sent"
+	);
+}
+
+#[test]
+fn raw_base64_file_data_takes_mime_from_filename() {
+	let g = to_gemini(file_content(json!({
+		"filename": "report.pdf",
+		"file_data": "JVBERi0xLjQK"
+	})));
+	let part = &g["contents"][0]["parts"][1];
+	assert_eq!(part["inlineData"]["mimeType"], "application/pdf");
+	assert_eq!(part["inlineData"]["data"], "JVBERi0xLjQK");
+}
+
+#[test]
+fn raw_base64_file_data_without_a_mime_source_is_rejected() {
+	let err = from_completions::translate(&req(file_content(json!({ "file_data": "JVBERi0xLjQK" }))));
+	assert!(
+		err.is_err(),
+		"raw base64 with no filename or hint cannot yield the mimeType Vertex requires"
+	);
+}
+
+#[test]
+fn file_id_holding_a_gs_uri_becomes_file_data() {
+	// Some clients put a bucket URI in `file_id` rather than `file_data`; Vertex can fetch
+	// that directly, so it is honoured instead of being treated as an opaque OpenAI id.
+	let g = to_gemini(file_content(json!({ "file_id": "gs://bucket/report.pdf" })));
+	let part = &g["contents"][0]["parts"][1];
+	assert_eq!(part["fileData"]["fileUri"], "gs://bucket/report.pdf");
+	assert_eq!(part["fileData"]["mimeType"], "application/pdf");
+}
+
+#[test]
+fn file_id_is_rejected_rather_than_dropped() {
+	// Vertex has no OpenAI Files store, so an opaque file_id cannot be resolved. It must
+	// error rather than silently vanish from the request (#3117).
+	let err = from_completions::translate(&req(file_content(json!({ "file_id": "file-abc123" }))));
+	let err = err.expect_err("opaque file_id must be rejected");
+	// Load-bearing: classify_ai_request maps UnsupportedConversion to 400, InvalidResponse to 503.
+	assert!(
+		matches!(err, crate::AIError::UnsupportedConversion(_)),
+		"bad client input must be a request error, got {err:?}"
+	);
+	assert!(
+		format!("{err:?}").contains("file_id"),
+		"error should name the field: {err:?}"
+	);
+}
+
+#[test]
+fn file_part_without_data_or_id_is_rejected() {
+	let err = from_completions::translate(&req(file_content(json!({ "filename": "report.pdf" }))));
+	assert!(
+		err.is_err(),
+		"a file part carrying no payload must be rejected"
+	);
+}
+
 #[test]
 fn empty_string_user_content_is_preserved() {
 	let g = to_gemini(json!({
@@ -106,15 +228,12 @@ fn empty_string_user_content_is_preserved() {
 
 #[test]
 fn http_image_url_is_rejected() {
-	let err = from_completions::translate(
-		&req(json!({
-			"model": "gemini-2.5-flash",
-			"messages": [{ "role": "user", "content": [
-				{ "type": "image_url", "image_url": { "url": "https://example.com/cat.png" } }
-			]}]
-		})),
-		None,
-	);
+	let err = from_completions::translate(&req(json!({
+		"model": "gemini-2.5-flash",
+		"messages": [{ "role": "user", "content": [
+			{ "type": "image_url", "image_url": { "url": "https://example.com/cat.png" } }
+		]}]
+	})));
 	assert!(err.is_err(), "http(s) image_url must be rejected");
 }
 
@@ -185,6 +304,11 @@ fn vertex_omits_tool_call_id_on_function_parts() {
 
 	let fr = &g["contents"][2]["parts"][0]["functionResponse"];
 	assert_eq!(fr["name"], "get_weather");
+	assert_eq!(
+		g["contents"][2]["parts"].as_array().unwrap().len(),
+		1,
+		"functionResponse must not have sibling parts"
+	);
 	assert!(
 		fr.get("id").is_none(),
 		"functionResponse must not carry `id`: Vertex rejects it"
@@ -789,7 +913,63 @@ fn gemini_schema_array_without_items_gets_items() {
 	);
 }
 
-// Case 8: Dict[str, X] emits a typed `additionalProperties` schema. Gemini does not support it, so
+// Case 8: minItems/maxItems on array types must be preserved so callers can enforce response
+// length constraints (e.g. "return exactly 3 items"). They were previously stripped because they
+// were absent from ALLOWED_SCHEMA_FIELDS.
+#[test]
+fn gemini_schema_preserves_array_length_constraints() {
+	let s = response_schema(json!({
+		"type": "object",
+		"properties": {
+			"tags": {
+				"type": "array",
+				"items": { "type": "string" },
+				"minItems": 2,
+				"maxItems": 5
+			}
+		}
+	}));
+	assert_eq!(
+		s["properties"]["tags"]["minItems"], 2,
+		"minItems must be preserved: {s}"
+	);
+	assert_eq!(
+		s["properties"]["tags"]["maxItems"], 5,
+		"maxItems must be preserved: {s}"
+	);
+}
+
+// Case 9: minProperties/maxProperties constrain the number of keys on an object. Like minItems/
+// maxItems they were absent from ALLOWED_SCHEMA_FIELDS and were silently stripped.
+#[test]
+fn gemini_schema_preserves_object_property_count_constraints() {
+	let s = response_schema(json!({
+		"type": "object",
+		"minProperties": 1,
+		"maxProperties": 4,
+		"properties": { "a": { "type": "string" } }
+	}));
+	assert_eq!(
+		s["minProperties"], 1,
+		"minProperties must be preserved: {s}"
+	);
+	assert_eq!(
+		s["maxProperties"], 4,
+		"maxProperties must be preserved: {s}"
+	);
+}
+
+// Case 10: example provides a sample value for a schema node and is passed through to Gemini.
+#[test]
+fn gemini_schema_preserves_example() {
+	let s = response_schema(json!({
+		"type": "string",
+		"example": "hello"
+	}));
+	assert_eq!(s["example"], "hello", "example must be preserved: {s}");
+}
+
+// Case 11: Dict[str, X] emits a typed `additionalProperties` schema. Gemini does not support it, so
 // it must be dropped (the open value typing is lost; that is the documented trade-off).
 #[test]
 fn gemini_schema_drops_open_dict_additional_properties() {
@@ -1016,15 +1196,17 @@ fn reasoning_effort_maps_to_thinking_level_on_gemini_3() {
 
 #[test]
 fn reasoning_effort_maps_to_thinking_budget_on_gemini_25() {
-	let g = to_gemini(json!({
-		"model": "gemini-2.5-flash",
-		"messages": [{ "role": "user", "content": "x" }],
-		"reasoning_effort": "high"
-	}));
-	assert_eq!(
-		g["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-		4096
-	);
+	for (effort, budget) in [("high", 4096), ("xhigh", 8192), ("max", 16384)] {
+		let g = to_gemini(json!({
+			"model": "gemini-2.5-flash",
+			"messages": [{ "role": "user", "content": "x" }],
+			"reasoning_effort": effort
+		}));
+		assert_eq!(
+			g["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+			budget
+		);
+	}
 }
 
 #[test]
@@ -1153,19 +1335,20 @@ fn usage_maps_cached_and_reasoning_tokens() {
 
 #[test]
 fn cel_usage_fields_match_usage_metadata() {
-	// The CEL/log token fields (via to_llm_response) must equal Gemini's usageMetadata exactly,
-	// so rate limiting and telemetry see native counts rather than shim numbers.
+	// The CEL/log token fields (via to_llm_response) come from Gemini's usageMetadata, with
+	// output normalized to the cross-provider convention: candidates + thoughts (Gemini
+	// reports them disjointly, other providers include reasoning in output).
 	let r = llm_resp(json!({
 		"candidates": [{ "content": { "role": "model", "parts": [{ "text": "x" }] },
 			"finishReason": "STOP" }],
 		"usageMetadata": {
-			"promptTokenCount": 100, "candidatesTokenCount": 50, "totalTokenCount": 150,
+			"promptTokenCount": 100, "candidatesTokenCount": 50, "totalTokenCount": 170,
 			"cachedContentTokenCount": 30, "thoughtsTokenCount": 20
 		}
 	}));
 	assert_eq!(r.input_tokens, Some(100));
-	assert_eq!(r.output_tokens, Some(50));
-	assert_eq!(r.total_tokens, Some(150));
+	assert_eq!(r.output_tokens, Some(70));
+	assert_eq!(r.total_tokens, Some(170));
 	assert_eq!(r.cached_input_tokens, Some(30));
 	assert_eq!(r.reasoning_tokens, Some(20));
 }
@@ -1284,7 +1467,8 @@ fn streaming_trailing_usage_chunk_has_empty_choices() {
 	.unwrap();
 	assert!(c["choices"].as_array().unwrap().is_empty());
 	assert_eq!(c["usage"]["prompt_tokens"], 5);
-	assert_eq!(c["usage"]["completion_tokens"], 2);
+	// completion_tokens includes thoughts (OpenAI semantics); the breakdown stays in details.
+	assert_eq!(c["usage"]["completion_tokens"], 3);
 	assert_eq!(c["usage"]["total_tokens"], 7);
 	assert_eq!(
 		c["usage"]["completion_tokens_details"]["reasoning_tokens"],
@@ -1324,4 +1508,221 @@ fn streaming_usage_suppressed_on_interim_content_chunks() {
 	.unwrap();
 	assert_eq!(c2["usage"]["total_tokens"], 7);
 	assert_eq!(c2["choices"][0]["finish_reason"], "stop");
+}
+
+// ---------- Native Gemini inbound: SSE passthrough with usage extraction ----------
+
+mod passthrough {
+	use std::sync::{Arc, Mutex};
+
+	use http_body_util::BodyExt;
+
+	use super::*;
+	use crate::{
+		CacheTokenConvention, InputFormat, LLMInfo, LLMRequest, LLMResponse, LogContentFields,
+		StreamingUsageGuard, StreamingUsageReporter,
+	};
+
+	struct Capture(Arc<Mutex<LLMInfo>>);
+
+	impl StreamingUsageReporter for Capture {
+		fn update(&self, f: &mut dyn FnMut(&mut LLMInfo)) {
+			f(&mut self.0.lock().unwrap())
+		}
+		fn report_usage(&mut self) {}
+	}
+
+	fn captured_info() -> Arc<Mutex<LLMInfo>> {
+		Arc::new(Mutex::new(LLMInfo {
+			request: LLMRequest {
+				input_tokens: None,
+				input_format: InputFormat::Gemini,
+				cache_convention: CacheTokenConvention::pending(),
+				request_model: "gemini-2.5-flash".into(),
+				provider: "gcp.vertex_ai".into(),
+				streaming: true,
+				params: Default::default(),
+				prompt: None,
+				provider_state: None,
+			},
+			response: LLMResponse::default(),
+		}))
+	}
+
+	#[tokio::test]
+	async fn passthrough_stream_forwards_bytes_and_extracts_final_usage() {
+		// Cumulative usageMetadata on every chunk; the last SSE event carries the totals.
+		let input = concat!(
+			"data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"reason\",\"thought\":true},{\"text\":\"Hel\"}]}}],",
+			"\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":1,\"totalTokenCount\":8},",
+			"\"modelVersion\":\"gemini-2.5-flash\",\"responseId\":\"r1\",\"someNewField\":true}\n\n",
+			"data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"lo\"}]},\"finishReason\":\"STOP\"}],",
+			"\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":4,\"totalTokenCount\":13,\"thoughtsTokenCount\":2},",
+			"\"modelVersion\":\"gemini-2.5-flash\",\"responseId\":\"r1\"}\n\n",
+		);
+		let captured = captured_info();
+		let out = passthrough_stream(
+			agent_http::Body::from(input),
+			1024 * 1024,
+			StreamingUsageGuard::new(Box::new(Capture(captured.clone()))),
+			LogContentFields {
+				completion: true,
+				tool_calls: false,
+			},
+		)
+		.collect()
+		.await
+		.expect("collect stream")
+		.to_bytes();
+
+		assert_eq!(
+			out.as_ref(),
+			input.as_bytes(),
+			"stream must pass through byte-for-byte"
+		);
+		let info = captured.lock().unwrap();
+		assert_eq!(info.response.input_tokens, Some(7));
+		assert_eq!(
+			info.response.output_tokens,
+			Some(6),
+			"last event wins; candidates + thoughts"
+		);
+		assert_eq!(info.response.total_tokens, Some(13));
+		assert_eq!(info.response.reasoning_tokens, Some(2));
+		assert_eq!(
+			info.response.provider_model.as_deref(),
+			Some("gemini-2.5-flash")
+		);
+		assert!(info.response.first_token.is_some());
+		assert_eq!(
+			info.response.completion,
+			Some(vec!["Hello".to_string()]),
+			"visible text accumulates across chunks, thought text excluded"
+		);
+	}
+
+	#[tokio::test]
+	async fn passthrough_stream_keeps_usage_from_before_disconnect() {
+		// Simulates an early cut: only the first (interim) event arrives.
+		let input = concat!(
+			"data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hi\"}]}}],",
+			"\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":1,\"totalTokenCount\":8}}\n\n",
+		);
+		let captured = captured_info();
+		let out = passthrough_stream(
+			agent_http::Body::from(input),
+			1024 * 1024,
+			StreamingUsageGuard::new(Box::new(Capture(captured.clone()))),
+			LogContentFields::default(),
+		)
+		.collect()
+		.await
+		.expect("collect stream")
+		.to_bytes();
+
+		assert_eq!(out.as_ref(), input.as_bytes());
+		let info = captured.lock().unwrap();
+		assert_eq!(info.response.input_tokens, Some(7));
+		assert_eq!(info.response.output_tokens, Some(1));
+		assert_eq!(info.response.total_tokens, Some(8));
+		assert_eq!(
+			info.response.completion, None,
+			"completion logging disabled"
+		);
+	}
+
+	fn body_from_frames(frames: &[&str]) -> agent_http::Body {
+		let frames: Vec<Result<bytes::Bytes, std::convert::Infallible>> = frames
+			.iter()
+			.map(|f| Ok(bytes::Bytes::copy_from_slice(f.as_bytes())))
+			.collect();
+		agent_http::Body::from_stream(futures_util::stream::iter(frames))
+	}
+
+	async fn run_passthrough(body: agent_http::Body, captured: &Arc<Mutex<LLMInfo>>) -> bytes::Bytes {
+		passthrough_stream(
+			body,
+			1024 * 1024,
+			StreamingUsageGuard::new(Box::new(Capture(captured.clone()))),
+			LogContentFields {
+				completion: true,
+				tool_calls: false,
+			},
+		)
+		.collect()
+		.await
+		.expect("collect stream")
+		.to_bytes()
+	}
+
+	/// Real Vertex chunking splits SSE events across TCP frames; the passthrough must reassemble
+	/// events for usage extraction without altering what the client receives.
+	#[tokio::test]
+	async fn passthrough_stream_reassembles_events_split_across_frames() {
+		let frames = [
+			"data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hel\"}]}}],",
+			"\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":1,\"totalTokenCount\":8},",
+			"\"modelVersion\":\"gemini-2.5-flash\"}\n",
+			"\ndata: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[",
+			"{\"functionCall\":{\"name\":\"get_weather\",\"id\":\"fc_1\",\"args\":{\"city\":\"Berlin\"}},",
+			"\"thoughtSignature\":\"sig\"},{\"text\":\"lo\"}]},\"finishReason\":\"STOP\"}],",
+			"\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":5,\"totalTokenCount\":12}}\n\n",
+		];
+		let captured = captured_info();
+		let out = run_passthrough(body_from_frames(&frames), &captured).await;
+
+		assert_eq!(out.as_ref(), frames.concat().as_bytes());
+		let info = captured.lock().unwrap();
+		assert_eq!(info.response.output_tokens, Some(5));
+		assert_eq!(info.response.total_tokens, Some(12));
+		assert_eq!(info.response.completion, Some(vec!["Hello".to_string()]));
+	}
+
+	/// An unparseable event must not poison the stream: the bytes still reach the client and the
+	/// usage from the events around it is still recorded.
+	#[tokio::test]
+	async fn passthrough_stream_tolerates_malformed_events() {
+		let input = concat!(
+			"data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hi\"}]}}],",
+			"\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":1,\"totalTokenCount\":8}}\n\n",
+			"data: {not json at all\n\n",
+			"data: {\"candidates\":[{\"finishReason\":\"STOP\"}],",
+			"\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":2,\"totalTokenCount\":9}}\n\n",
+		);
+		let captured = captured_info();
+		let out = run_passthrough(agent_http::Body::from(input), &captured).await;
+
+		assert_eq!(out.as_ref(), input.as_bytes());
+		let info = captured.lock().unwrap();
+		assert_eq!(info.response.total_tokens, Some(9), "last valid event wins");
+		assert_eq!(info.response.completion, Some(vec!["Hi".to_string()]));
+	}
+
+	/// A body that never completes an SSE event — the JSON-array variant Google serves without
+	/// `alt=sse`, or a stream cut mid-event — surfaces as a stream error at EOF rather than as a
+	/// silently-truncated success. Same strict `json_passthrough` behaviour as the completions,
+	/// messages, and responses passthroughs; requests are what keep it unreachable, since
+	/// `process_gemini_request` rejects `:streamGenerateContent` without `alt=sse` with a 400.
+	#[tokio::test]
+	async fn passthrough_stream_errors_on_bodies_that_are_not_sse() {
+		let non_sse = r#"[{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]}}]}]"#;
+		let truncated = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\"";
+		for input in [non_sse, truncated] {
+			let captured = captured_info();
+			let err = passthrough_stream(
+				agent_http::Body::from(input),
+				1024 * 1024,
+				StreamingUsageGuard::new(Box::new(Capture(captured.clone()))),
+				LogContentFields::default(),
+			)
+			.collect()
+			.await
+			.expect_err("a body with no complete SSE event must not report success");
+			assert!(
+				err.to_string().contains("unexpected end of stream"),
+				"{err}"
+			);
+			assert_eq!(captured.lock().unwrap().response.total_tokens, None);
+		}
+	}
 }

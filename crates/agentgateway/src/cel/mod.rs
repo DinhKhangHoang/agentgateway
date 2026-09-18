@@ -118,6 +118,7 @@ flagset::flags! {
 		ResponseBody,
 
 		Llm,
+		LlmRequest,
 		LlmPrompt,
 		LlmCompletion,
 		LlmToolCalls,
@@ -129,6 +130,8 @@ flagset::flags! {
 		BasicAuth,
 
 		Mcp,
+
+		Guardrails,
 
 		Extauthz,
 		Extproc,
@@ -177,6 +180,13 @@ impl ContextBuilder {
 	}
 	pub fn register_log_request(&mut self) {
 		self.logging_attributes |= Attributes::Request;
+	}
+	/// Request full LLM payload capture for the database log sink without requiring a CEL
+	/// expression to also emit that payload as an attribute.
+	pub fn register_log_llm_payload(&mut self) {
+		// Response translators only retain structured tool calls when this attribute is requested.
+		self.logging_attributes |=
+			Attributes::Llm | Attributes::LlmCompletion | Attributes::LlmToolCalls;
 	}
 	fn any_has(&self, attr: impl Into<FlagSet<Attributes>>) -> bool {
 		let x = attr.into();
@@ -231,56 +241,28 @@ impl ContextBuilder {
 	}
 	pub async fn maybe_buffer_request_body(&self, req: &mut crate::http::Request) {
 		if self.before_log_has(Attributes::RequestBody) {
-			if req.extensions().get::<BufferedBody>().is_some() {
-				return;
-			}
-			let Ok(body) = crate::http::inspect_body(req).await else {
-				return;
-			};
-			req.extensions_mut().insert(BufferedBody::from(body));
+			req.body_mut().require_inspection();
+			let _ = crate::http::inspect_body(req).await;
 		} else if self.log_only_has(Attributes::RequestBody) {
-			if req.extensions().get::<BufferedBody>().is_some() {
+			if req.body().known_bytes().is_some() {
+				// Already fully buffered, no need to record
 				return;
 			}
-			if req
-				.extensions()
-				.get::<crate::http::RecordedBodyHandle>()
-				.is_some()
-			{
-				return;
-			}
-			let body = std::mem::replace(req.body_mut(), crate::http::Body::empty());
 			let limit = crate::http::buffer_limit(req);
-			let (body, handle) = crate::http::RecordedBody::new_with_limit(body, limit);
-			*req.body_mut() = crate::http::Body::new(body);
-			req.extensions_mut().insert(handle);
+			req.body_mut().record(limit);
 		}
 	}
 	pub async fn maybe_buffer_response_body(&self, resp: &mut crate::http::Response) {
 		if self.before_log_has(Attributes::ResponseBody) {
-			if resp.extensions().get::<BufferedBody>().is_some() {
-				return;
-			}
-			let Ok(body) = crate::http::inspect_response_body(resp).await else {
-				return;
-			};
-			resp.extensions_mut().insert(BufferedBody::from(body));
+			resp.body_mut().require_inspection();
+			let _ = crate::http::inspect_response_body(resp).await;
 		} else if self.log_only_has(Attributes::ResponseBody) {
-			if resp.extensions().get::<BufferedBody>().is_some() {
+			if resp.body().known_bytes().is_some() {
+				// Already fully buffered, no need to record
 				return;
 			}
-			if resp
-				.extensions()
-				.get::<crate::http::RecordedBodyHandle>()
-				.is_some()
-			{
-				return;
-			}
-			let body = std::mem::replace(resp.body_mut(), crate::http::Body::empty());
 			let limit = crate::http::response_buffer_limit(resp);
-			let (body, handle) = crate::http::RecordedBody::new_with_limit(body, limit);
-			*resp.body_mut() = crate::http::Body::new(body);
-			resp.extensions_mut().insert(handle);
+			resp.body_mut().record(limit);
 		}
 	}
 
@@ -297,11 +279,23 @@ impl ContextBuilder {
 	pub fn needs_llm_tool_calls(&self) -> bool {
 		self.any_has(Attributes::LlmToolCalls)
 	}
+
+	pub fn needs_mcp(&self) -> bool {
+		self.before_log_has(Attributes::Mcp)
+	}
 }
 
 impl Expression {
 	pub fn ast(&self) -> &cel::IdedExpr {
 		self.expression.expression()
+	}
+
+	pub fn needs_llm_request(&self) -> bool {
+		self.attributes.contains(Attributes::LlmRequest)
+	}
+
+	pub fn needs_llm(&self) -> bool {
+		self.attributes.contains(Attributes::Llm)
 	}
 
 	/// new_permissive compiles the expression. If the expression cannot be compiled, its instead replaced
@@ -384,6 +378,9 @@ fn attributes_for(expression: &cel::IdedExpr) -> FlagSet<Attributes> {
 			["llm", ..] => {
 				attributes |= Attributes::Llm;
 			},
+			["llmRequest", ..] => {
+				attributes |= Attributes::LlmRequest;
+			},
 			["source", ..] => {
 				attributes |= Attributes::Source;
 			},
@@ -404,6 +401,9 @@ fn attributes_for(expression: &cel::IdedExpr) -> FlagSet<Attributes> {
 			},
 			["mcp", ..] => {
 				attributes |= Attributes::Mcp;
+			},
+			["guardrails", ..] => {
+				attributes |= Attributes::Guardrails;
 			},
 			["extauthz", ..] => {
 				attributes |= Attributes::Extauthz;

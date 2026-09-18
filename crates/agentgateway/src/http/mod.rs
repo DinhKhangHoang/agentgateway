@@ -1,11 +1,10 @@
 pub mod filters;
 pub mod health;
-pub mod health_prober;
 pub mod timeout;
 
+pub mod budget;
 pub mod buffer;
 pub mod bufferbody;
-mod buflist;
 pub mod cors;
 pub mod delay;
 pub mod jwt;
@@ -26,20 +25,32 @@ pub mod ext_proc;
 pub(crate) mod oauth;
 pub mod oidc;
 pub mod outlierdetection;
-mod peekbody;
-mod recordbody;
 pub mod remoteratelimit;
+pub mod sessionaffinity;
 pub mod sessionpersistence;
-pub mod sticky;
-pub mod capacity;
+pub mod substrate;
 pub mod tests_common;
 pub mod transformation_cel;
+pub mod capacity;
+pub mod health_prober;
+pub mod sticky;
 
 pub use agent_http::{
-	Body, BufferLimit, Error, Request, Response, buffer_limit, read_body_with_limit,
+	Body, BodyContent, BodyInspection, BufferLimit, Error, RawBody, RecordedBody, RecordedBodyHandle,
+	Request, RequestBodyExt, Response, ResponseBodyExt, buffer_limit, read_body_with_limit,
 	response_buffer_limit, x_headers,
 };
-pub use recordbody::{RecordedBody, RecordedBodyHandle};
+
+pub(crate) fn mark_sensitive_headers(req: &mut Request, configured: &[HeaderName]) {
+	for (name, value) in req.headers_mut() {
+		if name == header::AUTHORIZATION
+			|| name == header::PROXY_AUTHORIZATION
+			|| configured.contains(name)
+		{
+			value.set_sensitive(true)
+		}
+	}
+}
 
 pub(crate) fn iter_request_cookies<'a>(
 	req: &'a Request,
@@ -136,6 +147,13 @@ impl<'a> From<&'a mut Response> for RequestOrResponse<'a> {
 }
 
 impl RequestOrResponse<'_> {
+	pub fn replace_body_bytes(&mut self, bytes: Bytes) {
+		match self {
+			Self::Request(req) => req.replace_body_bytes(bytes),
+			Self::Response(resp) => resp.replace_body_bytes(bytes),
+		}
+	}
+
 	pub fn headers(&mut self) -> &mut http::HeaderMap {
 		match self {
 			RequestOrResponse::Request(r) => r.headers_mut(),
@@ -148,6 +166,7 @@ impl RequestOrResponse<'_> {
 			RequestOrResponse::Response(r) => r.body_mut(),
 		}
 	}
+
 	pub fn apply_header(
 		&mut self,
 		k: &HeaderOrPseudo,
@@ -198,7 +217,15 @@ impl RequestOrResponse<'_> {
 				if let RequestOrResponse::Request(r) = self {
 					let _ = modify_req_uri(r, |uri| {
 						uri.authority = Some(v);
-						if uri.scheme.is_none() {
+						// http::Uri::from_parts requires scheme+authority+path together,
+						// or authority alone with neither scheme nor path (the CONNECT
+						// request-target shape). Only synthesize a scheme when a path is
+						// also present -- i.e. when we're promoting an origin-form URI to
+						// absolute-form. Unconditionally adding a scheme here used to make
+						// Uri::from_parts reject any CONNECT (schemeless, pathless)
+						// request's authority mutation with PathAndQueryMissing, silently
+						// discarded by the `let _ =` above, so the mutation was a no-op.
+						if uri.scheme.is_none() && uri.path_and_query.is_some() {
 							// When authority is set, scheme must also be set
 							// TODO: do the same for HeaderOrPseudo::Scheme
 							uri.scheme = Some(Scheme::HTTP);
@@ -233,19 +260,15 @@ impl RequestOrResponse<'_> {
 use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
-use std::pin::Pin;
 use std::str::FromStr;
-use std::task::{Context, Poll};
 
 pub use ::http::uri::{Authority, Scheme};
 pub use ::http::{
 	HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header, status, uri,
 };
-use axum_core::BoxError;
 use bytes::Bytes;
 use cel::Value;
 use http::uri::PathAndQuery;
-use http_body::{Frame, SizeHint};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tower_serve_static::private::mime;
 use url::{Url, form_urlencoded};
@@ -469,7 +492,10 @@ pub(crate) fn request_header_matches(
 }
 
 /// Extract the value for a pseudo header from the request
-pub fn get_pseudo_header_value(pseudo: &HeaderOrPseudo, req: &Request) -> Option<String> {
+pub fn get_pseudo_header_value<B>(
+	pseudo: &HeaderOrPseudo,
+	req: &::http::Request<B>,
+) -> Option<String> {
 	match pseudo {
 		HeaderOrPseudo::Method => Some(req.method().to_string()),
 		HeaderOrPseudo::Scheme => req.uri().scheme().map(|s| s.to_string()),
@@ -490,7 +516,7 @@ pub fn get_pseudo_header_value(pseudo: &HeaderOrPseudo, req: &Request) -> Option
 }
 
 /// Return all present request pseudo headers without introducing defaults
-pub fn get_request_pseudo_headers(req: &Request) -> Vec<(HeaderOrPseudo, String)> {
+pub fn get_request_pseudo_headers<B>(req: &::http::Request<B>) -> Vec<(HeaderOrPseudo, String)> {
 	let mut out = Vec::with_capacity(4);
 	if let Some(v) = get_pseudo_header_value(&HeaderOrPseudo::Method, req) {
 		out.push((HeaderOrPseudo::Method, v));
@@ -522,12 +548,10 @@ pub fn modify_req_uri(
 	req: &mut Request,
 	f: impl FnOnce(&mut uri::Parts) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-	let nreq = std::mem::take(req);
-	let (mut head, body) = nreq.into_parts();
-	let mut parts = head.uri.into_parts();
+	let mut parts = req.uri().clone().into_parts();
 	f(&mut parts)?;
-	head.uri = Uri::from_parts(parts)?;
-	*req = Request::from_parts(head, body);
+	let uri = Uri::from_parts(parts)?;
+	*req.uri_mut() = uri;
 	Ok(())
 }
 
@@ -580,6 +604,15 @@ pub fn modify_url(
 	f(&mut url)?;
 	*uri = url_to_uri(&url)?;
 	Ok(())
+}
+
+pub(crate) fn query_parameter<'a>(uri: &'a Uri, name: &str) -> Option<Cow<'a, str>> {
+	for (key, value) in form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes()) {
+		if key == name {
+			return Some(value);
+		}
+	}
+	None
 }
 
 pub fn modify_query_parameters<S, R, KSet, VSet, KRemove>(
@@ -747,37 +780,14 @@ pub async fn read_response_body(
 	read_body_with_limit(b, lim).await.map(|b| (h, b))
 }
 
-/// Result of inspecting a body without consuming it from the caller's perspective.
-#[derive(Debug)]
-#[must_use]
-pub enum BodyInspection {
-	/// The complete body fit within the configured limit.
-	Complete(Bytes),
-	/// The body exceeded the limit. Contains the first `limit` bytes.
-	Partial(Bytes),
-}
-
 pub async fn inspect_body(req: &mut Request) -> anyhow::Result<BodyInspection> {
 	let lim = buffer_limit(req);
-	inspect_body_with_limit(req.body_mut(), lim).await
+	req.body_mut().inspect(lim).await
 }
 
 pub async fn inspect_response_body(resp: &mut Response) -> anyhow::Result<BodyInspection> {
 	let lim = response_buffer_limit(resp);
-	inspect_body_with_limit(resp.body_mut(), lim).await
-}
-
-pub async fn inspect_body_with_limit(
-	body: &mut Body,
-	limit: usize,
-) -> anyhow::Result<BodyInspection> {
-	let mut bytes = peekbody::inspect_body(body, limit.saturating_add(1)).await?;
-	if bytes.len() > limit {
-		bytes.truncate(limit);
-		Ok(BodyInspection::Partial(bytes))
-	} else {
-		Ok(BodyInspection::Complete(bytes))
-	}
+	resp.body_mut().inspect(lim).await
 }
 
 #[derive(Debug, Default)]
@@ -832,50 +842,6 @@ pub fn merge_in_headers(additional_headers: Option<HeaderMap>, dest: &mut Header
 			let Some(k) = k else { continue };
 			dest.insert(k, v);
 		}
-	}
-}
-
-pin_project_lite::pin_project! {
-	/// DropBody is simply a Body wrapper that holds onto another item such that it is dropped when the body
-	/// is complete.
-	#[derive(Debug)]
-	pub struct DropBody<B, D> {
-		#[pin]
-		body: B,
-		dropper: D,
-	}
-}
-
-impl<B, D> DropBody<B, D>
-where
-	D: Send + 'static,
-	B: http_body::Body<Data = Bytes> + Send + Unpin + 'static,
-	B::Error: Into<BoxError>,
-{
-	#[allow(clippy::new_ret_no_self)]
-	pub fn new(body: B, dropper: D) -> Body {
-		Body::new(Self { body, dropper })
-	}
-}
-
-impl<B: http_body::Body + Unpin, D> http_body::Body for DropBody<B, D> {
-	type Data = B::Data;
-	type Error = B::Error;
-
-	fn poll_frame(
-		self: Pin<&mut Self>,
-		cx: &mut Context<'_>,
-	) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-		let this = self.project();
-		this.body.poll_frame(cx)
-	}
-
-	fn is_end_stream(&self) -> bool {
-		self.body.is_end_stream()
-	}
-
-	fn size_hint(&self) -> SizeHint {
-		self.body.size_hint()
 	}
 }
 
@@ -987,6 +953,41 @@ mod tests {
 		modify_query_parameters(&mut uri, std::iter::empty::<(&str, &str)>(), ["remove"]).unwrap();
 
 		assert_eq!(uri.to_string(), "https://example.com/resource");
+	}
+
+	#[tokio::test]
+	async fn modify_req_uri_preserves_request_on_invalid_uri() {
+		let mut req = ::http::Request::builder()
+			.method(::http::Method::POST)
+			.uri("/request")
+			.header("x-test", "value")
+			.body(Body::from("body"))
+			.unwrap();
+
+		let result = modify_req_uri(&mut req, |parts| {
+			parts.scheme = Some(Scheme::HTTPS);
+			Ok(())
+		});
+
+		assert!(result.is_err());
+		assert_eq!(req.method(), ::http::Method::POST);
+		assert_eq!(req.uri(), "/request");
+		assert_eq!(req.headers().get("x-test").unwrap(), "value");
+		let body = read_body_with_limit(req.into_body(), 100).await.unwrap();
+		assert_eq!(body, "body");
+	}
+
+	#[tokio::test]
+	async fn replace_body_bytes_preserves_buffer_limit() {
+		let mut req = ::http::Request::new(Body::empty());
+		req.extensions_mut().insert(BufferLimit::new(4));
+		req
+			.body_mut()
+			.replace_bytes(Bytes::from_static(b"too large"));
+		assert!(matches!(
+			inspect_body(&mut req).await.unwrap(),
+			BodyInspection::Partial(_)
+		));
 	}
 
 	#[test]

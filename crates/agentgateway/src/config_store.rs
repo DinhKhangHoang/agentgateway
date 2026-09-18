@@ -65,6 +65,8 @@ pub enum ConfigResourceKind {
 	McpTarget,
 	#[serde(rename = "mcp.policy")]
 	McpPolicy,
+	#[serde(rename = "llm.settings")]
+	LlmSettings,
 	#[serde(rename = "mcp.settings")]
 	McpSettings,
 	#[serde(rename = "traffic.gateway")]
@@ -78,6 +80,14 @@ pub enum ConfigResourceKind {
 }
 
 impl ConfigResourceKind {
+	pub(crate) fn settings_fields(self) -> Option<(&'static str, &'static [&'static str])> {
+		match self {
+			Self::LlmSettings => Some(("llm", &["gateways", "port", "tls"])),
+			Self::McpSettings => Some(("mcp", &MCP_SETTINGS_FIELDS)),
+			_ => None,
+		}
+	}
+
 	pub const fn as_str(self) -> &'static str {
 		match self {
 			Self::ModelCatalog => "modelCatalog",
@@ -89,6 +99,7 @@ impl ConfigResourceKind {
 			Self::McpTarget => "mcp.target",
 			Self::McpPolicy => "mcp.policy",
 			Self::McpSettings => "mcp.settings",
+			Self::LlmSettings => "llm.settings",
 			Self::TrafficGateway => "traffic.gateway",
 			Self::TrafficRoute => "traffic.route",
 			Self::TrafficTcpRoute => "traffic.tcpRoute",
@@ -117,6 +128,7 @@ impl FromStr for ConfigResourceKind {
 			"mcp.target" => Ok(Self::McpTarget),
 			"mcp.policy" => Ok(Self::McpPolicy),
 			"mcp.settings" => Ok(Self::McpSettings),
+			"llm.settings" => Ok(Self::LlmSettings),
 			"traffic.gateway" => Ok(Self::TrafficGateway),
 			"traffic.route" => Ok(Self::TrafficRoute),
 			"traffic.tcpRoute" => Ok(Self::TrafficTcpRoute),
@@ -142,15 +154,15 @@ pub struct ConfigResourceUpsert {
 }
 
 pub async fn setup(cfg: &log_store::Config) -> anyhow::Result<ConfigResourceStore> {
-	ConfigResourceStore::connect(&cfg.url).await
+	ConfigResourceStore::connect(&cfg.url, cfg.max_connections).await
 }
 
 impl ConfigResourceStore {
-	async fn connect(url: &str) -> anyhow::Result<Self> {
-		Self::from_pool(DatabasePool::connect(url).await?).await
+	async fn connect(url: &str, max_connections: Option<u32>) -> anyhow::Result<Self> {
+		Self::from_pool(DatabasePool::connect_with_max_connections(url, max_connections).await?).await
 	}
 
-	async fn from_pool(pool: DatabasePool) -> anyhow::Result<Self> {
+	pub async fn from_pool(pool: DatabasePool) -> anyhow::Result<Self> {
 		let (change_tx, _) = watch::channel(());
 		match &pool {
 			DatabasePool::Sqlite(pool) => {
@@ -325,14 +337,37 @@ pub(crate) const MCP_SETTINGS_FIELDS: [&str; 5] = [
 	"failureMode",
 ];
 
+const API_KEY_METADATA_PREFIX: &str = "agentgateway.dev/";
+const API_KEY_ID_METADATA: &str = "agentgateway.dev/id";
+const API_KEY_CREATED_AT_METADATA: &str = "agentgateway.dev/createdAt";
+
 /// Older file keys have no stored ID, so expose their array position to the resource API.
 fn file_api_key_id(value: &Value, index: usize) -> String {
-	value
-		.pointer("/metadata/id")
+	api_key_metadata(value)
+		.and_then(|metadata| metadata.get(API_KEY_ID_METADATA))
 		.and_then(Value::as_str)
 		.filter(|id| !id.is_empty())
 		.map(ToString::to_string)
 		.unwrap_or_else(|| format!("@index:{index}"))
+}
+
+fn api_key_metadata(value: &Value) -> Option<&serde_json::Map<String, Value>> {
+	value.get("metadata").and_then(Value::as_object)
+}
+
+pub(crate) fn file_api_key_created_at(config: &Value, id: &str) -> Option<i64> {
+	crate::json::traverse(config, &["llm", "policies", "apiKey", "keys"])
+		.and_then(Value::as_array)?
+		.iter()
+		.enumerate()
+		.find(|(index, value)| file_api_key_id(value, *index) == id)
+		.and_then(|(_, value)| api_key_created_at(value))
+}
+
+pub(crate) fn api_key_created_at(value: &Value) -> Option<i64> {
+	api_key_metadata(value)?
+		.get(API_KEY_CREATED_AT_METADATA)?
+		.as_i64()
 }
 
 /// Direct mappings from a resource kind to its native YAML collection.
@@ -357,7 +392,8 @@ fn file_resource_collection(kind: ConfigResourceKind) -> Option<FileResourceColl
 		ConfigResourceKind::TrafficTcpRoute => Some(FileResourceCollection::List(&["tcpRoutes"])),
 		ConfigResourceKind::ModelCatalog
 		| ConfigResourceKind::LlmApiKey
-		| ConfigResourceKind::McpSettings => None,
+		| ConfigResourceKind::McpSettings
+		| ConfigResourceKind::LlmSettings => None,
 	}
 }
 
@@ -379,7 +415,9 @@ pub(crate) fn upsert_file_config_resource(
 	match prepared.kind {
 		ConfigResourceKind::ModelCatalog => upsert_file_model_catalog(config, &prepared.value),
 		ConfigResourceKind::LlmApiKey => upsert_file_api_key(config, prepared, previous_id),
-		ConfigResourceKind::McpSettings => upsert_file_mcp_settings(config, &prepared.value),
+		ConfigResourceKind::McpSettings | ConfigResourceKind::LlmSettings => {
+			upsert_file_settings(config, prepared.kind, &prepared.value)
+		},
 		ConfigResourceKind::LlmProvider
 		| ConfigResourceKind::LlmModel
 		| ConfigResourceKind::LlmVirtualModel
@@ -407,7 +445,9 @@ pub(crate) fn delete_file_config_resource(
 	match kind {
 		ConfigResourceKind::ModelCatalog => delete_file_model_catalog(config),
 		ConfigResourceKind::LlmApiKey => delete_file_api_key(config, id),
-		ConfigResourceKind::McpSettings => delete_file_mcp_settings(config),
+		ConfigResourceKind::McpSettings | ConfigResourceKind::LlmSettings => {
+			delete_file_settings(config, kind)
+		},
 		ConfigResourceKind::LlmProvider
 		| ConfigResourceKind::LlmModel
 		| ConfigResourceKind::LlmVirtualModel
@@ -565,12 +605,13 @@ fn upsert_file_map_resource(
 			.get("apiKey")
 			.and_then(|policy| policy.get("keys"))
 			.cloned();
-		if let Some(keys) = existing_keys {
-			value
-				.as_object_mut()
-				.ok_or_else(|| anyhow::anyhow!("llm.policy/apiKey must be an object"))?
-				.insert("keys".to_string(), keys);
-		}
+		value
+			.as_object_mut()
+			.ok_or_else(|| anyhow::anyhow!("llm.policy/apiKey must be an object"))?
+			.insert(
+				"keys".to_string(),
+				existing_keys.unwrap_or_else(|| Value::Array(Vec::new())),
+			);
 	}
 	// A gateway's resource ID is the key in the YAML map, not a field in its value.
 	if prepared.kind == ConfigResourceKind::TrafficGateway {
@@ -636,29 +677,36 @@ fn delete_file_api_key(config: &mut Value, id: &str) -> anyhow::Result<bool> {
 	Ok(false)
 }
 
-/// Projects the singleton MCP settings resource onto its top-level `mcp` fields.
-fn upsert_file_mcp_settings(config: &mut Value, value: &Value) -> anyhow::Result<()> {
+/// Projects the singleton surface settings resource onto its top-level fields.
+fn upsert_file_settings(
+	config: &mut Value,
+	kind: ConfigResourceKind,
+	value: &Value,
+) -> anyhow::Result<()> {
+	let (section, fields) = kind.settings_fields().expect("settings resource");
 	let value = value
 		.as_object()
-		.ok_or_else(|| anyhow::anyhow!("mcp.settings/default must be an object"))?;
-	let mcp = ensure_file_object(config, &["mcp"])?;
-	for field in MCP_SETTINGS_FIELDS {
+		.ok_or_else(|| anyhow::anyhow!("{kind}/default must be an object"))?;
+	let settings = ensure_file_object(config, &[section])?;
+	for &field in fields {
 		if let Some(value) = value.get(field) {
-			mcp.insert(field.to_string(), value.clone());
+			settings.insert(field.to_string(), value.clone());
 		} else {
-			mcp.remove(field);
+			settings.remove(field);
 		}
 	}
 	Ok(())
 }
 
-fn delete_file_mcp_settings(config: &mut Value) -> anyhow::Result<bool> {
-	let Some(mcp) = crate::json::traverse_mut(config, &["mcp"]).and_then(Value::as_object_mut) else {
+fn delete_file_settings(config: &mut Value, kind: ConfigResourceKind) -> anyhow::Result<bool> {
+	let (section, fields) = kind.settings_fields().expect("settings resource");
+	let Some(settings) = crate::json::traverse_mut(config, &[section]).and_then(Value::as_object_mut)
+	else {
 		return Ok(false);
 	};
 	let mut deleted = false;
-	for field in MCP_SETTINGS_FIELDS {
-		deleted |= mcp.remove(field).is_some();
+	for &field in fields {
+		deleted |= settings.remove(field).is_some();
 	}
 	Ok(deleted)
 }
@@ -690,11 +738,12 @@ fn delete_file_model_catalog(config: &mut Value) -> anyhow::Result<bool> {
 pub(crate) fn prepare_file_api_key_update(
 	id: String,
 	mut value: Value,
+	created_at: Option<i64>,
 ) -> anyhow::Result<PreparedResource> {
 	validate_id(&id)?;
-	ensure_no_api_key_id(&value)?;
+	validate_api_key_metadata(&value)?;
 	if !id.starts_with("@index:") {
-		set_api_key_id(&mut value, id.clone())?;
+		set_api_key_managed_metadata(&mut value, id.clone(), created_at)?;
 	}
 	Ok(PreparedResource {
 		kind: ConfigResourceKind::LlmApiKey,
@@ -716,10 +765,11 @@ pub(crate) fn prepare_resources(
 pub(crate) fn prepare_api_key_update(
 	id: String,
 	mut value: Value,
+	created_at: Option<i64>,
 ) -> anyhow::Result<PreparedResource> {
 	validate_id(&id)?;
-	ensure_no_api_key_id(&value)?;
-	set_api_key_id(&mut value, id.clone())?;
+	validate_api_key_metadata(&value)?;
+	set_api_key_managed_metadata(&mut value, id.clone(), created_at)?;
 	Ok(PreparedResource {
 		kind: ConfigResourceKind::LlmApiKey,
 		id,
@@ -752,28 +802,41 @@ pub(crate) fn prepare_policy_upsert(
 	Ok(PreparedResource { kind, id, value })
 }
 
-pub fn model_catalog_sources(
+pub fn merge_model_catalog_sources(
 	resources: &[ConfigResource],
+	mut configured: Vec<crate::ModelCatalogSource>,
 ) -> anyhow::Result<Vec<crate::ModelCatalogSource>> {
 	let Some(resource) = resources
 		.iter()
 		.find(|resource| resource.kind == ConfigResourceKind::ModelCatalog)
 	else {
-		return Ok(Vec::new());
+		return Ok(configured);
 	};
 	let value = resource
 		.value
 		.as_object()
 		.ok_or_else(|| anyhow::anyhow!("modelCatalog resource must be an object"))?;
-	["base", "custom"]
-		.into_iter()
-		.filter_map(|field| value.get(field))
-		.map(|inline| {
-			Ok(crate::ModelCatalogSource::InlineCatalog {
-				inline: serde_json::from_value(inline.clone())?,
-			})
-		})
-		.collect()
+	let mut sources = Vec::new();
+	if let Some(base) = value.get("base") {
+		let mut inline: crate::llm::catalog::Catalog = serde_json::from_value(base.clone())?;
+		if inline.metadata.is_none() {
+			inline.metadata = Some(crate::llm::catalog::CatalogMetadata {
+				source: None,
+				// Legacy base catalogs predate generatedAt. Treat them as older than every
+				// timestamped catalog rather than guessing from the resource timestamp,
+				// which may also reflect an unrelated custom-overlay edit.
+				generated_at: DateTime::<Utc>::UNIX_EPOCH,
+			});
+		}
+		sources.push(crate::ModelCatalogSource::InlineCatalog { inline });
+	}
+	if let Some(custom) = value.get("custom") {
+		sources.push(crate::ModelCatalogSource::InlineCatalog {
+			inline: serde_json::from_value(custom.clone())?,
+		});
+	}
+	sources.append(&mut configured);
+	Ok(sources)
 }
 
 pub(crate) fn apply_prepared_upsert(
@@ -837,7 +900,8 @@ fn overlay_config_resources(
 	let has_llm_resources = resources.iter().any(|resource| {
 		matches!(
 			resource.kind,
-			ConfigResourceKind::LlmProvider
+			ConfigResourceKind::LlmSettings
+				| ConfigResourceKind::LlmProvider
 				| ConfigResourceKind::LlmModel
 				| ConfigResourceKind::LlmVirtualModel
 				| ConfigResourceKind::LlmApiKey
@@ -847,6 +911,9 @@ fn overlay_config_resources(
 	let has_ui_resources = resources
 		.iter()
 		.any(|resource| resource.kind == ConfigResourceKind::UiPolicy);
+	let has_model_catalog = resources
+		.iter()
+		.any(|resource| resource.kind == ConfigResourceKind::ModelCatalog);
 	let has_mcp_resources = resources.iter().any(|resource| {
 		matches!(
 			resource.kind,
@@ -866,18 +933,43 @@ fn overlay_config_resources(
 	let has_llm_policies = resources
 		.iter()
 		.any(|resource| resource.kind == ConfigResourceKind::LlmPolicy);
-	if !has_llm_resources && !has_mcp_resources && !has_traffic_resources && !has_ui_resources {
+	if !has_llm_resources
+		&& !has_mcp_resources
+		&& !has_traffic_resources
+		&& !has_ui_resources
+		&& !has_model_catalog
+	{
 		return Ok(());
+	}
+
+	if has_model_catalog {
+		let configured = config
+			.pointer("/config/modelCatalog")
+			.cloned()
+			.map(serde_json::from_value)
+			.transpose()?
+			.unwrap_or_default();
+		let sources = merge_model_catalog_sources(resources, configured)?;
+		*ensure_file_array(config, &["config", "modelCatalog"])? = serde_json::to_value(sources)?
+			.as_array()
+			.expect("model catalog sources serialize as an array")
+			.clone();
 	}
 
 	let Some(root) = config.as_object_mut() else {
 		anyhow::bail!("local config root must be a JSON object");
 	};
 	if has_llm_resources {
-		if has_llm_policies && !root.contains_key("llm") {
+		if has_llm_policies
+			&& !root.contains_key("llm")
+			&& !resources
+				.iter()
+				.any(|r| r.kind == ConfigResourceKind::LlmSettings)
+		{
 			return Err(
 				ConfigResourceError::Conflict(
-					"DB-backed LLM policies require llm in the file config".to_string(),
+					"DB-backed LLM policies require llm in the file config or a llm.settings resource"
+						.to_string(),
 				)
 				.into(),
 			);
@@ -897,6 +989,7 @@ fn overlay_config_resources(
 			anyhow::bail!("local config llm must be a JSON object");
 		};
 
+		append_settings(llm, resources, ConfigResourceKind::LlmSettings)?;
 		append_policy_kind(llm, resources, ConfigResourceKind::LlmPolicy, "llm")?;
 		append_llm_kind(llm, resources, ConfigResourceKind::LlmProvider, "providers")?;
 		append_llm_kind(llm, resources, ConfigResourceKind::LlmModel, "models")?;
@@ -919,7 +1012,7 @@ fn overlay_config_resources(
 			.entry("targets")
 			.or_insert_with(|| Value::Array(Vec::new()));
 
-		append_mcp_settings(mcp, resources)?;
+		append_settings(mcp, resources, ConfigResourceKind::McpSettings)?;
 		append_policy_kind(mcp, resources, ConfigResourceKind::McpPolicy, "mcp")?;
 		append_list_kind(
 			mcp,
@@ -1094,37 +1187,36 @@ fn append_llm_kind(
 	append_list_kind(llm, resources, kind, field, "llm")
 }
 
-fn append_mcp_settings(
-	mcp: &mut serde_json::Map<String, Value>,
+fn append_settings(
+	settings: &mut serde_json::Map<String, Value>,
 	resources: &[ConfigResource],
+	kind: ConfigResourceKind,
 ) -> anyhow::Result<()> {
-	let Some(settings) = resources
-		.iter()
-		.find(|resource| resource.kind == ConfigResourceKind::McpSettings)
-	else {
+	let (_, fields) = kind.settings_fields().expect("settings resource");
+	let Some(resource) = resources.iter().find(|resource| resource.kind == kind) else {
 		return Ok(());
 	};
-	let value = settings.value.as_object().ok_or_else(|| {
-		ConfigResourceError::InvalidRequest("mcp.settings/default must be an object".to_string())
+	let value = resource.value.as_object().ok_or_else(|| {
+		ConfigResourceError::InvalidRequest(format!("{kind}/default must be an object"))
 	})?;
 	for (field, value) in value {
-		if !MCP_SETTINGS_FIELDS.contains(&field.as_str()) {
+		if !fields.contains(&field.as_str()) {
 			return Err(
 				ConfigResourceError::InvalidRequest(format!(
-					"mcp.settings/default contains unsupported field: {field}"
+					"{kind}/default contains unsupported field: {field}"
 				))
 				.into(),
 			);
 		}
-		if mcp.contains_key(field) {
+		if settings.contains_key(field) {
 			return Err(
 				ConfigResourceError::Conflict(format!(
-					"config resource mcp.settings/default field {field} conflicts with file-owned configuration"
+					"config resource {kind}/default field {field} conflicts with file-owned configuration"
 				))
 				.into(),
 			);
 		}
-		mcp.insert(field.clone(), value.clone());
+		settings.insert(field.clone(), value.clone());
 	}
 	Ok(())
 }
@@ -1221,9 +1313,9 @@ pub(crate) fn prepare_resource(
 ) -> anyhow::Result<PreparedResource> {
 	let id = match kind {
 		ConfigResourceKind::LlmApiKey => {
-			ensure_no_api_key_id(&value)?;
+			validate_api_key_metadata(&value)?;
 			let id = uuid::Uuid::new_v4().to_string();
-			set_api_key_id(&mut value, id.clone())?;
+			set_api_key_managed_metadata(&mut value, id.clone(), Some(Utc::now().timestamp()))?;
 			id
 		},
 		ConfigResourceKind::LlmPolicy
@@ -1241,7 +1333,7 @@ pub(crate) fn prepare_resource(
 fn resource_id(kind: ConfigResourceKind, value: &Value) -> anyhow::Result<String> {
 	match kind {
 		ConfigResourceKind::ModelCatalog => Ok("default".to_string()),
-		ConfigResourceKind::McpSettings => Ok("default".to_string()),
+		ConfigResourceKind::McpSettings | ConfigResourceKind::LlmSettings => Ok("default".to_string()),
 		ConfigResourceKind::LlmProvider
 		| ConfigResourceKind::LlmVirtualModel
 		| ConfigResourceKind::McpTarget
@@ -1259,13 +1351,15 @@ fn resource_id(kind: ConfigResourceKind, value: &Value) -> anyhow::Result<String
 			})
 		}),
 		ConfigResourceKind::LlmApiKey => value
-			.pointer("/metadata/id")
+			.get("metadata")
+			.and_then(Value::as_object)
+			.and_then(|metadata| metadata.get(API_KEY_ID_METADATA))
 			.and_then(Value::as_str)
 			.map(ToString::to_string)
 			.ok_or_else(|| {
-				ConfigResourceError::InvalidRequest(
-					"llm.apiKey resources require value.metadata.id".to_string(),
-				)
+				ConfigResourceError::InvalidRequest(format!(
+					"llm.apiKey resources require value.metadata.{API_KEY_ID_METADATA}"
+				))
 				.into()
 			}),
 		ConfigResourceKind::LlmPolicy
@@ -1276,19 +1370,30 @@ fn resource_id(kind: ConfigResourceKind, value: &Value) -> anyhow::Result<String
 	}
 }
 
-fn ensure_no_api_key_id(value: &Value) -> anyhow::Result<()> {
-	if value.pointer("/metadata/id").is_some() {
+fn validate_api_key_metadata(value: &Value) -> anyhow::Result<()> {
+	if let Some(field) = value
+		.get("metadata")
+		.and_then(Value::as_object)
+		.and_then(|metadata| {
+			metadata
+				.keys()
+				.find(|field| field.starts_with(API_KEY_METADATA_PREFIX))
+		}) {
 		return Err(
-			ConfigResourceError::InvalidRequest(
-				"llm.apiKey resources must not include value.metadata.id".to_string(),
-			)
+			ConfigResourceError::InvalidRequest(format!(
+				"llm.apiKey metadata field {field} uses the reserved agentgateway.dev/ prefix"
+			))
 			.into(),
 		);
 	}
 	Ok(())
 }
 
-fn set_api_key_id(value: &mut Value, id: String) -> anyhow::Result<()> {
+fn set_api_key_managed_metadata(
+	value: &mut Value,
+	id: String,
+	created_at: Option<i64>,
+) -> anyhow::Result<()> {
 	let Some(object) = value.as_object_mut() else {
 		return Err(
 			ConfigResourceError::InvalidRequest("llm.apiKey resources must be JSON objects".to_string())
@@ -1306,7 +1411,13 @@ fn set_api_key_id(value: &mut Value, id: String) -> anyhow::Result<()> {
 			.into(),
 		);
 	};
-	metadata.insert("id".to_string(), Value::String(id));
+	metadata.insert(API_KEY_ID_METADATA.to_string(), Value::String(id));
+	if let Some(created_at) = created_at {
+		metadata.insert(
+			API_KEY_CREATED_AT_METADATA.to_string(),
+			Value::Number(created_at.into()),
+		);
+	}
 	Ok(())
 }
 
@@ -1768,6 +1879,29 @@ mod tests {
 	}
 
 	#[test]
+	fn legacy_catalog_base_is_older_than_timestamped_bases() {
+		let resource = ConfigResource {
+			..test_resource(
+				ConfigResourceKind::ModelCatalog,
+				"default",
+				json!({"base": {"providers": {}}}),
+			)
+		};
+
+		let sources = merge_model_catalog_sources(&[resource], Vec::new()).unwrap();
+		let crate::ModelCatalogSource::InlineCatalog { inline } = &sources[0] else {
+			panic!("base must be an inline catalog")
+		};
+		assert_eq!(
+			inline.metadata,
+			Some(crate::llm::catalog::CatalogMetadata {
+				source: None,
+				generated_at: DateTime::<Utc>::UNIX_EPOCH,
+			})
+		);
+	}
+
+	#[test]
 	fn derives_resource_ids_and_manages_api_key_ids() {
 		let err = "traffic.listener"
 			.parse::<ConfigResourceKind>()
@@ -1827,13 +1961,41 @@ mod tests {
 		.expect("api key id");
 		uuid::Uuid::parse_str(&created.id).expect("UUID v4");
 		assert_eq!(
-			created.value.pointer("/metadata/id"),
+			created
+				.value
+				.get("metadata")
+				.and_then(Value::as_object)
+				.and_then(|metadata| metadata.get(API_KEY_ID_METADATA)),
+			Some(&Value::String(created.id.clone()))
+		);
+		let created_at = api_key_created_at(&created.value).expect("managed creation timestamp");
+		assert!(created_at > 0);
+		let updated = prepare_api_key_update(
+			created.id.clone(),
+			json!({"metadata": {"name": "updated"}}),
+			Some(created_at),
+		)
+		.expect("API key update");
+		assert_eq!(api_key_created_at(&updated.value), Some(created_at));
+		assert_eq!(
+			api_key_metadata(&updated.value).and_then(|metadata| metadata.get(API_KEY_ID_METADATA)),
 			Some(&Value::String(created.id))
 		);
+		let err = prepare_resource(
+			ConfigResourceKind::LlmApiKey,
+			json!({"metadata": {"agentgateway.dev/owner": "client"}}),
+		)
+		.expect_err("reserved API key metadata should fail");
 		assert!(
-			prepare_resource(
-				ConfigResourceKind::LlmApiKey,
-				json!({"metadata": {"id": "client-id"}}),
+			err
+				.to_string()
+				.contains("reserved agentgateway.dev/ prefix")
+		);
+		assert!(
+			prepare_api_key_update(
+				"key-id".to_string(),
+				json!({"metadata": {"agentgateway.dev/owner": "client"}}),
+				None,
 			)
 			.is_err()
 		);
@@ -1849,7 +2011,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn renames_resources_atomically() {
-		let store = ConfigResourceStore::connect("sqlite::memory:")
+		let store = ConfigResourceStore::connect("sqlite::memory:", None)
 			.await
 			.expect("connect config resource store");
 		store
@@ -1920,6 +2082,13 @@ mod tests {
 	#[test]
 	fn materializes_config_resources_into_base_config() {
 		let base = r#"
+config:
+  modelCatalog:
+  - inline:
+      providers:
+        file:
+          models:
+            file-model: {}
 llm:
   models:
   - name: file-model
@@ -1935,6 +2104,21 @@ mcp:
       host: http://localhost:3001/mcp
 "#;
 		let resources = vec![
+			test_resource(
+				ConfigResourceKind::ModelCatalog,
+				"default",
+				json!({
+					"custom": {
+						"providers": {
+							"database": {
+								"models": {
+									"database-model": {}
+								}
+							}
+						}
+					}
+				}),
+			),
 			test_resource(
 				ConfigResourceKind::LlmProvider,
 				"openai",
@@ -1963,7 +2147,7 @@ mcp:
 			test_resource(
 				ConfigResourceKind::LlmApiKey,
 				"key_01",
-				json!({"key": "agw_sk_test", "metadata": {"id": "key_01", "name": "test"}}),
+				json!({"key": "agw_sk_test", "metadata": {"agentgateway.dev/id": "key_01", "name": "test"}}),
 			),
 			test_resource(ConfigResourceKind::UiPolicy, "csrf", json!({})),
 			test_resource(
@@ -2022,6 +2206,14 @@ mcp:
 		let materialized = materialize_config(base, &resources).expect("materialize");
 		let value: Value = crate::yamlviajson::from_str(&materialized).expect("parse materialized");
 
+		assert_eq!(
+			value.pointer("/config/modelCatalog/0/inline/providers/database/models/database-model"),
+			Some(&json!({}))
+		);
+		assert_eq!(
+			value.pointer("/config/modelCatalog/1/inline/providers/file/models/file-model"),
+			Some(&json!({}))
+		);
 		assert_eq!(
 			value.pointer("/llm/providers/0/name"),
 			Some(&json!("openai"))
@@ -2232,7 +2424,7 @@ routes:
 		assert_eq!(config.pointer("/gateways/private/port"), Some(&json!(8081)));
 
 		let missing_key =
-			prepare_file_api_key_update("missing".to_string(), json!({"key": "agw_missing"}))
+			prepare_file_api_key_update("missing".to_string(), json!({"key": "agw_missing"}), None)
 				.expect("prepare API key update");
 		let err = upsert_file_config_resource(&mut config, &missing_key, Some("missing"))
 			.expect_err("missing API key update must fail");

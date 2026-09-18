@@ -169,6 +169,25 @@ func TestBuildGatewayStatus(t *testing.T) {
 		assert.Equal(t, string(gwv1.GatewayReasonProgrammed), programmed.Reason)
 	})
 
+	t.Run("accepted false can default programmed true", func(t *testing.T) {
+		gw := gw()
+		rm := reports.NewReportMap()
+		r := reports.NewReporter(&rm)
+		r.Gateway(gw).SetCondition(reporter.GatewayCondition{
+			Type:    gwv1.GatewayConditionAccepted,
+			Status:  metav1.ConditionFalse,
+			Reason:  gwv1.GatewayReasonInvalid,
+			Message: "partially valid",
+		})
+		status := rm.BuildGWStatus(context.Background(), *gw, 0)
+
+		programmed := meta.FindStatusCondition(status.Conditions, string(gwv1.GatewayConditionProgrammed))
+		assert.Equal(t, true, programmed != nil)
+		assert.Equal(t, metav1.ConditionTrue, programmed.Status)
+		assert.Equal(t, string(gwv1.GatewayReasonProgrammed), programmed.Reason)
+		assert.Equal(t, reports.GatewayProgrammedMessage, programmed.Message)
+	})
+
 	t.Run("set negative listener conditions from report and not add extra conditions", func(t *testing.T) {
 		gw := gw()
 		rm := reports.NewReportMap()
@@ -284,10 +303,8 @@ func TestBuildRouteStatus(t *testing.T) {
 		r := reports.NewReporter(&rm)
 
 		route := &gwv1.HTTPRoute{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "route",
-				Namespace: "default",
-			},
+			Name:      "route",
+			Namespace: "default",
 			Spec: gwv1.HTTPRouteSpec{
 				CommonRouteSpec: gwv1.CommonRouteSpec{
 					ParentRefs: []gwv1.ParentReference{
@@ -703,10 +720,8 @@ func fakeTranslate(reporter reporter.Reporter, obj client.Object) {
 
 func httpRoute(conditions ...metav1.Condition) client.Object {
 	route := &gwv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "route",
-			Namespace: "default",
-		},
+		Name:      "route",
+		Namespace: "default",
 	}
 	route.Spec.CommonRouteSpec.ParentRefs = append(route.Spec.CommonRouteSpec.ParentRefs, *parentRef())
 	if len(conditions) > 0 {
@@ -721,10 +736,8 @@ func httpRoute(conditions ...metav1.Condition) client.Object {
 
 func tcpRoute(conditions ...metav1.Condition) client.Object {
 	route := &gwv1.TCPRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "route",
-			Namespace: "default",
-		},
+		Name:      "route",
+		Namespace: "default",
 	}
 	route.Spec.CommonRouteSpec.ParentRefs = append(route.Spec.CommonRouteSpec.ParentRefs, *parentRef())
 	if len(conditions) > 0 {
@@ -739,10 +752,8 @@ func tcpRoute(conditions ...metav1.Condition) client.Object {
 
 func tlsRoute(conditions ...metav1.Condition) client.Object {
 	route := &gwv1.TLSRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "route",
-			Namespace: "default",
-		},
+		Name:      "route",
+		Namespace: "default",
 	}
 	route.Spec.CommonRouteSpec.ParentRefs = append(route.Spec.CommonRouteSpec.ParentRefs, *parentRef())
 	if len(conditions) > 0 {
@@ -757,10 +768,8 @@ func tlsRoute(conditions ...metav1.Condition) client.Object {
 
 func grpcRoute(conditions ...metav1.Condition) client.Object {
 	route := &gwv1.GRPCRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "route",
-			Namespace: "default",
-		},
+		Name:      "route",
+		Namespace: "default",
 	}
 	route.Spec.CommonRouteSpec.ParentRefs = append(route.Spec.CommonRouteSpec.ParentRefs, *parentRef())
 	if len(conditions) > 0 {
@@ -787,10 +796,8 @@ func otherParentRef() *gwv1.ParentReference {
 
 func delegateeRoute(conditions ...metav1.Condition) client.Object {
 	route := &gwv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "child-route",
-			Namespace: "default",
-		},
+		Name:      "child-route",
+		Namespace: "default",
 	}
 	route.Spec.CommonRouteSpec.ParentRefs = append(route.Spec.CommonRouteSpec.ParentRefs, *parentRouteRef())
 	if len(conditions) > 0 {
@@ -814,10 +821,8 @@ func parentRouteRef() *gwv1.ParentReference {
 
 func gw() *gwv1.Gateway {
 	g := &gwv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "agentgateway-gtw",
-		},
+		Namespace: "default",
+		Name:      "agentgateway-gtw",
 	}
 	g.Spec.Listeners = append(g.Spec.Listeners, *listener())
 	return g

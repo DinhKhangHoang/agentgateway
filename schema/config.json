@@ -4,7 +4,7 @@
   "type": "object",
   "properties": {
     "config": {
-      "description": "config defines top-level settings for DNS, admin, networking, observability, and session\nmanagement. Unlike other sections, these are applied only at startup and are not dynamically reloaded.",
+      "description": "config defines top-level settings for DNS, admin, networking, observability, and session\nmanagement. Unlike other sections, these are applied only at startup, except modelCatalog and\nstandardAttributes, which are dynamically reloaded.",
       "anyOf": [
         {
           "$ref": "#/$defs/RawConfig"
@@ -210,6 +210,17 @@
             "null"
           ]
         },
+        "spiffe": {
+          "description": "Local SPIFFE Workload API configuration\nWhen set, listeners and backends may source their TLS identity from SPIFFE.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawSpiffeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "namespace": {
           "description": "Kubernetes namespace for this gateway instance.",
           "type": [
@@ -291,6 +302,11 @@
             "null"
           ]
         },
+        "histograms": {
+          "description": "Histogram representation to collect. Native histograms are exposed only through the\nPrometheus protobuf format. Defaults to classic.",
+          "$ref": "#/$defs/HistogramMode",
+          "default": "classic"
+        },
         "readinessAddr": {
           "description": "Readiness probe server address in the format \"ip:port\", \"localhost:port\", \"unix:/path/to/socket\", or \"off\"",
           "type": [
@@ -319,6 +335,14 @@
               "type": "null"
             }
           ]
+        },
+        "sensitiveHeaders": {
+          "description": "Additional request headers whose values should be redacted from trace and debug output.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         },
         "customFunctions": {
           "description": "Custom CEL functions available to all CEL expressions. These can define re-usable snippets that\ncan be used in any expressions.\nConfigure as a block string containing one or more definitions, for example:\n`customFunctions: |`\n`  isInternal() { request.headers[\"x-env\"] == \"internal\" }`\n`  this.joined(prefix, parts...) { prefix + this + parts.join(\"\") }`",
@@ -395,9 +419,11 @@
               "interval": "3m0s",
               "retries": 9
             },
-            "connectTimeout": "10s",
+            "connectTimeout": "11s",
             "poolIdleTimeout": "1m30s",
-            "poolMaxSize": null
+            "poolMaxSize": null,
+            "h2KeepaliveInterval": "0s",
+            "h2KeepaliveTimeout": "5s"
           }
         },
         "hbone": {
@@ -512,6 +538,17 @@
     "Catalog": {
       "type": "object",
       "properties": {
+        "metadata": {
+          "description": "Identifies a generated base catalog and when its contents last changed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "providers": {
           "description": "Map of provider name to its supported models and pricing.",
           "type": "object",
@@ -522,6 +559,28 @@
         }
       },
       "additionalProperties": false
+    },
+    "CatalogMetadata": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "description": "Legacy provenance field retained for compatibility with older generated catalogs.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "writeOnly": true
+        },
+        "generatedAt": {
+          "description": "Time the generated catalog contents last changed.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "generatedAt"
+      ]
     },
     "Provider": {
       "type": "object",
@@ -549,6 +608,14 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/Tier"
+          }
+        },
+        "tags": {
+          "description": "Freeform capability/routing tags for this model.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
           }
         }
       },
@@ -633,6 +700,17 @@
               "type": "null"
             }
           ]
+        },
+        "perPage": {
+          "description": "Cost per page, for document/OCR models.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -666,6 +744,16 @@
         "url": {
           "description": "Connection URL for the request log database. A postgres:// or postgresql:// URL uses Postgres; any other value is treated as a SQLite database.",
           "type": "string"
+        },
+        "maxConnections": {
+          "description": "Maximum number of connections to open in this database's connection pool. Defaults to 5.\nWhen the request log and config stores have matching database settings, they share one pool\nwith this limit.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "default": null
         }
       },
       "additionalProperties": false,
@@ -694,8 +782,26 @@
           "description": "Read a file baseline and store UI-managed overlay resources in the configured database.",
           "type": "string",
           "const": "hybrid"
+        },
+        {
+          "description": "Disallow write operations to the config from the UI",
+          "type": "string",
+          "const": "readOnly"
         }
       ]
+    },
+    "RawSpiffeConfig": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "description": "SPIFFE Workload API Endpoint (e.g. `unix:///run/spire/agent.sock`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "RawStandardAttributes": {
       "type": "object",
@@ -716,6 +822,25 @@
         }
       },
       "additionalProperties": false
+    },
+    "HistogramMode": {
+      "oneOf": [
+        {
+          "description": "Collect classic histogram buckets only.",
+          "type": "string",
+          "const": "classic"
+        },
+        {
+          "description": "Collect native histogram buckets only.",
+          "type": "string",
+          "const": "native"
+        },
+        {
+          "description": "Collect both classic and native histogram buckets.",
+          "type": "string",
+          "const": "both"
+        }
+      ]
     },
     "RawSession": {
       "type": "object",
@@ -982,9 +1107,9 @@
           }
         },
         "connectTimeout": {
-          "description": "Maximum time to wait when establishing a connection to an upstream. Defaults to 10 seconds.",
+          "description": "Maximum time to wait when establishing a connection to an upstream. Defaults to 11 seconds.",
           "type": "string",
-          "default": "10s"
+          "default": "11s"
         },
         "poolIdleTimeout": {
           "description": "The maximum duration to keep an idle connection alive.",
@@ -1000,6 +1125,16 @@
           "format": "uint",
           "minimum": 0,
           "default": null
+        },
+        "h2KeepaliveInterval": {
+          "description": "Interval between HTTP/2 PING frames sent to upstream connections for liveness detection.\nPINGs are sent even on idle connections to proactively evict dead connections from the pool.\nDisabled by default (\"0s\"). Note: many gRPC servers enforce a minimum ping interval\nand will reject connections that ping more frequently.",
+          "type": "string",
+          "default": "0s"
+        },
+        "h2KeepaliveTimeout": {
+          "description": "Timeout waiting for a PING ACK before considering the connection dead and closing it.\nOnly applies when h2_keepalive_interval is set. Defaults to 5s.",
+          "type": "string",
+          "default": "5s"
         }
       },
       "additionalProperties": false
@@ -1096,6 +1231,17 @@
           "maximum": 65535,
           "default": null
         },
+        "protocol": {
+          "description": "Protocol handling for the entire bind. When omitted, it is inferred from the listeners.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalBindProtocol"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "listeners": {
           "description": "Named listeners bound on this port, which may use different protocols and TLS.",
           "type": "array",
@@ -1117,6 +1263,23 @@
       "additionalProperties": false,
       "required": [
         "listeners"
+      ]
+    },
+    "LocalBindProtocol": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "HTTP",
+            "TLS",
+            "TCP"
+          ]
+        },
+        {
+          "description": "EXPERIMENTAL: Detects TLS, plaintext HTTP, or opaque TCP from the first bytes of each\nconnection and chooses the appropriate listener. Use an explicit protocol whenever\npossible. AUTO requires client-first opaque protocols that look like a TLS or HTTP request.",
+          "type": "string",
+          "const": "AUTO"
+        }
       ]
     },
     "LocalListener": {
@@ -1208,23 +1371,40 @@
       "type": "object",
       "properties": {
         "mode": {
-          "description": "Certificate source mode. Static mode uses cert/key as the leaf certificate; dynamic CA\nmode uses cert/key as a CA for on-demand SNI leaf certificate issuance.",
+          "description": "Certificate source mode. Static mode uses cert/key as the leaf certificate; dynamic CA\nmode uses cert/key as a CA for on-demand SNI leaf certificate issuance.\nUnused when `spiffe` is set.",
           "$ref": "#/$defs/LocalTLSServerMode",
           "default": "static"
         },
         "cert": {
-          "description": "Path to the TLS certificate file (leaf certificate, or CA certificate in dynamic CA mode).",
-          "type": "string"
-        },
-        "key": {
-          "description": "Path to the TLS private key file.",
-          "type": "string"
-        },
-        "root": {
-          "description": "Path to a root CA certificate file used to validate client certificates.",
+          "description": "Path to the TLS certificate file (leaf certificate, or CA certificate in dynamic CA mode).\nRequired unless `spiffe` is set.",
           "type": [
             "string",
             "null"
+          ]
+        },
+        "key": {
+          "description": "Path to the TLS private key file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "description": "Path to a root CA certificate file used to validate client certificates (mTLS).\nOmit for one-way server TLS. Not used when `spiffe` is set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spiffe": {
+          "description": "Source the serving identity from the SPIFFE Workload API.\nMutually exclusive with `cert`/`key`/`root`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalSpiffeConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "cipherSuites": {
@@ -1293,10 +1473,6 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "cert",
-        "key"
-      ],
       "allOf": [
         {
           "not": {
@@ -1322,6 +1498,10 @@
         "static",
         "dynamicCa"
       ]
+    },
+    "LocalSpiffeConfig": {
+      "type": "object",
+      "additionalProperties": false
     },
     "TLSVersion": {
       "type": "string",
@@ -1771,8 +1951,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "localRateLimit": {
           "description": "Local rate limits for incoming requests.",
@@ -1862,16 +2041,29 @@
             }
           ]
         },
-        "usageReport": {
-          "description": "Report final LLM token usage to an HTTP endpoint, once per request, on\ncompletion.",
+        "substrateIngress": {
+          "description": "Resolve Substrate actor hostnames for dynamic route backends on ingress.",
           "anyOf": [
             {
-              "$ref": "#/$defs/LocalExplicitOrConditional_UsageReport"
+              "$ref": "#/$defs/SubstrateIngress"
             },
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
+        },
+        "substrateEgress": {
+          "description": "Enforce the CONNECT-pinned effective Substrate egress policy.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubstrateEgress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "transformations": {
           "description": "Modify request and response headers, bodies, or metadata.",
@@ -2647,8 +2839,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "http": {
           "description": "HTTP protocol settings for this backend.",
@@ -2701,7 +2892,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
         },
         "response": {
           "description": "Transform the response before it is returned.",
@@ -2712,7 +2904,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
         }
       },
       "additionalProperties": false
@@ -2725,48 +2918,42 @@
           "type": "object",
           "additionalProperties": {
             "type": "string"
-          },
-          "default": {}
+          }
         },
         "set": {
           "description": "Headers to set using CEL expressions for values.",
           "type": "object",
           "additionalProperties": {
             "type": "string"
-          },
-          "default": {}
+          }
         },
         "remove": {
           "description": "Header names to remove.",
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "default": []
+          }
         },
         "replace": {
           "description": "CEL expression that computes the full set of headers, replacing all existing headers.\nThe expression must evaluate to a map of header name to value (a string, or a list of\nstrings for a repeated header). Pseudo-headers (`:method`, `:path`, etc.) are ignored;\nset those explicitly with `set`/`add`. `replace` is applied before `add`/`set`/`remove`,\nso those still operate on top of the replaced headers.",
           "type": [
             "string",
             "null"
-          ],
-          "default": null
+          ]
         },
         "body": {
           "description": "CEL expression that computes a replacement body.",
           "type": [
             "string",
             "null"
-          ],
-          "default": null
+          ]
         },
         "metadata": {
           "description": "Metadata values to add using CEL expressions.",
           "type": "object",
           "additionalProperties": {
             "type": "string"
-          },
-          "default": {}
+          }
         }
       },
       "additionalProperties": false
@@ -2844,6 +3031,17 @@
             "$ref": "#/$defs/KeyExchangeGroup"
           },
           "default": null
+        },
+        "spiffe": {
+          "description": "Get the gateway's client identity and trust roots from the SPIFFE Workload API.\nMutually exclusive with `cert`/`key`/`root`/`insecure`/`insecureHost`.\nPin specific upstream SPIFFE IDs via `subjectAltNames` (e.g. `spiffe://td/ns/foo/sa/bar`);\nIf `subjectAltNames` is omitted, any SVID chaining to the SPIFFE trust bundle is accepted",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalSpiffeBackendTLS"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -2856,6 +3054,10 @@
         "P-384",
         "X25519_MLKEM768"
       ]
+    },
+    "LocalSpiffeBackendTLS": {
+      "type": "object",
+      "additionalProperties": false
     },
     "BackendAuthCompat": {
       "anyOf": [
@@ -2915,7 +3117,7 @@
                   "type": "object",
                   "properties": {
                     "value": {
-                      "description": "Secret value to send to the backend.",
+                      "description": "Secret value to send to the backend. File references are watched, so\nrotating the file reloads it without a restart.",
                       "$ref": "#/$defs/FileOrInline"
                     },
                     "location": {
@@ -2980,6 +3182,18 @@
               "description": "Authenticate to GitHub Copilot.",
               "type": "string",
               "const": "copilot"
+            },
+            {
+              "description": "Sign a short-lived JWT with a private key on each request.",
+              "type": "object",
+              "properties": {
+                "jwtSign": {
+                  "$ref": "#/$defs/JwtSignAuth"
+                }
+              },
+              "required": [
+                "jwtSign"
+              ]
             },
             {
               "description": "Use OAuth token exchange flows to obtain a backend access token.",
@@ -3311,6 +3525,13 @@
           "items": {
             "$ref": "#/$defs/AwsSessionTag"
           }
+        },
+        "externalId": {
+          "description": "Set when the role's trust policy requires `sts:ExternalId`. 2-1224 chars,\nmatching `[\\w+=,.@:/-]`.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
@@ -3373,6 +3594,17 @@
       ]
     },
     "AzureAuth": {
+      "type": "object",
+      "properties": {
+        "scopes": {
+          "description": "Scopes requested for the Azure access token. When unset, the scope is\ninferred from the backend hostname.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "unevaluatedProperties": false,
       "oneOf": [
         {
           "description": "Use explicit Azure credentials",
@@ -3451,8 +3683,7 @@
           },
           "required": [
             "explicitConfig"
-          ],
-          "additionalProperties": false
+          ]
         },
         {
           "description": "Use implicit Azure auth. Note that this is for developer use-cases only!",
@@ -3465,8 +3696,7 @@
           },
           "required": [
             "developerImplicit"
-          ],
-          "additionalProperties": false
+          ]
         },
         {
           "description": "Automatically detect authentication method based on environment.\nUses Workload Identity on K8s, Managed Identity on Azure VMs, or Developer Tools locally.",
@@ -3479,8 +3709,7 @@
           },
           "required": [
             "implicit"
-          ],
-          "additionalProperties": false
+          ]
         }
       ]
     },
@@ -3522,6 +3751,67 @@
           ],
           "additionalProperties": false
         }
+      ]
+    },
+    "JwtSignAuth": {
+      "description": "Signs a short-lived JWT with a private key on each request and sends it to\nthe backend. For upstreams that require per-request keypair JWTs (e.g. the\nSnowflake SQL API) rather than a static credential.",
+      "type": "object",
+      "properties": {
+        "signingKey": {
+          "description": "PEM-encoded private signing key (RSA or EC, matching `alg`).",
+          "$ref": "#/$defs/FileOrInline"
+        },
+        "alg": {
+          "description": "JWS signing algorithm. Defaults to RS256.",
+          "$ref": "#/$defs/JwtSigningAlg",
+          "default": "RS256"
+        },
+        "kid": {
+          "description": "Optional JWS key ID header.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "claims": {
+          "description": "Static claims added to every token (e.g. iss, sub, aud). Values may be\nany JSON value (e.g. a string, number, bool, or array). `iat`, `exp`,\nand `nbf` are reserved for the signer and cannot be configured here.",
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "ttl": {
+          "description": "Token lifetime used for `exp`. Defaults to 300s.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "description": "Where the signed token is written. Defaults to the Authorization\nheader with a `Bearer ` prefix.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthorizationLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "signingKey"
+      ]
+    },
+    "JwtSigningAlg": {
+      "type": "string",
+      "enum": [
+        "RS256",
+        "RS384",
+        "RS512",
+        "PS256",
+        "ES256",
+        "ES384"
       ]
     },
     "OAuthTokenExchangeAuth": {
@@ -3593,7 +3883,7 @@
           }
         },
         "requestedTokenType": {
-          "description": "`requested_token_type` parameter. Under token exchange, unset defaults to\naccess_token because this policy forwards bearer access tokens.",
+          "description": "`requested_token_type` parameter. When unset it is omitted from the request\n(RFC 8693 makes it optional). Some providers (e.g. Auth0 custom token exchange)\nreject an explicit access_token value paired with a custom `subject_token_type`.",
           "type": [
             "string",
             "null"
@@ -3833,8 +4123,30 @@
               "description": "PEM-encoded private signing key (RSA or EC, matching `alg`).",
               "$ref": "#/$defs/FileOrInline"
             },
+            "certificate": {
+              "description": "PEM-encoded X.509 certificate chain, leaf first. The leaf public key must\ncorrespond to `signing_key` for token endpoints to validate assertions.\nA mismatch or comparison failure is logged and does not prevent loading.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FileOrInline"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "certificateHeader": {
+              "description": "JWS certificate header emitted from `certificate`. Required when `certificate` is set.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CertificateHeader"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "alg": {
-              "$ref": "#/$defs/SigningAlg",
+              "$ref": "#/$defs/JwtSigningAlg",
               "default": "RS256"
             },
             "kid": {
@@ -3861,14 +4173,18 @@
         }
       ]
     },
-    "SigningAlg": {
-      "type": "string",
-      "enum": [
-        "RS256",
-        "RS384",
-        "RS512",
-        "ES256",
-        "ES384"
+    "CertificateHeader": {
+      "oneOf": [
+        {
+          "description": "Send the X.509 certificate chain in `x5c`.",
+          "type": "string",
+          "const": "x5c"
+        },
+        {
+          "description": "Send the leaf certificate's SHA-256 thumbprint in `x5t#S256`.",
+          "type": "string",
+          "const": "x5t#S256"
+        }
       ]
     },
     "RawDefaultClientSecretBasicAuth": {
@@ -3934,8 +4250,18 @@
           }
         },
         "scopes": {
-          "description": "`scope` values for the requested token, sent space-delimited.",
+          "description": "`scope` values requested when obtaining the ID-JAG from the identity provider, sent\nspace-delimited.",
           "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "accessTokenScopes": {
+          "description": "`scope` values requested when exchanging the ID-JAG for an access token. When unset,\ninherits `scopes`. When empty, omits `scope`.",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string"
           }
@@ -4068,6 +4394,10 @@
               "prefix": "Bearer "
             }
           }
+        },
+        "tokenType": {
+          "description": "RFC 8693 subject token type URI. Defaults to an OpenID Connect ID token.",
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -4128,7 +4458,7 @@
               "type": "object",
               "properties": {
                 "value": {
-                  "description": "Secret value to send to the backend.",
+                  "description": "Secret value to send to the backend. File references are watched, so\nrotating the file reloads it without a restart.",
                   "$ref": "#/$defs/FileOrInline"
                 },
                 "location": {
@@ -4199,6 +4529,19 @@
           "const": "copilot"
         },
         {
+          "description": "Sign a short-lived JWT with a private key on each request.",
+          "type": "object",
+          "properties": {
+            "jwtSign": {
+              "$ref": "#/$defs/JwtSignAuth"
+            }
+          },
+          "required": [
+            "jwtSign"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "Use OAuth token exchange flows to obtain a backend access token.",
           "type": "object",
           "properties": {
@@ -4243,6 +4586,13 @@
             "string",
             "null"
           ]
+        },
+        "maxConnectionDuration": {
+          "description": "Maximum time a connection to the backend may stay open. A connection past this duration is\nnot reused for new requests; a fresh connection is established instead, while in-flight\nrequests are not interrupted.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -4252,18 +4602,24 @@
       "properties": {
         "keepalives": {
           "description": "TCP keepalive settings for backend connections.",
-          "$ref": "#/$defs/KeepaliveConfig"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KeepaliveConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "connectTimeout": {
           "description": "Maximum time allowed to establish a backend TCP connection.",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "keepalives",
-        "connectTimeout"
-      ]
+      "additionalProperties": false
     },
     "Tunnel": {
       "type": "object",
@@ -4271,11 +4627,41 @@
         "proxy": {
           "description": "Proxy backend used to tunnel the connection.",
           "$ref": "#/$defs/SimpleLocalBackendSerde"
+        },
+        "mode": {
+          "description": "How requests are sent through the proxy.",
+          "$ref": "#/$defs/TunnelMode",
+          "default": "auto"
+        },
+        "policies": {
+          "description": "Policies to connect to the proxy backend",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SimpleLocalBackendPolicies"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
         "proxy"
+      ]
+    },
+    "TunnelMode": {
+      "oneOf": [
+        {
+          "description": "Use CONNECT for TLS and non-HTTP transports, and absolute-form requests for plaintext HTTP.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Use CONNECT for all transports, including plaintext HTTP.",
+          "type": "string",
+          "const": "connect"
+        }
       ]
     },
     "FailureMode": {
@@ -4320,8 +4706,11 @@
           "type": "string"
         },
         "audiences": {
-          "description": "Accepted token audiences, matched against the JWT `aud` claim.",
-          "type": "array",
+          "description": "Accepted token audiences, matched against the JWT `aud` claim.\nIf unset, audience validation is disabled.",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "string"
           }
@@ -4389,7 +4778,6 @@
       "additionalProperties": false,
       "required": [
         "issuer",
-        "audiences",
         "resourceMetadata"
       ]
     },
@@ -4529,11 +4917,11 @@
       ]
     },
     "JWTValidationOptions": {
-      "description": "JWT validation options controlling which claims must be present in a token.\n\nThe `required_claims` set specifies which RFC 7519 registered claims must\nexist in the token payload before validation proceeds. Only the following\nvalues are recognized: `exp`, `nbf`, `aud`, `iss`, `sub`. Other registered\nclaims such as `iat` and `jti` are **not** enforced by the underlying\n`jsonwebtoken` library and will be silently ignored.\n\nThis only enforces **presence**. Standard claims like `exp` and `nbf`\nhave their values validated independently (e.g., expiry is always checked\nwhen the `exp` claim is present, regardless of this setting).\n\nDefaults to `[\"exp\"]`.",
+      "description": "JWT validation options controlling which claims must be present in a token.\n\nThe `required_claims` set specifies which RFC 7519 registered claims must\nexist in the token payload before validation proceeds. Only the following\nvalues are recognized: `exp`, `nbf`, `aud`, `iss`, `sub`. Other registered\nclaims such as `iat` and `jti` are **not** enforced by the underlying\n`jsonwebtoken` library and will be silently ignored.\n\nThis only enforces **presence**. A configured issuer and non-empty audience\nlist independently require `iss` and `aud`, respectively. Standard claims\nlike `exp` and `nbf` have their values validated independently (e.g., expiry\nis always checked when the `exp` claim is present, regardless of this setting).\n\nDefaults to `[\"exp\"]`.",
       "type": "object",
       "properties": {
         "requiredClaims": {
-          "description": "Claims that must be present in the token before validation.\nOnly \"exp\", \"nbf\", \"aud\", \"iss\", \"sub\" are enforced; others\n(including \"iat\" and \"jti\") are ignored.\nDefaults to [\"exp\"]. Use an empty list to require no claims.",
+          "description": "Claims that must be present in the token before validation.\nOnly \"exp\", \"nbf\", \"aud\", \"iss\", \"sub\" are enforced; others\n(including \"iat\" and \"jti\") are ignored.\nDefaults to [\"exp\"]. Use an empty list to add no claim requirements beyond\nthose implied by the configured issuer and audiences.",
           "type": "array",
           "uniqueItems": true,
           "items": {
@@ -4582,6 +4970,16 @@
         },
         "transformations": {
           "description": "Request body values computed from CEL expressions.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "finalTransformations": {
+          "description": "Request body values computed from CEL expressions.\nThese are applied after conversion to the provider's request format.",
           "type": [
             "object",
             "null"
@@ -4677,6 +5075,18 @@
             "body": "The request was rejected due to inappropriate content",
             "status": 403
           }
+        },
+        "scope": {
+          "description": "Which parts of the request this guard inspects.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentScope"
+          },
+          "minItems": 1,
+          "default": [
+            "systemPrompt",
+            "messages"
+          ]
         }
       },
       "unevaluatedProperties": false,
@@ -4785,6 +5195,31 @@
       },
       "additionalProperties": false
     },
+    "ContentScope": {
+      "description": "A category of request content that a prompt guard can inspect.",
+      "oneOf": [
+        {
+          "description": "The system/developer prompt.",
+          "type": "string",
+          "const": "systemPrompt"
+        },
+        {
+          "description": "Regular user/assistant message text.",
+          "type": "string",
+          "const": "messages"
+        },
+        {
+          "description": "Tool call results.",
+          "type": "string",
+          "const": "toolOutput"
+        },
+        {
+          "description": "Tool call arguments.\n\nIn APIs that send tool arguments as opaque JSON, such as Completions, the arguments are masked as a single string,\nmeaning a prompt guard has the potential to rewrite the arguments into invalid JSON.",
+          "type": "string",
+          "const": "toolInput"
+        }
+      ]
+    },
     "RegexRules": {
       "type": "object",
       "properties": {
@@ -4817,6 +5252,11 @@
           "description": "Reject the request or response when content matches.",
           "type": "string",
           "const": "reject"
+        },
+        {
+          "description": "Observe mode: record what the guard would have done (metrics + structured\nlog) but never block or mask — the content always passes through.",
+          "type": "string",
+          "const": "audit"
         }
       ]
     },
@@ -4885,8 +5325,8 @@
       "type": "object",
       "properties": {
         "target": {
-          "description": "Backend that receives guardrail webhook requests.",
-          "$ref": "#/$defs/SimpleLocalBackendSerde"
+          "description": "Backend that receives guardrail webhook requests, and the backend policies\n(such as `backendTLS`) used when connecting to it. A `host` with an\n`https://` scheme enables TLS with system roots automatically.",
+          "$ref": "#/$defs/SimpleBackendReferenceWithPolicies"
         },
         "headers": {
           "description": "Headers to set on the webhook request, computed from CEL expressions.\nKeys may be header names or the `:path`, `:method`, and `:authority` pseudo-headers;\nsetting `:path` replaces the default `/request` / `/response` path.\nExpressions are evaluated against the original incoming request (like the\n`transformation` policy), so `request.*` and `jwt.*` refer to the client's request.",
@@ -4905,11 +5345,88 @@
         "failureMode": {
           "description": "Behavior when the webhook is unreachable or returns an error.\nDefaults to `failClosed`.",
           "$ref": "#/$defs/WebhookFailureMode"
+        },
+        "action": {
+          "description": "Whether to enforce the webhook's verdict or only observe it.\nDefaults to `reject` (enforce).",
+          "$ref": "#/$defs/RejectAuditAction"
         }
       },
       "additionalProperties": false,
       "required": [
         "target"
+      ]
+    },
+    "SimpleBackendReferenceWithPolicies": {
+      "type": "object",
+      "properties": {
+        "policies": {
+          "description": "Backend policies used when connecting to the service.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SimpleLocalBackendPolicies"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "description": "Service reference. Service must be defined in the top level services list.",
+          "type": "object",
+          "properties": {
+            "service": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "description": "Name of the target Service, as defined in the top-level `services` list.",
+                  "$ref": "#/$defs/NamespacedHostname"
+                },
+                "port": {
+                  "description": "Port on the target Service to route to.",
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "port"
+              ]
+            }
+          },
+          "required": [
+            "service"
+          ]
+        },
+        {
+          "description": "Hostname or IP address",
+          "type": "object",
+          "properties": {
+            "host": {
+              "description": "Hostname or IP address",
+              "type": "string"
+            }
+          },
+          "required": [
+            "host"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "backend": {
+              "description": "Explicit backend reference. Backend must be defined in the top level backends list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend"
+          ]
+        }
       ]
     },
     "WebhookFailureMode": {
@@ -4927,6 +5444,21 @@
         }
       ]
     },
+    "RejectAuditAction": {
+      "description": "Action for guards that cannot mask (only reject or observe). Bedrock,\nwebhook, OpenAI moderation, Google Model Armor, and Azure Content Safety\ndecide *what* they flag; the gateway only chooses whether to enforce that\nverdict or merely record it.",
+      "oneOf": [
+        {
+          "description": "Enforce the guard's native verdict (block, or — for Bedrock — anonymize).\nThis is the default and preserves the enforcing behavior.",
+          "type": "string",
+          "const": "reject"
+        },
+        {
+          "description": "Observe mode: invoke the guard and record its verdict (metrics +\nstructured log) but never block or mask — the content always passes\nthrough.",
+          "type": "string",
+          "const": "audit"
+        }
+      ]
+    },
     "Moderation": {
       "type": "object",
       "properties": {
@@ -4936,6 +5468,10 @@
             "string",
             "null"
           ]
+        },
+        "action": {
+          "description": "Whether to reject flagged content or only observe it.\nDefaults to `reject` (enforce).",
+          "$ref": "#/$defs/RejectAuditAction"
         },
         "policies": {
           "description": "Backend policies used when calling the moderation provider.",
@@ -4966,6 +5502,10 @@
         "region": {
           "description": "AWS region where the guardrail is deployed",
           "type": "string"
+        },
+        "action": {
+          "description": "Whether to enforce the guardrail's verdict or only observe it.\n\n`reject` (the default) enforces the guardrail: a `BLOCKED` assessment\nrejects the request/response and an `ANONYMIZED` assessment masks the\nmatched content, exactly as before.\n\n`audit` records successful assessments without enforcing their verdict.\n`audit` guarantees non-enforcement gateway-side even when the AWS resource\nis configured to `BLOCK`/`ANONYMIZE`.",
+          "$ref": "#/$defs/RejectAuditAction"
         },
         "policies": {
           "description": "Backend policies for AWS authentication (optional, defaults to implicit AWS auth)",
@@ -5005,6 +5545,10 @@
             "null"
           ]
         },
+        "action": {
+          "description": "Whether to reject flagged content or only observe it.\nDefaults to `reject` (enforce).",
+          "$ref": "#/$defs/RejectAuditAction"
+        },
         "policies": {
           "description": "Backend policies for GCP authentication (optional, defaults to implicit GCP auth)",
           "anyOf": [
@@ -5030,6 +5574,10 @@
         "endpoint": {
           "description": "The Azure Content Safety endpoint hostname (e.g., \"<resource-name>.cognitiveservices.azure.com\")",
           "type": "string"
+        },
+        "action": {
+          "description": "Whether to reject flagged content or only observe it.\nDefaults to `reject` (enforce).",
+          "$ref": "#/$defs/RejectAuditAction"
         },
         "policies": {
           "description": "Backend policies for Azure authentication (optional, defaults to implicit Azure auth)",
@@ -5325,6 +5873,16 @@
           "const": "anthropicTokenCount"
         },
         {
+          "description": "Gemini models/{model}:generateContent and models/{model}:streamGenerateContent",
+          "type": "string",
+          "const": "generateContent"
+        },
+        {
+          "description": "Gemini models/{model}:countTokens",
+          "type": "string",
+          "const": "geminiCountTokens"
+        },
+        {
           "description": "Cohere /v2/rerank (document reranking)",
           "type": "string",
           "const": "rerank"
@@ -5397,6 +5955,17 @@
           "description": "Whether this limit counts requests or LLM tokens.",
           "$ref": "#/$defs/RateLimitType",
           "default": "requests"
+        },
+        "key": {
+          "description": "CEL expression selecting the bucket, for example `jwt.sub` for a per-user limit or\n`jwt.team` for a per-team limit. Each distinct value gets its own bucket with the limits\nabove. Requests without a key, or whose key cannot be evaluated, share one bucket. The key\nis evaluated where the rule is checked, so a token limit can also read the parsed LLM\nrequest. Buckets are local to one proxy instance, which keeps a bounded number of them per\nrule and drops the least used ones.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expression"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -5442,6 +6011,17 @@
           "description": "Whether this limit counts requests or LLM tokens.",
           "$ref": "#/$defs/RateLimitType",
           "default": "requests"
+        },
+        "key": {
+          "description": "CEL expression selecting the bucket, for example `jwt.sub` for a per-user limit or\n`jwt.team` for a per-team limit. Each distinct value gets its own bucket with the limits\nabove. Requests without a key, or whose key cannot be evaluated, share one bucket. The key\nis evaluated where the rule is checked, so a token limit can also read the parsed LLM\nrequest. Buckets are local to one proxy instance, which keeps a bounded number of them per\nrule and drops the least used ones.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expression"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -5780,6 +6360,11 @@
                 }
               }
             },
+            "preserveToken": {
+              "description": "Keep a successfully validated JWT in its original location.",
+              "type": "boolean",
+              "default": false
+            },
             "providers": {
               "description": "Trusted issuers and their signing keys.",
               "type": "array",
@@ -5812,12 +6397,17 @@
                 }
               }
             },
+            "preserveToken": {
+              "description": "Keep a successfully validated JWT in its original location.",
+              "type": "boolean",
+              "default": false
+            },
             "issuer": {
-              "description": "Expected token issuer, matched against the JWT `iss` claim.",
+              "description": "Expected token issuer. The JWT `iss` claim is required and must match.",
               "type": "string"
             },
             "audiences": {
-              "description": "Accepted token audiences, matched against the JWT `aud` claim when set.",
+              "description": "Accepted token audiences. A non-empty list requires a matching JWT `aud` claim.",
               "type": [
                 "array",
                 "null"
@@ -5866,11 +6456,11 @@
       "type": "object",
       "properties": {
         "issuer": {
-          "description": "Expected token issuer, matched against the JWT `iss` claim.",
+          "description": "Expected token issuer. The JWT `iss` claim is required and must match.",
           "type": "string"
         },
         "audiences": {
-          "description": "Accepted token audiences, matched against the JWT `aud` claim when set.",
+          "description": "Accepted token audiences. A non-empty list requires a matching JWT `aud` claim.",
           "type": [
             "array",
             "null"
@@ -5895,7 +6485,7 @@
       ]
     },
     "LocalOidcConfig": {
-      "description": "Browser-based OIDC authentication policy.\n\nExplicit mode is still OIDC: it supplies provider metadata manually instead of using discovery.\nUnauthenticated non-callback requests always redirect to the provider login flow. Routes that\nneed non-redirect authentication behavior should use a different auth policy.",
+      "description": "Browser-based OIDC authentication policy.\n\nExplicit mode is still OIDC: it supplies provider metadata manually instead of using discovery.\nUnauthenticated document navigations redirect to the provider login flow. Browser requests\npositively identified as non-navigation requests return 401 so the caller can initiate a\ndocument navigation.",
       "type": "object",
       "properties": {
         "issuer": {
@@ -5961,7 +6551,7 @@
           "type": "string"
         },
         "redirectURI": {
-          "description": "Absolute callback URI handled by the gateway.\nThis policy always redirects unauthenticated non-callback requests back through this login\nflow.",
+          "description": "Absolute callback URI handled by the gateway.\nUnauthenticated document navigations are redirected back through this login flow.",
           "type": "string"
         },
         "scopes": {
@@ -5971,6 +6561,30 @@
             "type": "string"
           },
           "default": []
+        },
+        "login": {
+          "description": "Optional explicit login endpoint and pre-login redirect. Omit for automatic OAuth login.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OidcLogin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "logout": {
+          "description": "Optional logout endpoint. Independent of login; omit to disable the logout endpoint.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OidcLogout"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "additionalProperties": false,
@@ -5986,6 +6600,50 @@
       "enum": [
         "clientSecretBasic",
         "clientSecretPost"
+      ]
+    },
+    "OidcLogin": {
+      "description": "Optional browser login entry point and unauthenticated redirect destination.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Local endpoint that starts OAuth, for example `/auth/login`. Point your sign-in\nlink here, optionally with `?returnTo=/app` to choose the destination after login.\n`returnTo` must be a safe local path and defaults to `/`.\nThis endpoint is handled by the policy, not forwarded to your application.",
+          "type": "string"
+        },
+        "redirect": {
+          "description": "Local page to redirect unauthenticated browser navigations to, for example\n`/login`. This happens BEFORE authentication; it is not the OAuth callback or\nthe destination after successful login. The gateway appends `returnTo` so your\npage can preserve it in its sign-in link to `login.path`.\nServe this page and its assets on routes that bypass authentication, using a\nconditional policy or separate routes. This setting does not make them public.\nFetch requests receive 401 with this destination in the Location header.\nIf omitted, unauthenticated navigations start OAuth directly.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
+    "OidcLogout": {
+      "description": "Optional local-session logout endpoint and destination.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Local endpoint that clears this policy's session and login transaction cookies,\nfor example `/auth/logout`. Submit a POST from the callback URI's origin;\nrequests without a matching Origin header are rejected. The policy handles\nthis endpoint even when there is no valid session. This does not log out of\nthe identity provider or revoke tokens.",
+          "type": "string"
+        },
+        "redirect": {
+          "description": "Local destination for the 303 redirect AFTER logout, for example `/signed-out`.\nDefaults to `login.redirect` if configured, otherwise `/`. Make the destination\npublic through routing or a conditional policy; a protected destination can\nimmediately start another OAuth login using the existing identity-provider session.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
       ]
     },
     "LocalBasicAuth": {
@@ -6081,6 +6739,24 @@
             },
             "metadata": {
               "description": "Optional metadata attached to requests authenticated with this key."
+            },
+            "allowedModels": {
+              "description": "Model patterns this key is allowed to access.\nOmitted means no additional constraint; an empty list denies all models.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "default": null
+            },
+            "budgets": {
+              "description": "Independent budgets charged after LLM responses. A request is not charged when its provider\ndoes not report the usage or cost required by the budget unit.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Budget"
+              }
             }
           },
           "additionalProperties": false,
@@ -6097,6 +6773,24 @@
             },
             "metadata": {
               "description": "Optional metadata attached to requests authenticated with this key."
+            },
+            "allowedModels": {
+              "description": "Model patterns this key is allowed to access.\nOmitted means no additional constraint; an empty list denies all models.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "default": null
+            },
+            "budgets": {
+              "description": "Independent budgets charged after LLM responses. A request is not charged when its provider\ndoes not report the usage or cost required by the budget unit.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Budget"
+              }
             }
           },
           "additionalProperties": false,
@@ -6108,6 +6802,82 @@
     },
     "APIKey": {
       "type": "string"
+    },
+    "Budget": {
+      "description": "A named budget attached to a standalone API key.\n\nUsage is charged after an LLM response when the provider reports the tokens or cost required by\nthe configured unit. Requests with unavailable usage are logged but cannot be charged or blocked\nretroactively.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Stable name for this budget within its owning API key.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum usage allowed during the window.",
+          "$ref": "#/$defs/BudgetLimit"
+        },
+        "window": {
+          "description": "Rolling window over which usage will be accumulated.",
+          "$ref": "#/$defs/BudgetWindow"
+        },
+        "onBudgetExceeded": {
+          "description": "Action taken when the budget is exceeded.",
+          "$ref": "#/$defs/BudgetExceededAction"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "limit",
+        "window",
+        "onBudgetExceeded"
+      ]
+    },
+    "BudgetLimit": {
+      "type": "object",
+      "properties": {
+        "unit": {
+          "$ref": "#/$defs/BudgetLimitUnit"
+        },
+        "amount": {
+          "$ref": "#/$defs/BudgetAmount"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "unit",
+        "amount"
+      ]
+    },
+    "BudgetLimitUnit": {
+      "type": "string",
+      "enum": [
+        "USD",
+        "Tokens"
+      ]
+    },
+    "BudgetAmount": {
+      "type": "number",
+      "format": "double"
+    },
+    "BudgetWindow": {
+      "type": "object",
+      "properties": {
+        "rolling": {
+          "description": "Duration of the fixed usage window, for example `1h`, `24h`, or `30d`.\nWindows are aligned to the Unix epoch rather than starting with the first request: `1h`\nfollows UTC clock hours, `24h` starts at midnight UTC, and `30d` uses consecutive 30-day\nperiods rather than calendar months.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rolling"
+      ]
+    },
+    "BudgetExceededAction": {
+      "type": "string",
+      "enum": [
+        "Audit",
+        "Block"
+      ]
     },
     "APIKeyHash": {
       "type": "string"
@@ -6984,126 +7754,232 @@
         }
       ]
     },
-    "LocalExplicitOrConditional_UsageReport": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/LocalConditionalPolicies_UsageReport"
-        },
-        {
-          "$ref": "#/$defs/UsageReport"
-        }
-      ]
-    },
-    "LocalConditionalPolicies_UsageReport": {
+    "SubstrateIngress": {
+      "description": "Resolves Substrate actors through the ate-api for dynamic route backends.",
       "type": "object",
       "properties": {
-        "conditional": {
-          "description": "conditional policy entries. An entry without a condition must be the final fallback.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/LocalConditionalPolicy_UsageReport"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "conditional"
-      ]
-    },
-    "LocalConditionalPolicy_UsageReport": {
-      "type": "object",
-      "properties": {
-        "condition": {
-          "description": "condition must evaluate to true for this policy to execute. If unset, the policy is the fallback.",
+        "policies": {
+          "description": "Backend policies used when connecting to the service.",
           "anyOf": [
             {
-              "$ref": "#/$defs/Expression"
+              "$ref": "#/$defs/SimpleLocalBackendPolicies"
             },
             {
               "type": "null"
             }
-          ],
-          "default": null
-        },
-        "target": {
-          "description": "Backend that receives usage reports.",
-          "$ref": "#/$defs/SimpleLocalBackendSerde"
-        },
-        "path": {
-          "description": "Request path. Defaults to `/usage`.",
-          "type": [
-            "string",
-            "null"
           ]
         },
-        "timeout": {
-          "description": "Per-attempt timeout. Defaults to 2s.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "connectTargetPort": {
+          "description": "Port on the resumed worker pod's atunnel CONNECT listener. Defaults to 8443.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8443
         },
-        "maxRetries": {
-          "description": "Retries after a failed delivery attempt. Defaults to 2.\n\n`Option` rather than a bare `u32` so that an explicit `0` (never retry)\nstays distinguishable from \"unset, use the default\". With a plain u32\nthe two collapse and the documented default can never apply.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
+        "cacheTtl": {
+          "description": "How long successful actor assignments are reused. Defaults to 5s; 0s disables reuse.",
+          "type": "string",
+          "default": "5s"
         },
-        "dimensions": {
-          "description": "Extra report dimensions, computed from CEL expressions evaluated\nagainst the original incoming request.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Expression"
+        "requestParking": {
+          "description": "Bounded request parking while a suspended actor is waiting for worker capacity.",
+          "$ref": "#/$defs/RequestParking",
+          "default": {
+            "budget": "5s",
+            "max": 1024,
+            "retryInterval": "100ms",
+            "retryFactor": 1.1
           }
         }
       },
-      "required": [
-        "target"
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {
+          "description": "Service reference. Service must be defined in the top level services list.",
+          "type": "object",
+          "properties": {
+            "service": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "description": "Name of the target Service, as defined in the top-level `services` list.",
+                  "$ref": "#/$defs/NamespacedHostname"
+                },
+                "port": {
+                  "description": "Port on the target Service to route to.",
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "port"
+              ]
+            }
+          },
+          "required": [
+            "service"
+          ]
+        },
+        {
+          "description": "Hostname or IP address",
+          "type": "object",
+          "properties": {
+            "host": {
+              "description": "Hostname or IP address",
+              "type": "string"
+            }
+          },
+          "required": [
+            "host"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "backend": {
+              "description": "Explicit backend reference. Backend must be defined in the top level backends list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend"
+          ]
+        }
       ]
     },
-    "UsageReport": {
+    "RequestParking": {
+      "description": "Bounds requests held while an actor is waiting for capacity to resume.",
       "type": "object",
       "properties": {
-        "target": {
-          "description": "Backend that receives usage reports.",
-          "$ref": "#/$defs/SimpleLocalBackendSerde"
+        "budget": {
+          "description": "Maximum time to wait for the actor to become routable.",
+          "type": "string",
+          "default": "5s"
         },
-        "path": {
-          "description": "Request path. Defaults to `/usage`.",
-          "type": [
-            "string",
-            "null"
+        "max": {
+          "description": "Maximum concurrent requests that may wait for actor resumption. Set to 0 to disable parking.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 1024
+        },
+        "retryInterval": {
+          "description": "Initial delay between ResumeActor retries while parked.",
+          "type": "string",
+          "default": "100ms"
+        },
+        "retryFactor": {
+          "description": "Multiplier applied to the delay after each parked retry.",
+          "type": "number",
+          "format": "double",
+          "default": 1.1
+        }
+      },
+      "additionalProperties": false
+    },
+    "SubstrateEgress": {
+      "description": "Retrieves and enforces the current Substrate egress policy for each request.",
+      "type": "object",
+      "properties": {
+        "policies": {
+          "description": "Backend policies used when connecting to the service.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SimpleLocalBackendPolicies"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
-        "timeout": {
-          "description": "Per-attempt timeout. Defaults to 2s.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "maxRetries": {
-          "description": "Retries after a failed delivery attempt. Defaults to 2.\n\n`Option` rather than a bare `u32` so that an explicit `0` (never retry)\nstays distinguishable from \"unset, use the default\". With a plain u32\nthe two collapse and the documented default can never apply.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "dimensions": {
-          "description": "Extra report dimensions, computed from CEL expressions evaluated\nagainst the original incoming request.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Expression"
+        "credentialProviders": {
+          "description": "Credential providers available to secret-backed egress effects, keyed by\nthe authority in an `ate-secret://` URI.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CredentialProvider"
           }
+        }
+      },
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {
+          "description": "Service reference. Service must be defined in the top level services list.",
+          "type": "object",
+          "properties": {
+            "service": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "description": "Name of the target Service, as defined in the top-level `services` list.",
+                  "$ref": "#/$defs/NamespacedHostname"
+                },
+                "port": {
+                  "description": "Port on the target Service to route to.",
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "port"
+              ]
+            }
+          },
+          "required": [
+            "service"
+          ]
+        },
+        {
+          "description": "Hostname or IP address",
+          "type": "object",
+          "properties": {
+            "host": {
+              "description": "Hostname or IP address",
+              "type": "string"
+            }
+          },
+          "required": [
+            "host"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "backend": {
+              "description": "Explicit backend reference. Backend must be defined in the top level backends list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend"
+          ]
+        }
+      ]
+    },
+    "CredentialProvider": {
+      "description": "An inline credential-provider backend selected by credential URI authority.",
+      "type": "object",
+      "properties": {
+        "uriAuthority": {
+          "description": "Exact credential URI authority handled by this provider, such as `kubernetes.io`.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Backend that resolves credentials and policies used when connecting to it.",
+          "$ref": "#/$defs/SimpleBackendReferenceWithPolicies"
         }
       },
       "additionalProperties": false,
       "required": [
+        "uriAuthority",
         "target"
       ]
     },
@@ -7157,7 +8033,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
         },
         "response": {
           "description": "Transform the response before it is returned.",
@@ -7168,7 +8045,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
         }
       }
     },
@@ -7246,7 +8124,7 @@
       "type": "object",
       "properties": {
         "requestTimeout": {
-          "description": "Maximum time allowed for the full downstream request and response.",
+          "description": "Maximum time allowed from the start of downstream request processing until response headers\nare received. The response body is not included; use `responseIdleTimeout` to bound gaps\nbetween body frames.",
           "type": [
             "string",
             "null"
@@ -7254,6 +8132,13 @@
         },
         "backendRequestTimeout": {
           "description": "Maximum time allowed for the upstream backend request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "responseIdleTimeout": {
+          "description": "Maximum time to wait for a frame from the upstream response body.\n\nLimits how long the gateway waits for more response data from the backend.\nTime spent processing the response or waiting for the client to receive it does not count.\n\nThis complements the other two rather than overlapping them: both `requestTimeout` and\n`backendRequestTimeout` stop applying once the response headers arrive, so neither places\nany bound on how long the response body may take, and neither can distinguish a stalled\nstream from a slow one.\n\nThe timeout is disabled when this field is unset or set to zero. It does not apply to\nresponses that switch protocols, so upgraded WebSocket and CONNECT tunnels are never\nterminated by it.",
           "type": [
             "string",
             "null"
@@ -7289,13 +8174,6 @@
             "minimum": 1,
             "maximum": 65535
           }
-        },
-        "maxReplayBytes": {
-          "description": "Maximum number of request-body bytes buffered in memory for retry replay.\nA request whose body exceeds this cannot be retried, because the bytes needed\nto replay it were never kept. Omitting this, or setting it to `0`, applies the\ndefault of 64 KiB — `0` is the unset sentinel here just as it is on the xDS\npath, not a request to buffer nothing.\n\nRaise this to match the listener's `maxBufferSize` when large request bodies\nmust stay retriable — LLM chat traffic carrying conversation history routinely\nexceeds the default, and exceeding it disables retries for that request. The\ncap applies per in-flight request, so the memory it admits is this value times\nthe number of retriable requests in flight.",
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0,
-          "default": 65536
         },
         "precondition": {
           "description": "CEL expression evaluated against the request before any attempt; when `false`,\nretries are disabled (only the initial attempt is made), e.g. `request.method == \"GET\"`.\nRetrying requires buffering the request body in memory for replay, so this lets us skip\nthat cost when the request is known to be non-retriable (e.g. streaming or websockets).",
@@ -7432,6 +8310,19 @@
           "properties": {
             "dynamic": {
               "type": "object",
+              "properties": {
+                "target": {
+                  "description": "CEL expression evaluated against the request to compute the dial\ntarget (e.g. `extproc.workerPodIp + \":\" + string(extproc.workerPodPort)`\nto read dynamic metadata an extProc policy already set). Must\nevaluate to a `host:port` string. The expression and any policy that\nsupplies its dynamic metadata are trusted to select the dial target.\nIf unset, the target is read from the request's own :authority/URI, as\ntoday.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Expression"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
               "additionalProperties": false
             }
           },
@@ -7544,12 +8435,31 @@
               "type": "null"
             }
           ]
+        },
+        "sseKeepAlive": {
+          "description": "Interval at which SSE keep-alive comments are sent on long-lived MCP streams.\nDisabled when unset. Set this when a load balancer or API gateway sits in front\nof agentgateway and reaps connections that carry no traffic.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dnsRebindingProtection": {
+          "description": "Opt-in MCP DNS rebinding protection (Host/Origin must be localhost).\nOff by default; see https://github.com/agentgateway/agentgateway/issues/1855.",
+          "type": "boolean"
+        },
+        "server": {
+          "description": "Overrides for the MCP `serverInfo` and gateway instructions reported to clients on\n`initialize`/`server/discover` when multiplexing multiple targets. Unset fields fall\nback to the normal defaults.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpServerOverrides"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "targets"
-      ]
+      "additionalProperties": false
     },
     "LocalMcpTarget": {
       "type": "object",
@@ -7867,6 +8777,41 @@
         }
       ]
     },
+    "McpServerOverrides": {
+      "description": "Overrides for the MCP `serverInfo` (`name`/`version`/`title`) and the gateway\ninstructions preamble, applied only when multiplexing multiple targets.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Overrides `serverInfo.name`. Must be set together with `version` — setting only one\nwould otherwise mix an overridden name with agentgateway's own version, or vice versa.\nDefaults to `agentgateway` when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "Overrides `serverInfo.version`. Must be set together with `name`, for the same reason.\nDefaults to the build version when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Overrides `serverInfo.title`. Unset by default.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instructions": {
+          "description": "Overrides the gateway preamble prepended to merged upstream instructions.\nDefaults to a generic gateway description when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "LocalAIBackend": {
       "anyOf": [
         {
@@ -8053,9 +8998,89 @@
             "string",
             "null"
           ]
+        },
+        "moderation": {
+          "description": "Configuration for running OpenAI inline moderation on request input and generated output.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenAIModeration"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
+    },
+    "OpenAIModeration": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "The moderation model to use. Defaults to `omni-moderation-latest`.",
+          "type": "string",
+          "default": "omni-moderation-latest"
+        },
+        "policy": {
+          "description": "Policies to apply to request input and generated output.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenAIModerationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenAIModerationPolicy": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "Policy for request input moderation.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenAIModerationConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output": {
+          "description": "Policy for generated output moderation.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenAIModerationConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenAIModerationConfig": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/OpenAIModerationMode"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ]
+    },
+    "OpenAIModerationMode": {
+      "type": "string",
+      "enum": [
+        "score",
+        "block"
+      ]
     },
     "GeminiProvider": {
       "type": "object",
@@ -8137,11 +9162,25 @@
             "string",
             "null"
           ]
+        },
+        "endpointPreference": {
+          "description": "Which endpoint to prefer (Runtime vs Mantle).",
+          "$ref": "#/$defs/BedrockEndpointPreference",
+          "default": "runtimePreferred"
         }
       },
       "additionalProperties": false,
       "required": [
         "region"
+      ]
+    },
+    "BedrockEndpointPreference": {
+      "type": "string",
+      "enum": [
+        "runtimePreferred",
+        "mantlePreferred",
+        "mantleOnly",
+        "runtimeOnly"
       ]
     },
     "AzureProvider": {
@@ -8275,6 +9314,8 @@
         "responses",
         "embeddings",
         "anthropicTokenCount",
+        "generateContent",
+        "geminiCountTokens",
         "realtime",
         "rerank"
       ]
@@ -8326,8 +9367,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "http": {
           "description": "HTTP protocol settings for this backend.",
@@ -8472,6 +9512,18 @@
           ],
           "default": null
         },
+        "sessionAffinity": {
+          "description": "Apply best-effort session affinity using a request value selected by a CEL expression.\nRequests with the same value are consistently load balanced to the same healthy service\nendpoint or AI provider, but may be remapped when the available backends change.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionAffinityPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "ai": {
           "description": "Mark this as LLM traffic to enable LLM processing.",
           "anyOf": [
@@ -8580,6 +9632,20 @@
           "type": "string",
           "const": "passthrough"
         }
+      ]
+    },
+    "SessionAffinityPolicy": {
+      "description": "Configures best-effort session affinity using an existing request attribute.\n\nThe source CEL expression selects the affinity value. Requests with the same value are\nconsistently load balanced to the same healthy service endpoint or AI provider. Unlike session\npersistence, this policy does not identify or track a previously selected backend, so changes to\nthe available backends may remap a value.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "description": "CEL expression evaluated against request state. It must return a string or bytes value.\nExamples: `request.headers[\"x-session-id\"]` or `string(source.address)`.",
+          "$ref": "#/$defs/Expression"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source"
       ]
     },
     "LocalAIProviders": {
@@ -8766,12 +9832,37 @@
           "type": "object",
           "properties": {
             "host": {
-              "description": "Hostname or IP address",
               "type": "string"
             }
           },
           "required": [
             "host"
+          ]
+        },
+        {
+          "description": "Resolve the dial target from downstream TLS SNI and the original destination port.",
+          "type": "object",
+          "properties": {
+            "dynamic": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "description": "CEL expression evaluated against TCP connection context to compute a\n`host:port` dial target. Available fields include `source.*` and\n`destination.*`; for TLS, `destination.hostname` is the sniffed SNI.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Expression"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "dynamic"
           ]
         },
         {
@@ -8999,6 +10090,30 @@
           ],
           "default": null
         },
+        "networkExtAuthz": {
+          "description": "HTTP external authorization performed once for each downstream network connection.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtAuthz"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "substrateEgressActorResolution": {
+          "description": "Validate the originating actor before accepting a CONNECT tunnel.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EgressActorResolution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "proxy": {
           "description": "Enable downstream PROXY protocol handling on this gateway or port, including\nversion matching and whether PROXY headers are required or optional.",
           "anyOf": [
@@ -9096,11 +10211,14 @@
       "type": "object",
       "properties": {
         "maxBufferSize": {
-          "description": "Maximum request or response body size buffered by the frontend.",
-          "type": "integer",
+          "description": "Maximum request or response body size buffered by the frontend.\nDefaults to 2 MiB, or 32 MiB once the request enters LLM processing.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint",
           "minimum": 0,
-          "default": 2097152
+          "default": null
         },
         "http1MaxHeaders": {
           "description": "Maximum number of headers allowed in an HTTP/1 request. Changing this value causes a\nperformance degradation, even when set lower than the default of 100.",
@@ -9185,6 +10303,15 @@
             "null"
           ],
           "default": null
+        },
+        "maxConcurrentRequests": {
+          "description": "Maximum number of in-flight HTTP requests across this bind. This includes HTTP/1 requests\nand HTTP/2 streams. Requests over the limit are rejected immediately.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1
         }
       },
       "additionalProperties": false
@@ -9278,17 +10405,105 @@
       "properties": {
         "keepalives": {
           "description": "TCP keepalive settings for downstream connections.",
-          "$ref": "#/$defs/KeepaliveConfig"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KeepaliveConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "maxConnections": {
+          "description": "Maximum number of active downstream connections on this bind. Connections over the limit\nare closed immediately.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "keepalives"
-      ]
+      "additionalProperties": false
     },
     "NetworkAuthorization": {
       "description": "CEL authorization rules for downstream network connections.",
       "$ref": "#/$defs/RuleSet"
+    },
+    "EgressActorResolution": {
+      "description": "Validates an actor's identity before accepting a CONNECT tunnel.",
+      "type": "object",
+      "properties": {
+        "policies": {
+          "description": "Backend policies used when connecting to the service.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SimpleLocalBackendPolicies"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {
+          "description": "Service reference. Service must be defined in the top level services list.",
+          "type": "object",
+          "properties": {
+            "service": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "description": "Name of the target Service, as defined in the top-level `services` list.",
+                  "$ref": "#/$defs/NamespacedHostname"
+                },
+                "port": {
+                  "description": "Port on the target Service to route to.",
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "port"
+              ]
+            }
+          },
+          "required": [
+            "service"
+          ]
+        },
+        {
+          "description": "Hostname or IP address",
+          "type": "object",
+          "properties": {
+            "host": {
+              "description": "Hostname or IP address",
+              "type": "string"
+            }
+          },
+          "required": [
+            "host"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "backend": {
+              "description": "Explicit backend reference. Backend must be defined in the top level backends list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend"
+          ]
+        }
+      ]
     },
     "Proxy": {
       "type": "object",
@@ -9374,6 +10589,17 @@
     "LoggingPolicy": {
       "type": "object",
       "properties": {
+        "preset": {
+          "description": "Selects the built-in fields for stdout access logs.\nIf unset, human-oriented legacy fields are used.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AccessLogPreset"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "filter": {
           "description": "CEL expression that decides whether a request is logged.",
           "anyOf": [
@@ -9424,6 +10650,15 @@
         }
       },
       "additionalProperties": false
+    },
+    "AccessLogPreset": {
+      "oneOf": [
+        {
+          "description": "Use the OTel-aligned built-in HTTP field set for stdout access logs.",
+          "type": "string",
+          "const": "otel"
+        }
+      ]
     },
     "OtlpLoggingConfig": {
       "type": "object",
@@ -9561,6 +10796,17 @@
     "DatabaseLoggingConfig": {
       "type": "object",
       "properties": {
+        "llm": {
+          "description": "LLM detail stored in the database. `metadata` stores request metadata, usage, timing, and\ncost without prompt or completion content in the dedicated payload table. `full`\nadditionally captures and stores prompt and completion content there. When omitted, legacy\nbehavior is preserved: content captured by CEL expressions is also stored in the payload.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatabaseLlmMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "add": {
           "description": "Database-only fields to add, computed from CEL expressions.",
           "type": "object",
@@ -9570,6 +10816,20 @@
         }
       },
       "additionalProperties": false
+    },
+    "DatabaseLlmMode": {
+      "oneOf": [
+        {
+          "description": "Store LLM metadata without prompt or completion content.",
+          "type": "string",
+          "const": "metadata"
+        },
+        {
+          "description": "Store LLM metadata and prompt/completion content.",
+          "type": "string",
+          "const": "full"
+        }
+      ]
     },
     "TracingConfig": {
       "description": "Configuration for dynamic tracing policy",
@@ -9617,7 +10877,19 @@
           "default": null
         },
         "clientSampling": {
-          "description": "Optional per-policy override for client sampling. If set, overrides global config for\nrequests that use this frontend policy.",
+          "description": "Optional per-policy override for client sampling. If set, overrides global config for\nrequests that use this frontend policy. Only applies to requests arriving with a sampled\n`traceparent` (`-01`); use `parentNotSampled` for requests whose trace is not sampled.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StringBoolFloat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parentNotSampled": {
+          "description": "Whether to trace a request that arrives with a `traceparent` whose sampled flag is unset\n(`-00`), meaning the client asked for it not to be traced. When this is `true` the request\nis traced anyway, and `-01` is sent upstream so downstream services trace it too. If\nunspecified, the client's choice is honored and the request is not traced.\n\nOnly one of `randomSampling`, `clientSampling` and `parentNotSampled` applies to any given\nrequest; the incoming `traceparent` decides which.",
           "anyOf": [
             {
               "$ref": "#/$defs/StringBoolFloat"
@@ -10024,6 +11296,31 @@
           ]
         },
         {
+          "description": "Resolve the dial target from request metadata using a CEL expression.",
+          "type": "object",
+          "properties": {
+            "dynamic": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Expression"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "dynamic"
+          ]
+        },
+        {
           "description": "Route to the in-process admin service instead of a network upstream.",
           "type": "object",
           "properties": {
@@ -10104,6 +11401,14 @@
           "minimum": 0,
           "maximum": 65535
         },
+        "bindAddress": {
+          "description": "bindAddress is the IPv4 or IPv6 address to listen on. Use `127.0.0.1` or `::1` for loopback.\nWhen omitted, listens on all interfaces (`::` on Unix with IPv6 enabled, otherwise `0.0.0.0`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "ip"
+        },
         "protocol": {
           "description": "protocol controls whether this gateway accepts HTTP/HTTPS routes or TCP/TLS routes. When omitted, gateways\ndefault to HTTP, or HTTPS when tls is set.",
           "anyOf": [
@@ -10116,7 +11421,7 @@
           ]
         },
         "listeners": {
-          "description": "listeners defines multiple named listeners under this gateway. When set, only `port` may be configured on the top level gateway.",
+          "description": "listeners defines multiple named listeners under this gateway. When set, only `port` and `bindAddress` may be configured on the top level gateway.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/LocalGatewayListener"
@@ -10597,10 +11902,7 @@
           ]
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "models"
-      ]
+      "additionalProperties": false
     },
     "LocalLLMProvider": {
       "type": "object",
@@ -10664,6 +11966,11 @@
             "null"
           ]
         },
+        "bedrockEndpointPreference": {
+          "description": "Which Bedrock endpoint to prefer (Runtime vs Mantle).",
+          "$ref": "#/$defs/BedrockEndpointPreference",
+          "default": "runtimePreferred"
+        },
         "vertexRegion": {
           "description": "Google Cloud region to use for the Vertex AI provider.",
           "type": [
@@ -10711,7 +12018,7 @@
           ]
         },
         "baseUrl": {
-          "description": "Base URL for the upstream provider. Expands to hostOverride, pathPrefix, and tls for https URLs.",
+          "description": "Base URL for the upstream provider. Expands to hostOverride, pathPrefix, and tls for https URLs.\nThe URL path is the upstream base path and defaults to / when omitted.\nProvider-specific endpoint paths are appended to this base path.\nFor example, https://api.openai.com/v1 sends completions to /v1/chat/completions,\nwhile https://api.openai.com sends them to /chat/completions.",
           "type": [
             "string",
             "null"
@@ -10910,8 +12217,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "health": {
           "description": "Outlier detection and health checking for this provider backend.",
@@ -11034,6 +12340,16 @@
             "$ref": "#/$defs/Expression"
           }
         },
+        "finalTransformation": {
+          "description": "final_transformation allows setting values from CEL expressions for the request, overriding any existing values.\nOccurs after conversion of the request to the provider format, allowing for provider-specific transformations.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
         "requestHeaders": {
           "description": "requestHeaders modifies headers in requests to the LLM provider.",
           "anyOf": [
@@ -11089,8 +12405,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "health": {
           "description": "health configures outlier detection for this model backend.",
@@ -11507,11 +12822,11 @@
           ],
           "default": null
         },
-        "usageReport": {
-          "description": "Report final LLM token usage to an HTTP endpoint, once per request, on\ncompletion.",
+        "timeout": {
+          "description": "Set request timeout limits.",
           "anyOf": [
             {
-              "$ref": "#/$defs/UsageReport"
+              "$ref": "#/$defs/TimeoutPolicy"
             },
             {
               "type": "null"
@@ -11572,6 +12887,28 @@
             }
           ]
         },
+        "sseKeepAlive": {
+          "description": "Interval at which SSE keep-alive comments are sent on long-lived MCP streams.\nDisabled when unset. Set this when a load balancer or API gateway sits in front\nof agentgateway and reaps connections that carry no traffic.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dnsRebindingProtection": {
+          "description": "Opt-in MCP DNS rebinding protection (Host/Origin must be localhost).\nOff by default; see https://github.com/agentgateway/agentgateway/issues/1855.",
+          "type": "boolean"
+        },
+        "server": {
+          "description": "Overrides for the MCP `serverInfo` and gateway instructions reported to clients on\n`initialize`/`server/discover` when multiplexing multiple targets. Unset fields fall\nback to the normal defaults.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpServerOverrides"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "policies": {
           "description": "Policies applied to MCP requests.",
           "anyOf": [
@@ -11584,10 +12921,7 @@
           ]
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "targets"
-      ]
+      "additionalProperties": false
     },
     "LocalUIConfig": {
       "type": "object",

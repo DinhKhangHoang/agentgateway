@@ -7,13 +7,21 @@ use agent_core::{drain, metrics, readiness, signal};
 use prometheus_client::registry::Registry;
 use tokio::task::JoinSet;
 
-use crate::control::caclient;
+use crate::control::{caclient, spiffe};
 use crate::telemetry::trc;
 use crate::{Config, ProxyInputs, client, config_store, mcp, proxy, state_manager};
 
 pub async fn run(
 	config: Arc<Config>,
 	config_resource_store: Option<config_store::ConfigResourceStore>,
+) -> anyhow::Result<Bound> {
+	run_with_ui_assets(config, config_resource_store, &crate::ui::EMPTY_ASSETS_DIR).await
+}
+
+pub async fn run_with_ui_assets(
+	config: Arc<Config>,
+	config_resource_store: Option<config_store::ConfigResourceStore>,
+	ui_assets: &'static include_dir::Dir<'static>,
 ) -> anyhow::Result<Bound> {
 	crate::transport::tls::warn_if_key_log_enabled();
 	let (data_plane_handle, data_plane_pool) = new_data_plane_pool(config.num_worker_threads);
@@ -66,6 +74,17 @@ pub async fn run(
 	} else {
 		None
 	};
+	let spiffe = if let Some(cfg) = &config.spiffe {
+		let client = Arc::new(
+			spiffe::SpiffeClient::new(cfg.endpoint.clone())
+				.await
+				.context("connect to SPIFFE workload API")?,
+		);
+		Some(client)
+	} else {
+		debug!("SPIFFE not configured; skipping workload API client");
+		None
+	};
 	let pool = ca
 		.clone()
 		.map(|ca| agent_hbone::pool::WorkloadHBONEPool::new(config.hbone.clone(), ca));
@@ -74,13 +93,27 @@ pub async fn run(
 	let metrics_handle = Arc::new(crate::metrics::Metrics::new(
 		sub_registry,
 		config.metrics.excluded_metrics.clone(),
+		config.histograms,
 	));
-	let client = client::Client::new(
+	let client = client::Client::new_with_h2_config(
 		&config.dns,
 		pool,
+		Arc::new(config.hbone.h2.clone()),
 		config.backend.clone(),
 		Some(metrics_handle.clone()),
 	);
+
+	let model_catalog_sources = if let Some(store) = &config_resource_store {
+		config_store::merge_model_catalog_sources(
+			&store
+				.list(Some(config_store::ConfigResourceKind::ModelCatalog))
+				.await?,
+			config.model_catalog.sources.clone(),
+		)?
+	} else {
+		config.model_catalog.sources.clone()
+	};
+	let model_catalog = crate::llm::catalog::ModelCatalog::new(model_catalog_sources).await?;
 
 	let (xds_tx, xds_rx) = tokio::sync::watch::channel(());
 	let state_mgr = state_manager::StateManager::new(
@@ -89,24 +122,13 @@ pub async fn run(
 		Arc::new(xds_metrics),
 		xds_tx,
 		config_resource_store.clone(),
+		model_catalog.clone(),
 	)
 	.await?;
 	let stores = state_mgr.stores();
 	let resource_manager = state_mgr.resource_manager();
 
 	state_manager::start_self_workload_resolution(&config, stores.clone(), &ready);
-
-	let mut model_catalog_sources = if let Some(store) = &config_resource_store {
-		config_store::model_catalog_sources(
-			&store
-				.list(Some(config_store::ConfigResourceKind::ModelCatalog))
-				.await?,
-		)?
-	} else {
-		Vec::new()
-	};
-	model_catalog_sources.extend(config.model_catalog.sources.clone());
-	let model_catalog = crate::llm::cost::ModelCatalog::new(model_catalog_sources)?;
 
 	let mut xds_rx_for_task = xds_rx.clone();
 	tokio::spawn(async move {
@@ -126,6 +148,7 @@ pub async fn run(
 		shutdown.trigger(),
 		drain_rx.clone(),
 		data_plane_handle.clone(),
+		ui_assets,
 	)
 	.await
 	.context("admin server starts")?;
@@ -141,9 +164,11 @@ pub async fn run(
 		admin: Some(admin_server.service()),
 		upstream: client.clone(),
 		ca,
+		spiffe,
 
 		mcp_state: mcp::App::new(stores.clone(), config.session_encoder.clone()),
-		llm_usage_report_in_flight: Default::default(),
+		admission: Default::default(),
+		llm_usage_report_in_flight: Arc::new(tokio::sync::Semaphore::new(64)),
 	};
 
 	let gw = proxy::Gateway::new(Arc::new(pi), drain_rx.clone());

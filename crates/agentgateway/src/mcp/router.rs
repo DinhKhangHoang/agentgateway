@@ -1,8 +1,8 @@
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agent_core::prelude::{AssertSize, Strng};
-use axum::response::Response;
 
 use crate::http::authorization::RuleSets;
 use crate::http::sessionpersistence::Encoder;
@@ -17,8 +17,8 @@ use crate::proxy::httpproxy::{MustSnapshot, PolicyClient};
 use crate::store::{BackendPolicies, Stores};
 use crate::telemetry::log::RequestLog;
 use crate::types::agent::{
-	BackendTargetRef, McpBackend, McpPrefixMode, McpTargetSpec, ResourceName, SimpleBackend,
-	SimpleBackendReference,
+	BackendTargetRef, McpBackend, McpPrefixMode, McpServerOverrides, McpTargetSpec, ResourceName,
+	SimpleBackend, SimpleBackendReference,
 };
 use crate::{ProxyInputs, cel, mcp};
 
@@ -40,6 +40,11 @@ impl App {
 		backend: &McpBackend,
 		req: &Request,
 	) -> Option<SimpleBackendReference> {
+		// Invalid well-known requests must not bypass the validation in `serve`
+		// through the direct upstream passthrough path.
+		if backend.dns_rebinding_protection && !mcp::dns_rebinding::is_localhost_request(req) {
+			return None;
+		}
 		if backend.targets.len() != 1 {
 			return None;
 		}
@@ -106,11 +111,14 @@ impl App {
 				prefix_mode: backend.prefix_mode,
 				failure_mode: backend.failure_mode,
 				session_idle_ttl: backend.session_idle_ttl,
+				sse_keep_alive: backend.sse_keep_alive,
+				server: backend.server.clone(),
 			}
 		};
 		let sessions = self.session.clone();
 		sessions.ensure_idle_running();
 		let client = PolicyClient::new(pi.clone());
+		let request_client = client.with_parent(req.deref());
 		let authorization_policies = backend_policies
 			.mcp_authorization
 			.unwrap_or_else(|| McpAuthorizationSet::new(RuleSets::from(Vec::new())));
@@ -121,8 +129,12 @@ impl App {
 		let logy = log.mcp_status.clone();
 		logy.store(Some(MCPInfo::default()));
 		req.extensions_mut().insert(logy);
-		let tracer = log.span_writer();
-		req.extensions_mut().insert(tracer);
+
+		if backend.dns_rebinding_protection
+			&& let Some(resp) = mcp::dns_rebinding::reject_non_localhost(&req)
+		{
+			return Ok(resp);
+		}
 
 		authorization_policies.register(log.cel.ctx());
 		log.cel.ctx().maybe_buffer_request_body(&mut req).await;
@@ -136,7 +148,7 @@ impl App {
 		// replaces this with the post-authentication request state.
 		Self::snapshot_request_without_clearing_extensions(&mut req, log);
 		if let Some(auth) = authn.as_ref()
-			&& let Some(resp) = auth::enforce_authentication(&mut req, auth, &client).await?
+			&& let Some(resp) = auth::enforce_authentication(&mut req, auth, &request_client).await?
 		{
 			return Ok(resp);
 		}
@@ -157,6 +169,7 @@ impl App {
 					.handle(
 						req,
 						RelayInputs {
+							backend_id: backend_group_name.clone(),
 							backend: backends.clone(),
 							policies: authorization_policies.clone(),
 							mcp_guardrails: mcp_guardrails.clone(),
@@ -178,6 +191,7 @@ impl App {
 					.handle(
 						req,
 						RelayInputs {
+							backend_id: backend_group_name,
 							backend: backends.clone(),
 							policies: authorization_policies.clone(),
 							mcp_guardrails: mcp_guardrails.clone(),
@@ -225,6 +239,8 @@ pub struct McpBackendGroup {
 	pub prefix_mode: McpPrefixMode,
 	pub failure_mode: FailureMode,
 	pub session_idle_ttl: Duration,
+	pub sse_keep_alive: Option<Duration>,
+	pub server: Option<McpServerOverrides>,
 }
 
 impl Default for McpBackendGroup {
@@ -235,6 +251,8 @@ impl Default for McpBackendGroup {
 			prefix_mode: McpPrefixMode::default(),
 			failure_mode: crate::mcp::FailureMode::default(),
 			session_idle_ttl: mcp::DEFAULT_SESSION_IDLE_TTL,
+			sse_keep_alive: None,
+			server: None,
 		}
 	}
 }

@@ -34,10 +34,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Static MCPBackend target backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "static-mcp-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "static-mcp-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -58,10 +56,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Static MCPBackend backend with prefixMode Never",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "never-prefix-mcp-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "never-prefix-mcp-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						PrefixMode: agentgateway.PrefixNever,
@@ -81,10 +77,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Service selector MCPBackend backend - same namespace",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "service-mcp-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "service-mcp-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -106,10 +100,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Namespace selector MCPBackend backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "namespace-mcp-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "namespace-mcp-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -136,10 +128,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Service selector MCPBackend backend - agentgateway.dev appProtocol",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "service-mcp-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "service-mcp-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -161,10 +151,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Service selector MCPBackend backend - legacy annotation path",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "service-mcp-backend-legacy",
-					Namespace: "test-ns",
-				},
+				Name:      "service-mcp-backend-legacy",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -186,10 +174,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Service selector MCPBackend backend - new annotation takes precedence",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "service-mcp-backend-precedence",
-					Namespace: "test-ns",
-				},
+				Name:      "service-mcp-backend-precedence",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -211,10 +197,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Service selector MCPBackend backend - target name annotation",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "service-mcp-backend-target-name",
-					Namespace: "test-ns",
-				},
+				Name:      "service-mcp-backend-target-name",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -236,10 +220,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Service selector MCPBackend backend - invalid target name annotation",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "service-mcp-backend-invalid-target-name",
-					Namespace: "test-ns",
-				},
+				Name:      "service-mcp-backend-invalid-target-name",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -263,10 +245,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Service backendRef MCPBackend backend - same namespace",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "service-ref-mcp-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "service-ref-mcp-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -288,10 +268,8 @@ func TestBuildMCP(t *testing.T) {
 		{
 			name: "Error case - invalid service selector",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "invalid-selector-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "invalid-selector-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					MCP: &agentgateway.MCPBackend{
 						Targets: []agentgateway.McpTargetSelector{
@@ -348,15 +326,11 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid OpenAI backend with inline auth",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "openai-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "openai-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					Policies: &agentgateway.BackendFull{
-						BackendSimple: agentgateway.BackendSimple{
-							Auth: &agentgateway.BackendAuth{InlineKey: new("sk-test-token")},
-						},
+						Auth: &agentgateway.BackendAuth{InlineKey: new("sk-test-token")},
 					},
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
@@ -369,12 +343,36 @@ func TestBuildAIBackend(t *testing.T) {
 			},
 		},
 		{
+			name: "Valid OpenAI backend with inline moderation",
+			backend: &agentgateway.AgentgatewayBackend{
+				Name:      "openai-moderation-backend",
+				Namespace: "test-ns",
+				Spec: agentgateway.AgentgatewayBackendSpec{
+					AI: &agentgateway.AIBackend{
+						LLM: &agentgateway.LLMProvider{
+							OpenAI: &agentgateway.OpenAIConfig{
+								Model: new("gpt-5"),
+								Moderation: &agentgateway.OpenAIInlineModeration{
+									Policy: &agentgateway.OpenAIInlineModerationPolicy{
+										Input: &agentgateway.OpenAIInlineModerationConfig{
+											Mode: agentgateway.OpenAIInlineModerationModeBlock,
+										},
+										Output: &agentgateway.OpenAIInlineModerationConfig{
+											Mode: agentgateway.OpenAIInlineModerationModeScore,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "Valid Azure OpenAI backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "azure-openai-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "azure-openai-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
@@ -391,21 +389,17 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid Azure Foundry backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "azure-foundry-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "azure-foundry-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
 							Azure: &agentgateway.AzureConfig{
-								AzureSettings: agentgateway.AzureSettings{
-									ResourceName: "my-foundry-resource",
-									ResourceType: agentgateway.AzureResourceTypeFoundry,
-									ApiVersion:   new("2024-12-01-preview"),
-									ProjectName:  new("my-project"),
-								},
-								Model: new("gpt-4o-mini"),
+								ResourceName: "my-foundry-resource",
+								ResourceType: agentgateway.AzureResourceTypeFoundry,
+								ApiVersion:   new("2024-12-01-preview"),
+								ProjectName:  new("my-project"),
+								Model:        new("gpt-4o-mini"),
 							},
 						},
 					},
@@ -415,10 +409,8 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid Anthropic backend with model",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "anthropic-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "anthropic-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
@@ -433,10 +425,8 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid Gemini backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "gemini-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "gemini-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
@@ -451,10 +441,8 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid VertexAI backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "vertex-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "vertex-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
@@ -469,19 +457,16 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid custom backend with host target",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "custom-host-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "custom-host-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
 							Custom: &agentgateway.CustomProvider{
-								CustomProviderSettings: agentgateway.CustomProviderSettings{
-									Formats: []agentgateway.ProviderFormatConfig{
-										{Type: agentgateway.ProviderFormatCompletions},
-										{Type: agentgateway.ProviderFormatResponses, Path: "/v1/responses"},
-									},
+								ProviderOverride: new("team-a"),
+								Formats: []agentgateway.ProviderFormatConfig{
+									{Type: agentgateway.ProviderFormatCompletions},
+									{Type: agentgateway.ProviderFormatResponses, Path: "/v1/responses"},
 								},
 							},
 							Host: "llm.example.com",
@@ -494,22 +479,18 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid custom backend with Service backendRef",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "custom-service-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "custom-service-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
 							Custom: &agentgateway.CustomProvider{
-								CustomProviderSettings: agentgateway.CustomProviderSettings{
-									BackendRef: &agentgateway.LocalBackendObjectReference{
-										Name: "llm-service",
-										Port: new(int32(8080)),
-									},
-									Formats: []agentgateway.ProviderFormatConfig{
-										{Type: agentgateway.ProviderFormatCompletions},
-									},
+								BackendRef: &agentgateway.LocalBackendObjectReference{
+									Name: "llm-service",
+									Port: new(int32(8080)),
+								},
+								Formats: []agentgateway.ProviderFormatConfig{
+									{Type: agentgateway.ProviderFormatCompletions},
 								},
 							},
 						},
@@ -521,23 +502,19 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid custom backend with InferencePool backendRef",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "custom-inferencepool-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "custom-inferencepool-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
 							Custom: &agentgateway.CustomProvider{
-								CustomProviderSettings: agentgateway.CustomProviderSettings{
-									BackendRef: &agentgateway.LocalBackendObjectReference{
-										Group: new(wellknown.InferencePoolGVK.Group),
-										Kind:  new(wellknown.InferencePoolGVK.Kind),
-										Name:  "llm-pool",
-									},
-									Formats: []agentgateway.ProviderFormatConfig{
-										{Type: agentgateway.ProviderFormatMessages, Path: "/api/messages"},
-									},
+								BackendRef: &agentgateway.LocalBackendObjectReference{
+									Group: new(wellknown.InferencePoolGVK.Group),
+									Kind:  new(wellknown.InferencePoolGVK.Kind),
+									Name:  "llm-pool",
+								},
+								Formats: []agentgateway.ProviderFormatConfig{
+									{Type: agentgateway.ProviderFormatMessages, Path: "/api/messages"},
 								},
 							},
 						},
@@ -549,10 +526,8 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid Bedrock backend with custom region and guardrail",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "bedrock-backend-custom",
-					Namespace: "test-ns",
-				},
+				Name:      "bedrock-backend-custom",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					// TODO: Add AWS auth
 					//Policies: &v1alpha1.BackendFull{
@@ -563,12 +538,10 @@ func TestBuildAIBackend(t *testing.T) {
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
 							Bedrock: &agentgateway.BedrockConfig{
-								BedrockSettings: agentgateway.BedrockSettings{
-									Region: "eu-west-1",
-									Guardrail: &agentgateway.AWSGuardrailConfig{
-										GuardrailIdentifier: "test-guardrail",
-										GuardrailVersion:    "1.0",
-									},
+								Region: "eu-west-1",
+								Guardrail: &agentgateway.AWSGuardrailConfig{
+									GuardrailIdentifier: "test-guardrail",
+									GuardrailVersion:    "1.0",
 								},
 								Model: new("anthropic.claude-3-haiku-20240307-v1:0"),
 							},
@@ -585,19 +558,86 @@ func TestBuildAIBackend(t *testing.T) {
 			},
 		},
 		{
+			name: "Valid Bedrock backend with MantleOnly endpoint preference",
+			backend: &agentgateway.AgentgatewayBackend{
+				Name:      "bedrock-mantle-only",
+				Namespace: "test-ns",
+				Spec: agentgateway.AgentgatewayBackendSpec{
+					AI: &agentgateway.AIBackend{
+						LLM: &agentgateway.LLMProvider{
+							Bedrock: &agentgateway.BedrockConfig{
+								Model:              new("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+								Region:             "us-east-1",
+								EndpointPreference: agentgateway.BedrockEndpointPreferenceMantleOnly,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Valid Bedrock backend with MantlePreferred endpoint preference",
+			backend: &agentgateway.AgentgatewayBackend{
+				Name:      "bedrock-mantle-preferred",
+				Namespace: "test-ns",
+				Spec: agentgateway.AgentgatewayBackendSpec{
+					AI: &agentgateway.AIBackend{
+						LLM: &agentgateway.LLMProvider{
+							Bedrock: &agentgateway.BedrockConfig{
+								Model:              new("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+								Region:             "us-east-1",
+								EndpointPreference: agentgateway.BedrockEndpointPreferenceMantlePreferred,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Valid Bedrock backend with RuntimeOnly endpoint preference",
+			backend: &agentgateway.AgentgatewayBackend{
+				Name:      "bedrock-runtime-only",
+				Namespace: "test-ns",
+				Spec: agentgateway.AgentgatewayBackendSpec{
+					AI: &agentgateway.AIBackend{
+						LLM: &agentgateway.LLMProvider{
+							Bedrock: &agentgateway.BedrockConfig{
+								Model:              new("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+								Region:             "us-east-1",
+								EndpointPreference: agentgateway.BedrockEndpointPreferenceRuntimeOnly,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Valid Bedrock backend with default endpoint preference",
+			backend: &agentgateway.AgentgatewayBackend{
+				Name:      "bedrock-default",
+				Namespace: "test-ns",
+				Spec: agentgateway.AgentgatewayBackendSpec{
+					AI: &agentgateway.AIBackend{
+						LLM: &agentgateway.LLMProvider{
+							Bedrock: &agentgateway.BedrockConfig{
+								Model:  new("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+								Region: "us-east-1",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "OpenAI backend with secret reference auth",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "openai-secret-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "openai-secret-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					Policies: &agentgateway.BackendFull{
-						BackendSimple: agentgateway.BackendSimple{
-							Auth: &agentgateway.BackendAuth{SecretRef: &agentgateway.LocalSecretKeyRef{
-								Name: "openai-secret",
-							}},
-						},
+						Auth: &agentgateway.BackendAuth{SecretRef: &agentgateway.LocalSecretKeyRef{
+							Name: "openai-secret",
+						}},
 					},
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
@@ -617,10 +657,8 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "MultiPool backend - translates all providers for failover",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "multipool-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "multipool-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						PriorityGroups: []agentgateway.PriorityGroup{
@@ -629,27 +667,19 @@ func TestBuildAIBackend(t *testing.T) {
 									{
 										Name: "openai",
 										Policies: &agentgateway.BackendWithAI{
-											BackendSimple: agentgateway.BackendSimple{
-												Auth: &agentgateway.BackendAuth{InlineKey: new("first-token")},
-											},
+											Auth: &agentgateway.BackendAuth{InlineKey: new("first-token")},
 										},
-										LLMProvider: agentgateway.LLMProvider{
-											OpenAI: &agentgateway.OpenAIConfig{
-												Model: new("gpt-4"),
-											},
+										OpenAI: &agentgateway.OpenAIConfig{
+											Model: new("gpt-4"),
 										},
 									},
 									{
 										Name: "anthropic",
 										Policies: &agentgateway.BackendWithAI{
-											BackendSimple: agentgateway.BackendSimple{
-												Auth: &agentgateway.BackendAuth{InlineKey: new("second-token")},
-											},
+											Auth: &agentgateway.BackendAuth{InlineKey: new("second-token")},
 										},
-										LLMProvider: agentgateway.LLMProvider{
-											Anthropic: &agentgateway.AnthropicConfig{
-												Model: new("claude-3"),
-											},
+										Anthropic: &agentgateway.AnthropicConfig{
+											Model: new("claude-3"),
 										},
 									},
 								},
@@ -662,10 +692,8 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "MultiPool backend with multiple priority levels - creates separate provider groups",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "multipool-priority-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "multipool-priority-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					AI: &agentgateway.AIBackend{
 						PriorityGroups: []agentgateway.PriorityGroup{
@@ -674,27 +702,19 @@ func TestBuildAIBackend(t *testing.T) {
 									{
 										Name: "openai",
 										Policies: &agentgateway.BackendWithAI{
-											BackendSimple: agentgateway.BackendSimple{
-												Auth: &agentgateway.BackendAuth{InlineKey: new("openai-primary")},
-											},
+											Auth: &agentgateway.BackendAuth{InlineKey: new("openai-primary")},
 										},
-										LLMProvider: agentgateway.LLMProvider{
-											OpenAI: &agentgateway.OpenAIConfig{
-												Model: new("gpt-4"),
-											},
+										OpenAI: &agentgateway.OpenAIConfig{
+											Model: new("gpt-4"),
 										},
 									},
 									{
 										Name: "anthropic",
 										Policies: &agentgateway.BackendWithAI{
-											BackendSimple: agentgateway.BackendSimple{
-												Auth: &agentgateway.BackendAuth{InlineKey: new("anthropic-primary")},
-											},
+											Auth: &agentgateway.BackendAuth{InlineKey: new("anthropic-primary")},
 										},
-										LLMProvider: agentgateway.LLMProvider{
-											Anthropic: &agentgateway.AnthropicConfig{
-												Model: new("claude-3-opus"),
-											},
+										Anthropic: &agentgateway.AnthropicConfig{
+											Model: new("claude-3-opus"),
 										},
 									},
 								},
@@ -704,14 +724,10 @@ func TestBuildAIBackend(t *testing.T) {
 									{
 										Name: "gemini",
 										Policies: &agentgateway.BackendWithAI{
-											BackendSimple: agentgateway.BackendSimple{
-												Auth: &agentgateway.BackendAuth{InlineKey: new("gemini-fallback")},
-											},
+											Auth: &agentgateway.BackendAuth{InlineKey: new("gemini-fallback")},
 										},
-										LLMProvider: agentgateway.LLMProvider{
-											Gemini: &agentgateway.GeminiConfig{
-												Model: new("gemini-pro"),
-											},
+										Gemini: &agentgateway.GeminiConfig{
+											Model: new("gemini-pro"),
 										},
 									},
 								},
@@ -724,10 +740,8 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "OpenAI backend with routes configuration",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "openai-with-routes",
-					Namespace: "test-ns",
-				},
+				Name:      "openai-with-routes",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					Policies: &agentgateway.BackendFull{
 						AI: &agentgateway.BackendAI{
@@ -752,10 +766,8 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Valid AWS AgentCore backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "aws-agentcore-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "aws-agentcore-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					Aws: &agentgateway.AwsBackend{
 						AgentCore: &agentgateway.AwsAgentCoreBackend{
@@ -769,10 +781,8 @@ func TestBuildAIBackend(t *testing.T) {
 		{
 			name: "Bedrock backend with new route types (responses and anthropic_token_count)",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "bedrock-with-new-routes",
-					Namespace: "test-ns",
-				},
+				Name:      "bedrock-with-new-routes",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					Policies: &agentgateway.BackendFull{
 						AI: &agentgateway.BackendAI{
@@ -791,7 +801,7 @@ func TestBuildAIBackend(t *testing.T) {
 					AI: &agentgateway.AIBackend{
 						LLM: &agentgateway.LLMProvider{
 							Bedrock: &agentgateway.BedrockConfig{
-								BedrockSettings: agentgateway.BedrockSettings{Region: "us-east-1"},
+								Region: "us-east-1",
 							},
 						},
 					},
@@ -814,22 +824,18 @@ func TestBuildAIBackend(t *testing.T) {
 
 func TestBuildAgwBackendReferencesIncludesCustomProviderBackendRefs(t *testing.T) {
 	backend := &agentgateway.AgentgatewayBackend{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "custom-backend",
-			Namespace: "test-ns",
-		},
+		Name:      "custom-backend",
+		Namespace: "test-ns",
 		Spec: agentgateway.AgentgatewayBackendSpec{
 			AI: &agentgateway.AIBackend{
 				LLM: &agentgateway.LLMProvider{
 					Custom: &agentgateway.CustomProvider{
-						CustomProviderSettings: agentgateway.CustomProviderSettings{
-							BackendRef: &agentgateway.LocalBackendObjectReference{
-								Name: "llm-service",
-								Port: new(int32(8080)),
-							},
-							Formats: []agentgateway.ProviderFormatConfig{
-								{Type: agentgateway.ProviderFormatCompletions},
-							},
+						BackendRef: &agentgateway.LocalBackendObjectReference{
+							Name: "llm-service",
+							Port: new(int32(8080)),
+						},
+						Formats: []agentgateway.ProviderFormatConfig{
+							{Type: agentgateway.ProviderFormatCompletions},
 						},
 					},
 				},
@@ -838,18 +844,14 @@ func TestBuildAgwBackendReferencesIncludesCustomProviderBackendRefs(t *testing.T
 						Providers: []agentgateway.NamedLLMProvider{
 							{
 								Name: "pool-provider",
-								LLMProvider: agentgateway.LLMProvider{
-									Custom: &agentgateway.CustomProvider{
-										CustomProviderSettings: agentgateway.CustomProviderSettings{
-											BackendRef: &agentgateway.LocalBackendObjectReference{
-												Group: new(wellknown.InferencePoolGVK.Group),
-												Kind:  new(wellknown.InferencePoolGVK.Kind),
-												Name:  "llm-pool",
-											},
-											Formats: []agentgateway.ProviderFormatConfig{
-												{Type: agentgateway.ProviderFormatMessages},
-											},
-										},
+								Custom: &agentgateway.CustomProvider{
+									BackendRef: &agentgateway.LocalBackendObjectReference{
+										Group: new(wellknown.InferencePoolGVK.Group),
+										Kind:  new(wellknown.InferencePoolGVK.Kind),
+										Name:  "llm-pool",
+									},
+									Formats: []agentgateway.ProviderFormatConfig{
+										{Type: agentgateway.ProviderFormatMessages},
 									},
 								},
 							},
@@ -873,7 +875,7 @@ func TestBuildAgwBackendReferencesIncludesCustomProviderBackendRefs(t *testing.T
 }
 
 func shortStringPtr(s string) *agentgateway.ShortString {
-	v := agentgateway.ShortString(s)
+	v := s
 	return &v
 }
 
@@ -887,11 +889,9 @@ func createMockSecret(namespace, name string, data map[string]string) *corev1.Se
 
 	// Create a mock Secret object for KRT
 	mockSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Data: secretData,
+		Name:      name,
+		Namespace: namespace,
+		Data:      secretData,
 	}
 
 	return mockSecret
@@ -899,10 +899,8 @@ func createMockSecret(namespace, name string, data map[string]string) *corev1.Se
 
 func createMockService(namespace, serviceName string, port int32) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceName,
-			Namespace: namespace,
-		},
+		Name:      serviceName,
+		Namespace: namespace,
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{
 				{
@@ -916,10 +914,8 @@ func createMockService(namespace, serviceName string, port int32) *corev1.Servic
 
 func createMockInferencePool(namespace, poolName string, port int32) *inf.InferencePool {
 	return &inf.InferencePool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      poolName,
-			Namespace: namespace,
-		},
+		Name:      poolName,
+		Namespace: namespace,
 		Spec: inf.InferencePoolSpec{
 			Selector: inf.LabelSelector{
 				MatchLabels: map[inf.LabelKey]inf.LabelValue{"app": "llm"},
@@ -927,7 +923,7 @@ func createMockInferencePool(namespace, poolName string, port int32) *inf.Infere
 			TargetPorts: []inf.Port{
 				{Number: inf.PortNumber(port)},
 			},
-			EndpointPickerRef: inf.EndpointPickerRef{
+			EndpointPickerRef: &inf.EndpointPickerRef{
 				Name: "epp",
 				Port: &inf.Port{Number: 9002},
 			},
@@ -946,10 +942,8 @@ func TestBuildStaticIr(t *testing.T) {
 		{
 			name: "Valid single host backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "test-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					Static: &agentgateway.StaticBackend{
 						Host: "api.example.com", Port: 443,
@@ -966,10 +960,8 @@ func TestBuildStaticIr(t *testing.T) {
 		{
 			name: "Valid unix socket backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "uds-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "uds-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					Static: &agentgateway.StaticBackend{
 						UnixPath: new("/shared/agent/agent.sock"),
@@ -985,10 +977,8 @@ func TestBuildStaticIr(t *testing.T) {
 		{
 			name: "Valid A2A host backend",
 			backend: &agentgateway.AgentgatewayBackend{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "a2a-backend",
-					Namespace: "test-ns",
-				},
+				Name:      "a2a-backend",
+				Namespace: "test-ns",
 				Spec: agentgateway.AgentgatewayBackendSpec{
 					A2A: &agentgateway.A2ABackend{
 						Host: "a2a.example.com", Port: 9090,
@@ -1041,10 +1031,8 @@ func TestGetSecretValue(t *testing.T) {
 		{
 			name: "Valid secret value",
 			secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "test-ns",
-					Name:      "test-secret",
-				},
+				Namespace: "test-ns",
+				Name:      "test-secret",
 				Data: map[string][]byte{
 					"key1": []byte("value1"),
 				},
@@ -1056,10 +1044,8 @@ func TestGetSecretValue(t *testing.T) {
 		{
 			name: "Secret value with spaces",
 			secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "test-ns",
-					Name:      "test-secret",
-				},
+				Namespace: "test-ns",
+				Name:      "test-secret",
 				Data: map[string][]byte{
 					"key1": []byte("  value with spaces  "),
 				},
@@ -1071,10 +1057,8 @@ func TestGetSecretValue(t *testing.T) {
 		{
 			name: "Key not found",
 			secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "test-ns",
-					Name:      "test-secret",
-				},
+				Namespace: "test-ns",
+				Name:      "test-secret",
 				Data: map[string][]byte{
 					"other-key": []byte("value"),
 				},
@@ -1086,10 +1070,8 @@ func TestGetSecretValue(t *testing.T) {
 		{
 			name: "Invalid UTF-8",
 			secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "test-ns",
-					Name:      "test-secret",
-				},
+				Namespace: "test-ns",
+				Name:      "test-secret",
 				Data: map[string][]byte{
 					"key1": {0xff, 0xfe, 0xfd},
 				},
@@ -1101,11 +1083,9 @@ func TestGetSecretValue(t *testing.T) {
 		{
 			name: "Empty secret data",
 			secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "test-ns",
-					Name:      "test-secret",
-				},
-				Data: map[string][]byte{},
+				Namespace: "test-ns",
+				Name:      "test-secret",
+				Data:      map[string][]byte{},
 			},
 			key:          "key1",
 			expectedVal:  "",
@@ -1130,13 +1110,11 @@ func TestGetSecretValue(t *testing.T) {
 
 func createMockMCPServiceWithTargetNameAnnotation(namespace, serviceName, targetName string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceName,
-			Namespace: namespace,
-			Labels:    map[string]string{"app": "mcp-server-target-name"},
-			Annotations: map[string]string{
-				apiannotations.MCPServiceTargetName: targetName,
-			},
+		Name:      serviceName,
+		Namespace: namespace,
+		Labels:    map[string]string{"app": "mcp-server-target-name"},
+		Annotations: map[string]string{
+			apiannotations.MCPServiceTargetName: targetName,
 		},
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{
@@ -1153,11 +1131,9 @@ func createMockMCPServiceWithTargetNameAnnotation(namespace, serviceName, target
 // createMockMCPServiceWithProtocol creates a mock service with a configurable appProtocol
 func createMockMCPServiceWithProtocol(namespace, serviceName, _ /* labels */, appProtocol string) *corev1.Service {
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceName,
-			Namespace: namespace,
-			Labels:    map[string]string{"app": "mcp-server"},
-		},
+		Name:      serviceName,
+		Namespace: namespace,
+		Labels:    map[string]string{"app": "mcp-server"},
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{
 				{
@@ -1187,13 +1163,11 @@ func createMockMCPServiceWithLegacyAnnotation(namespace, serviceName, labels, le
 	}
 
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceName,
-			Namespace: namespace,
-			Labels:    labelsMap,
-			Annotations: map[string]string{
-				"kgateway.dev/mcp-path": legacyPath,
-			},
+		Name:      serviceName,
+		Namespace: namespace,
+		Labels:    labelsMap,
+		Annotations: map[string]string{
+			"kgateway.dev/mcp-path": legacyPath,
 		},
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{
@@ -1224,14 +1198,12 @@ func createMockMCPServiceWithBothAnnotations(namespace, serviceName, labels, new
 	}
 
 	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceName,
-			Namespace: namespace,
-			Labels:    labelsMap,
-			Annotations: map[string]string{
-				"agentgateway.dev/mcp-path": newPath,
-				"kgateway.dev/mcp-path":     legacyPath,
-			},
+		Name:      serviceName,
+		Namespace: namespace,
+		Labels:    labelsMap,
+		Annotations: map[string]string{
+			"agentgateway.dev/mcp-path": newPath,
+			"kgateway.dev/mcp-path":     legacyPath,
 		},
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{
@@ -1262,11 +1234,9 @@ func createMockMCPService(namespace, serviceName, labels string) *corev1.Service
 	}
 
 	mockService := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceName,
-			Namespace: namespace,
-			Labels:    labelsMap,
-		},
+		Name:      serviceName,
+		Namespace: namespace,
+		Labels:    labelsMap,
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{
 				{
@@ -1284,12 +1254,10 @@ func createMockMCPService(namespace, serviceName, labels string) *corev1.Service
 func createMockMultipleNamespaceServices() []any {
 	services := []any{
 		&corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test",
-				Namespace: "test-ns",
-				Labels: map[string]string{
-					"type": "mcp",
-				},
+			Name:      "test",
+			Namespace: "test-ns",
+			Labels: map[string]string{
+				"type": "mcp",
 			},
 			Spec: corev1.ServiceSpec{
 				Ports: []corev1.ServicePort{
@@ -1302,12 +1270,10 @@ func createMockMultipleNamespaceServices() []any {
 			},
 		},
 		&corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "prod",
-				Namespace: "prod-ns",
-				Labels: map[string]string{
-					"type": "mcp",
-				},
+			Name:      "prod",
+			Namespace: "prod-ns",
+			Labels: map[string]string{
+				"type": "mcp",
 			},
 			Spec: corev1.ServiceSpec{
 				Ports: []corev1.ServicePort{
@@ -1320,12 +1286,10 @@ func createMockMultipleNamespaceServices() []any {
 			},
 		},
 		&corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "dev",
-				Namespace: "dev-ns",
-				Labels: map[string]string{
-					"type": "mcp",
-				},
+			Name:      "dev",
+			Namespace: "dev-ns",
+			Labels: map[string]string{
+				"type": "mcp",
 			},
 			Spec: corev1.ServiceSpec{
 				Ports: []corev1.ServicePort{
@@ -1345,27 +1309,21 @@ func createMockMultipleNamespaceServices() []any {
 func createMockNamespaceCollectionWithLabels() []any {
 	namespaces := []any{
 		&corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-ns",
-				Labels: map[string]string{
-					"environment": "test",
-				},
+			Name: "test-ns",
+			Labels: map[string]string{
+				"environment": "test",
 			},
 		},
 		&corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "prod-ns",
-				Labels: map[string]string{
-					"environment": "production",
-				},
+			Name: "prod-ns",
+			Labels: map[string]string{
+				"environment": "production",
 			},
 		},
 		&corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "dev-ns",
-				Labels: map[string]string{
-					"environment": "development",
-				},
+			Name: "dev-ns",
+			Labels: map[string]string{
+				"environment": "development",
 			},
 		},
 	}

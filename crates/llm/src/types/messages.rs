@@ -4,7 +4,8 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-	OutputMessage, OutputMessagePart, RequestType, ResponseType, SimpleChatCompletionMessage,
+	ContentScope, NormalizedMessage, NormalizedMessagePart, OutputMessage, OutputMessagePart,
+	RequestType, ResponseType, SimpleChatCompletionMessage, visit_json_at,
 };
 use crate::webhook::{Message, ResponseChoice};
 use crate::{AIError, InputFormat, LLMRequest, LLMRequestParams, LLMResponse};
@@ -75,6 +76,52 @@ pub enum TextPart {
 	Unknown(serde_json::Value),
 }
 
+impl TextPart {
+	fn text(&self) -> Option<&str> {
+		match self {
+			TextPart::Text { text, .. } => Some(text),
+			TextPart::Unknown(_) => None,
+		}
+	}
+
+	fn text_mut(&mut self) -> Option<&mut String> {
+		match self {
+			TextPart::Text { text, .. } => Some(text),
+			TextPart::Unknown(_) => None,
+		}
+	}
+
+	fn rest_mut(&mut self) -> Option<&mut serde_json::Value> {
+		match self {
+			TextPart::Text { rest, .. } => Some(rest),
+			TextPart::Unknown(_) => None,
+		}
+	}
+}
+
+impl ContentPart {
+	fn text(&self) -> Option<&str> {
+		match self {
+			ContentPart::Text { text, .. } => Some(text),
+			ContentPart::Unknown(_) => None,
+		}
+	}
+
+	fn text_mut(&mut self) -> Option<&mut String> {
+		match self {
+			ContentPart::Text { text, .. } => Some(text),
+			ContentPart::Unknown(_) => None,
+		}
+	}
+
+	fn rest_mut(&mut self) -> Option<&mut serde_json::Value> {
+		match self {
+			ContentPart::Text { rest, .. } => Some(rest),
+			ContentPart::Unknown(_) => None,
+		}
+	}
+}
+
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct Response {
 	pub id: String,
@@ -124,20 +171,7 @@ pub fn get_messages_helper(
 		let content = match system {
 			TextBlock::Text(t) => strng::new(t),
 			TextBlock::Array(parts) => {
-				let text = parts
-					.iter()
-					.filter_map(|part| match part {
-						TextPart::Text { text, .. } => Some(text.as_str()),
-						_ => None,
-					})
-					.fold(String::new(), |mut acc, s| {
-						if !acc.is_empty() {
-							acc.push('\n');
-						}
-						acc.push_str(s);
-						acc
-					});
-				strng::new(&text)
+				crate::types::join_text(parts.iter().filter_map(TextPart::text), '\n')
 			},
 		};
 		if !content.is_empty() {
@@ -152,25 +186,11 @@ pub fn get_messages_helper(
 		let content = m
 			.content
 			.as_ref()
-			.and_then(|c| match c {
-				ContentBlock::Text(t) => Some(strng::new(t)),
-				ContentBlock::Array(parts) if !parts.is_empty() => {
-					let text = parts
-						.iter()
-						.filter_map(|part| match part {
-							ContentPart::Text { text, .. } => Some(text.as_str()),
-							_ => None,
-						})
-						.fold(String::new(), |mut acc, s| {
-							if !acc.is_empty() {
-								acc.push(' ');
-							}
-							acc.push_str(s);
-							acc
-						});
-					Some(strng::new(&text))
+			.map(|c| match c {
+				ContentBlock::Text(t) => strng::new(t),
+				ContentBlock::Array(parts) => {
+					crate::types::join_text(parts.iter().filter_map(ContentPart::text), ' ')
 				},
-				_ => None,
 			})
 			.unwrap_or_default();
 		SimpleChatCompletionMessage {
@@ -181,9 +201,22 @@ pub fn get_messages_helper(
 	out
 }
 
+/// `rest` keys preserved when a masked text run collapses; see `scan_text_runs`.
+const PRESERVED_REST_KEYS: &[&str] = &[
+	// Anthropic prompt-cache breakpoint
+	"cache_control",
+];
+
 impl RequestType for Request {
+	fn body_is_json(&self) -> bool {
+		true
+	}
 	fn model(&mut self) -> &mut Option<String> {
 		&mut self.model
+	}
+
+	fn to_value(&self) -> serde_json::Result<serde_json::Value> {
+		serde_json::to_value(self)
 	}
 
 	fn prepend_prompts(&mut self, prompts: Vec<SimpleChatCompletionMessage>) {
@@ -232,6 +265,41 @@ impl RequestType for Request {
 		get_messages_helper(&self.messages, &self.system)
 	}
 
+	fn get_messages_v2(&self) -> Vec<NormalizedMessage> {
+		let mut messages = self
+			.system
+			.as_ref()
+			.map(|system| NormalizedMessage {
+				role: strng::literal!("system"),
+				parts: match system {
+					TextBlock::Text(text) => {
+						vec![NormalizedMessagePart::text(strng::new(text))]
+					},
+					TextBlock::Array(parts) => parts
+						.iter()
+						.filter_map(TextPart::text)
+						.map(|text| NormalizedMessagePart::text(strng::new(text)))
+						.collect(),
+				},
+			})
+			.into_iter()
+			.collect::<Vec<_>>();
+		messages.extend(self.messages.iter().map(|message| NormalizedMessage {
+			role: strng::new(&message.role),
+			parts: match &message.content {
+				Some(ContentBlock::Text(text)) => {
+					vec![NormalizedMessagePart::text(strng::new(text))]
+				},
+				Some(ContentBlock::Array(parts)) => {
+					parts.iter().filter_map(normalized_anthropic_part).collect()
+				},
+				None => Vec::new(),
+			},
+		}));
+		crate::types::attach_tool_result_names(&mut messages);
+		messages
+	}
+
 	fn set_messages(&mut self, messages: Vec<SimpleChatCompletionMessage>) {
 		let (system_prompts, message_prompts): (Vec<_>, Vec<_>) = messages
 			.into_iter()
@@ -262,6 +330,133 @@ impl RequestType for Request {
 			return Vec::new();
 		};
 		crate::web_search::detect(tools)
+	}
+
+	fn visit_text_mut(&mut self, f: &mut dyn FnMut(ContentScope, &mut String)) {
+		match &mut self.system {
+			Some(TextBlock::Text(text)) => f(ContentScope::SystemPrompt, text),
+			Some(TextBlock::Array(parts)) => {
+				crate::types::scan_text_runs(
+					parts,
+					"\n",
+					TextPart::text_mut,
+					TextPart::rest_mut,
+					PRESERVED_REST_KEYS,
+					&mut |text| f(ContentScope::SystemPrompt, text),
+				);
+			},
+			None => {},
+		}
+		for msg in &mut self.messages {
+			match &mut msg.content {
+				Some(ContentBlock::Text(text)) => f(ContentScope::Messages, text),
+				Some(ContentBlock::Array(parts)) => {
+					for part in parts.iter_mut() {
+						if let ContentPart::Unknown(value) = part {
+							visit_tool_part_text(value, f);
+						}
+					}
+					crate::types::scan_text_runs(
+						parts,
+						" ",
+						ContentPart::text_mut,
+						ContentPart::rest_mut,
+						PRESERVED_REST_KEYS,
+						&mut |text| f(ContentScope::Messages, text),
+					);
+				},
+				None => {},
+			}
+		}
+	}
+}
+
+fn normalized_anthropic_part(part: &ContentPart) -> Option<NormalizedMessagePart> {
+	match part {
+		ContentPart::Text { text, .. } => Some(NormalizedMessagePart::text(strng::new(text))),
+		ContentPart::Unknown(value) => match value.get("type").and_then(serde_json::Value::as_str) {
+			Some("tool_use" | "server_tool_use" | "mcp_tool_use") => {
+				crate::types::normalized_tool_call(value)
+			},
+			Some(item_type) if item_type == "tool_result" || item_type.ends_with("_tool_result") => {
+				Some(NormalizedMessagePart::tool_result(
+					value
+						.get("tool_use_id")
+						.or_else(|| value.get("id"))
+						.and_then(serde_json::Value::as_str)
+						.map(strng::new),
+					value
+						.get("name")
+						.and_then(serde_json::Value::as_str)
+						.map(strng::new),
+					value
+						.get("content")
+						.cloned()
+						.unwrap_or_else(|| serde_json::Value::Null),
+					value.get("is_error").and_then(serde_json::Value::as_bool),
+				))
+			},
+			Some("thinking" | "redacted_thinking") => {
+				Some(NormalizedMessagePart::reasoning(value.clone()))
+			},
+			_ => None,
+		},
+	}
+}
+
+// visit every documented part type
+// known-ignored items should be listed
+// unknown items should be logged for future review
+// https://github.com/anthropics/anthropic-sdk-typescript/blob/main/.stats.yml
+// may give us a way to keep an eye on changes
+fn visit_tool_part_text(
+	value: &mut serde_json::Value,
+	f: &mut dyn FnMut(ContentScope, &mut String),
+) {
+	match value.get("type").and_then(|t| t.as_str()) {
+		Some(
+			"tool_result"
+			| "mcp_tool_result"
+			| "code_execution_tool_result"
+			| "bash_code_execution_tool_result"
+			| "text_editor_code_execution_tool_result"
+			| "tool_search_tool_result"
+			| "web_fetch_tool_result"
+			| "advisor_tool_result",
+		) => {
+			visit_json_at(value, &["content"], ContentScope::ToolOutput, f);
+		},
+		Some("tool_use" | "server_tool_use" | "mcp_tool_use") => {
+			visit_json_at(value, &["input"], ContentScope::ToolInput, f);
+		},
+		// User-provided context blocks: message content, not tool traffic.
+		Some("document") => {
+			visit_json_at(value, &["source"], ContentScope::Messages, f);
+			visit_json_at(value, &["title"], ContentScope::Messages, f);
+			visit_json_at(value, &["context"], ContentScope::Messages, f);
+		},
+		Some("search_result") => {
+			visit_json_at(value, &["title"], ContentScope::Messages, f);
+			visit_json_at(value, &["content"], ContentScope::Messages, f);
+		},
+		// Replayed conversation summary.
+		Some("compaction") => {
+			visit_json_at(value, &["content"], ContentScope::Messages, f);
+		},
+		// Mid-conversation system instructions: text blocks under `content`.
+		Some("mid_conv_system") => {
+			visit_json_at(value, &["content"], ContentScope::SystemPrompt, f);
+		},
+		// No readable text: base64 payloads and file/tool references.
+		Some("image" | "container_upload" | "tool_addition" | "tool_removal" | "fallback") => {},
+		// Signature/encrypted content the API integrity-checks on replay; a mask would 400.
+		Some("thinking" | "redacted_thinking" | "web_search_tool_result") => {},
+		other => {
+			tracing::debug!(
+				block_type = other.unwrap_or("<none>"),
+				"unrecognized content block; not scanned by prompt guards"
+			);
+		},
 	}
 }
 
@@ -396,6 +591,7 @@ impl ResponseType for Response {
 			output_text_tokens: None,
 			output_audio_tokens: self.output_audio_tokens,
 			total_tokens: Some(self.usage.output_tokens + self.usage.input_tokens),
+			pages: None,
 			provider_model: Some(strng::new(&self.model)),
 			count_tokens: None,
 			reasoning_tokens: None,
@@ -416,6 +612,8 @@ impl ResponseType for Response {
 			},
 			output_messages,
 			first_token: Default::default(),
+			last_token_at: Default::default(),
+			inter_chunk_latencies: Default::default(),
 		}
 	}
 
@@ -447,6 +645,14 @@ impl ResponseType for Response {
 
 	fn serialize(&self) -> serde_json::Result<Vec<u8>> {
 		serde_json::to_vec(&self)
+	}
+
+	fn visit_text_mut(&mut self, f: &mut dyn FnMut(&mut String)) {
+		for c in &mut self.content {
+			if let Some(text) = &mut c.text {
+				f(text);
+			}
+		}
 	}
 }
 
@@ -604,6 +810,14 @@ pub mod typed {
 			#[serde(skip_serializing_if = "Option::is_none")]
 			cache_control: Option<CacheControlEphemeral>,
 		},
+		ToolReference {
+			tool_name: String,
+			#[serde(skip_serializing_if = "Option::is_none")]
+			cache_control: Option<CacheControlEphemeral>,
+		},
+		// Same tolerance as ContentBlock: an unrecognized part must not reject the whole request
+		#[serde(other)]
+		Unknown,
 	}
 
 	#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
@@ -852,6 +1066,9 @@ pub mod typed {
 		},
 		MessageStop,
 		Ping,
+		Error {
+			error: MessagesError,
+		},
 	}
 
 	impl MessagesStreamEvent {
@@ -866,6 +1083,7 @@ pub mod typed {
 				Self::MessageDelta { .. } => "message_delta",
 				Self::MessageStop => "message_stop",
 				Self::Ping => "ping",
+				Self::Error { .. } => "error",
 			}
 		}
 
@@ -989,9 +1207,36 @@ pub mod typed {
 		pub service_tier: Option<String>,
 	}
 
-	/// Tool definition
+	/// Tool definition. A client-defined custom tool always carries `input_schema` and no `type`
+	/// tag. An Anthropic server tool (`web_search_20250305`, `bash_20250124`, `computer_20250124`,
+	/// `text_editor_20250728`, `code_execution_20250522`, etc.) is tagged with `type` and never
+	/// carries `input_schema` since it runs server-side. `Custom` is tried first so existing custom
+	/// tool payloads (no `type` field) keep matching without a discriminant lookup.
 	#[derive(Debug, Serialize, Deserialize)]
-	pub struct Tool {
+	#[serde(untagged)]
+	pub enum Tool {
+		Custom(CustomTool),
+		Server(ServerTool),
+	}
+
+	impl Tool {
+		pub fn name(&self) -> &str {
+			match self {
+				Tool::Custom(tool) => &tool.name,
+				Tool::Server(tool) => &tool.name,
+			}
+		}
+
+		pub fn cache_control(&self) -> Option<&CacheControlEphemeral> {
+			match self {
+				Tool::Custom(tool) => tool.cache_control.as_ref(),
+				Tool::Server(tool) => tool.cache_control.as_ref(),
+			}
+		}
+	}
+
+	#[derive(Debug, Serialize, Deserialize)]
+	pub struct CustomTool {
 		/// Name of the tool
 		pub name: String,
 		/// Description of the tool
@@ -999,9 +1244,31 @@ pub mod typed {
 		pub description: Option<String>,
 		/// JSON schema for tool input
 		pub input_schema: serde_json::Value,
+		/// Enforce the tool input schema strictly.
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub strict: Option<bool>,
 		/// Create a cache control breakpoint at this content block
 		#[serde(skip_serializing_if = "Option::is_none")]
 		pub cache_control: Option<CacheControlEphemeral>,
+	}
+
+	/// An Anthropic server-executed tool (runs upstream of the provider, e.g. `web_search_20250305`).
+	/// We don't model every server tool's specific fields — just enough to round-trip the block
+	/// without failing deserialization. Providers that can't execute a server tool (e.g. Bedrock)
+	/// drop it rather than crash the whole request; see `conversion::bedrock`.
+	#[derive(Debug, Serialize, Deserialize)]
+	pub struct ServerTool {
+		/// Discriminant, e.g. "web_search_20250305"
+		#[serde(rename = "type")]
+		pub tool_type: String,
+		/// Name of the tool
+		pub name: String,
+		/// Create a cache control breakpoint at this content block
+		#[serde(skip_serializing_if = "Option::is_none")]
+		pub cache_control: Option<CacheControlEphemeral>,
+		/// Any other server-tool-specific fields (max_uses, allowed_domains, etc.)
+		#[serde(flatten)]
+		pub extra: std::collections::HashMap<String, serde_json::Value>,
 	}
 
 	/// Tool choice configuration
@@ -1102,6 +1369,7 @@ pub mod typed {
 				output_text_tokens: None,
 				output_audio_tokens: self.output_audio_tokens.map(|i| i as u64),
 				total_tokens: Some((self.usage.input_tokens + self.usage.output_tokens) as u64),
+				pages: None,
 				reasoning_tokens: None,
 				cache_creation_input_tokens: self.usage.cache_creation_input_tokens.map(|i| i as u64),
 				cached_input_tokens: self.usage.cache_read_input_tokens.map(|i| i as u64),
@@ -1125,6 +1393,8 @@ pub mod typed {
 				},
 				output_messages,
 				first_token: Default::default(),
+				last_token_at: Default::default(),
+				inter_chunk_latencies: Default::default(),
 			}
 		}
 
@@ -1165,6 +1435,14 @@ pub mod typed {
 		fn serialize(&self) -> serde_json::Result<Vec<u8>> {
 			serde_json::to_vec(&self)
 		}
+
+		fn visit_text_mut(&mut self, f: &mut dyn FnMut(&mut String)) {
+			for block in &mut self.content {
+				if let ContentBlock::Text(t) = block {
+					f(&mut t.text);
+				}
+			}
+		}
 	}
 }
 
@@ -1172,6 +1450,23 @@ pub mod typed {
 mod tests {
 	use super::*;
 	use crate::types::ResponseType;
+
+	#[test]
+	fn tool_result_parts_accept_tool_reference_and_unknown_types() {
+		let parsed: typed::ToolResultContent = serde_json::from_value(serde_json::json!([
+			{"type": "tool_reference", "tool_name": "mcp__example__list_widgets"},
+			{"type": "future_block", "foo": 1}
+		]))
+		.expect("unrecognized tool_result parts must not fail parsing");
+		let typed::ToolResultContent::Array(parts) = parsed else {
+			panic!("expected array content");
+		};
+		assert!(matches!(
+			&parts[0],
+			typed::ToolResultContentPart::ToolReference { tool_name, .. } if tool_name == "mcp__example__list_widgets"
+		));
+		assert!(matches!(parts[1], typed::ToolResultContentPart::Unknown));
+	}
 
 	fn make_typed_response_with_tool_use() -> typed::MessagesResponse {
 		typed::MessagesResponse {

@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"cmp"
 	"fmt"
 
 	"istio.io/istio/pilot/pkg/serviceregistry/ambient"
@@ -71,12 +72,10 @@ func GatewaysForDeployerTransformationFunc(
 		}, nil)))
 
 		ir := &GatewayForDeployer{
-			ObjectSource: ObjectSource{
-				Group:     gwv1.GroupVersion.Group,
-				Kind:      wellknown.GatewayKind,
-				Namespace: gw.Namespace,
-				Name:      gw.Name,
-			},
+			Group:           gwv1.GroupVersion.Group,
+			Kind:            wellknown.GatewayKind,
+			Namespace:       gw.Namespace,
+			Name:            gw.Name,
 			ControllerName:  string(gwClass.Spec.ControllerName),
 			Ports:           smallset.New(ports.UnsortedList()...),
 			InternalPorts:   ComputeInternalPorts(gw, lsets),
@@ -86,20 +85,19 @@ func GatewaysForDeployerTransformationFunc(
 	}
 }
 
-// ComputeInternalPorts returns the ports whose bind is internal, mirroring the bind-mode
-// decision in the syncer: a port is internal only if every contributing listener (across
-// the Gateway and its ListenerSets) agrees. Disagreement leaves the port standard (and is
-// surfaced as Accepted=False during translation). Invalid annotations are ignored here;
-// translation reports them.
+// ComputeInternalPorts returns the ports whose winning listener selects an internal
+// bind. Gateway listeners have precedence over ListenerSets. ListenerSets are ordered
+// oldest first, then by namespace/name, matching listener conflict validation.
+// A lower-precedence listener with a different mode is rejected by translation and
+// cannot change Service/container exposure here.
 func ComputeInternalPorts(gw *gwv1.Gateway, lsets []*gwv1.ListenerSet) smallset.Set[int32] {
-	sawInternal := sets.New[int32]()
-	sawStandard := sets.New[int32]()
+	portModes := map[int32]bool{}
 
 	gwInternal, _ := annotations.ParseInternalPorts(
 		gw.GetAnnotations()[annotations.InternalPorts],
 		func(p int32) bool {
 			for _, l := range gw.Spec.Listeners {
-				if int32(l.Port) == p {
+				if l.Port == p {
 					return true
 				}
 			}
@@ -107,19 +105,24 @@ func ComputeInternalPorts(gw *gwv1.Gateway, lsets []*gwv1.ListenerSet) smallset.
 		},
 	)
 	for _, l := range gw.Spec.Listeners {
-		if gwInternal.Has(l.Port) {
-			sawInternal.Insert(l.Port)
-		} else {
-			sawStandard.Insert(l.Port)
-		}
+		portModes[l.Port] = gwInternal.Has(l.Port)
 	}
 
+	slices.SortFunc(lsets, func(a, b *gwv1.ListenerSet) int {
+		if r := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); r != 0 {
+			return r
+		}
+		if r := cmp.Compare(a.Namespace, b.Namespace); r != 0 {
+			return r
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
 	for _, ls := range lsets {
 		lsInternal, _ := annotations.ParseInternalPorts(
 			ls.GetAnnotations()[annotations.InternalPorts],
 			func(p int32) bool {
 				for _, l := range ls.Spec.Listeners {
-					if port, err := kubeutils.DetectListenerPortNumber(l.Protocol, l.Port); err == nil && int32(port) == p {
+					if port, err := kubeutils.DetectListenerPortNumber(l.Protocol, l.Port); err == nil && port == p {
 						return true
 					}
 				}
@@ -131,21 +134,19 @@ func ComputeInternalPorts(gw *gwv1.Gateway, lsets []*gwv1.ListenerSet) smallset.
 			if err != nil {
 				continue
 			}
-			if lsInternal.Has(port) {
-				sawInternal.Insert(port)
-			} else {
-				sawStandard.Insert(port)
+			if _, winnerSelected := portModes[port]; !winnerSelected {
+				portModes[port] = lsInternal.Has(port)
 			}
 		}
 	}
 
-	internal := []int32{}
-	for p := range sawInternal {
-		if !sawStandard.Contains(p) {
-			internal = append(internal, p)
+	internal := sets.New[int32]()
+	for port, mode := range portModes {
+		if mode {
+			internal.Insert(port)
 		}
 	}
-	return smallset.New(internal...)
+	return smallset.New(internal.UnsortedList()...)
 }
 
 type GatewayForDeployer struct {
@@ -155,8 +156,8 @@ type GatewayForDeployer struct {
 	// All ports from all listeners
 	Ports smallset.Set[int32]
 	// InternalPorts are ports whose bind is internal (routing-only). They are excluded
-	// from the generated Service and container ports. Derived from the
-	// agentgateway.dev/internal-ports annotation on the Gateway and its ListenerSets.
+	// from the generated Service and container ports. Derived from the winning listener's
+	// agentgateway.dev/internal-ports annotation.
 	InternalPorts smallset.Set[int32]
 	// MeshTrustDomain changes should trigger reconciliation
 	// this field isn't read outside of Equals for a trigger

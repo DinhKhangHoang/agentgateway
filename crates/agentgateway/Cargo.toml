@@ -9,11 +9,21 @@ publish = { workspace = true }
 path = "src/lib.rs"
 
 [features]
-default = ["jemalloc", "mimalloc", "tls-aws-lc"]
+default = ["jemalloc", "mimalloc", "crypto-aws-lc"]
 jemalloc = ["dep:tikv-jemallocator", "dep:jemalloc_pprof"]
 mimalloc = ["pprof-alloc/allocator-mimalloc", "dep:mimalloc"]
-tls-aws-lc = ["rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
-tls-openssl = ["dep:openssl", "dep:rustls-openssl"]
+# Crypto provider selection. `crypto-aws-lc` (the default) backs all crypto with
+# aws-lc-rs. `fips` is an operating-mode modifier; it currently requires the
+# `crypto-aws-lc` backend and builds it against AWS-LC-FIPS (aws-lc-fips-sys).
+# The concrete AWS-LC-FIPS module is determined by the aws-lc-fips-sys version
+# resolved in Cargo.lock.
+# Note the linked module version is not necessarily CMVP-validated; check the
+# certificate for the exact AWS-LC-FIPS version before making a compliance claim.
+# `crypto-symcrypt` routes TLS/AEAD/hash/RNG through SymCrypt and falls back to
+# aws-lc-rs for JWT and certificate issuance (no SymCrypt hook there).
+crypto-aws-lc = ["dep:aws-lc-rs", "rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs", "jsonwebtoken/aws_lc_rs"]
+fips = ["aws-lc-rs?/fips", "rustls/fips", "tokio-rustls/fips"]
+crypto-symcrypt = ["dep:symcrypt", "dep:rustls-symcrypt", "dep:aws-lc-rs", "jsonwebtoken/aws_lc_rs"]
 ui = []
 schema = ["schemars", "agent-core/schema", "agent-llm/schema"]
 internal_benches = ["divan"]
@@ -38,9 +48,9 @@ aws-config.workspace = true
 aws-credential-types.workspace = true
 aws-sigv4.workspace = true
 aws-types.workspace = true
-aws-lc-rs.workspace = true
-openssl = { workspace = true, optional = true }
-rustls-openssl = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true }
+symcrypt = { workspace = true, optional = true }
+rustls-symcrypt = { workspace = true, optional = true }
 aws-smithy-eventstream.workspace = true
 aws-smithy-types.workspace = true
 axum-core.workspace = true
@@ -65,6 +75,7 @@ futures.workspace = true
 google-cloud-auth.workspace = true
 hashbrown.workspace = true
 headers.workspace = true
+headers-accept = "0.3.0"
 heck.workspace = true
 hex.workspace = true
 hickory-resolver.workspace = true
@@ -82,6 +93,7 @@ ipnet.workspace = true
 itertools.workspace = true
 jsonwebtoken.workspace = true
 lazy_static.workspace = true
+mediatype = "0.21.0"
 notify-debouncer-full.workspace = true
 notify.workspace = true
 num_cpus.workspace = true
@@ -110,7 +122,7 @@ libc.workspace = true
 rcgen.workspace = true
 regex.workspace = true
 
-rmcp = { version = "2.0", features = [
+rmcp = { version = "3.1.0", features = [
     "client",
     "server",
     "base64",
@@ -130,10 +142,10 @@ serde_urlencoded.workspace = true
 serde_with.workspace = true
 serde_yaml.workspace = true
 serde-untagged.workspace = true
-sha2.workspace = true
 stacker.workspace = true
 shellexpand.workspace = true
 socket2.workspace = true
+spiffe.workspace = true
 sse-stream.workspace = true
 subtle.workspace = true
 sqlx.workspace = true
@@ -150,6 +162,7 @@ tower-serve-static.workspace = true
 tower.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
+twox-hash.workspace = true
 typespec_client_core.workspace = true
 url.workspace = true
 uuid.workspace = true
@@ -190,14 +203,17 @@ pprof-alloc.workspace = true
 tokio = { workspace = true }
 
 [dev-dependencies]
+# Enable the SPIFFE Workload API bindings for tests only (fake agent for SPIFFE dataplane tests).
+protos = { workspace = true, features = ["spiffe-test-server"] }
 assert_matches.workspace = true
 divan.workspace = true
+h2.workspace = true
 insta.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 which.workspace = true
-rmcp = { version = "2.0", features = [
+rmcp = { version = "3.1.0", features = [
     "client",
     "server",
     "base64",

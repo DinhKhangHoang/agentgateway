@@ -327,6 +327,11 @@ type CustomProviderSettings struct {
 	// +optional
 	BackendRef *LocalBackendObjectReference `json:"backendRef,omitempty"`
 
+	// Provider identity used for cost-catalog lookup and telemetry.
+	// Defaults to "custom" when unset.
+	// +optional
+	ProviderOverride *ShortString `json:"providerOverride,omitempty"`
+
 	// Provider-native API formats this provider supports.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=6
@@ -392,7 +397,51 @@ type OpenAIConfig struct {
 	// If unset, the model name is taken from the request.
 	// +optional
 	Model *ShortString `json:"model,omitempty"`
+
+	// Inline moderation configuration to inject into OpenAI chat completions
+	// and responses requests.
+	// If unset, the OpenAI inline moderation parameter is not injected.
+	// +optional
+	Moderation *OpenAIInlineModeration `json:"moderation,omitempty"`
 }
+
+type OpenAIInlineModeration struct {
+	// The moderation model to use, such as `omni-moderation-latest`.
+	// Defaults to `omni-moderation-latest` if not specified.
+	// +optional
+	// +kubebuilder:default=omni-moderation-latest
+	Model ShortString `json:"model,omitempty"`
+
+	// Policies to apply to request input and generated output.
+	// +optional
+	Policy *OpenAIInlineModerationPolicy `json:"policy,omitempty"`
+}
+
+type OpenAIInlineModerationPolicy struct {
+	// Policy for request input moderation.
+	// +optional
+	Input *OpenAIInlineModerationConfig `json:"input,omitempty"`
+
+	// Policy for generated output moderation.
+	// +optional
+	Output *OpenAIInlineModerationConfig `json:"output,omitempty"`
+}
+
+type OpenAIInlineModerationConfig struct {
+	// Mode controls whether moderation only returns scores or blocks flagged content.
+	// +required
+	Mode OpenAIInlineModerationMode `json:"mode"`
+}
+
+// +k8s:enum
+type OpenAIInlineModerationMode string
+
+const (
+	// OpenAIInlineModerationModeScore returns moderation scores without blocking.
+	OpenAIInlineModerationModeScore OpenAIInlineModerationMode = "Score"
+	// OpenAIInlineModerationModeBlock blocks flagged content.
+	OpenAIInlineModerationModeBlock OpenAIInlineModerationMode = "Block"
+)
 
 // Settings for the [Azure OpenAI](https://learn.microsoft.com/en-us/azure/foundry/?view=foundry-classic) LLM provider.
 // +kubebuilder:validation:XValidation:message="deploymentName is required for this apiVersion",rule="!has(self.apiVersion) || self.apiVersion == 'v1' ? true : has(self.deploymentName)"
@@ -519,7 +568,32 @@ type BedrockSettings struct {
 	// If not specified, the AWS Guardrail policy will not be used.
 	// +optional
 	Guardrail *AWSGuardrailConfig `json:"guardrail,omitempty"`
+
+	// EndpointPreference selects which Bedrock API surface to prefer.
+	// Defaults to preferring runtime over mantle.
+	// Decides which endpoint to pick mainly based on the catalog tags
+	// `mantle` and `runtime`.
+	// +kubebuilder:default=RuntimePreferred
+	// +optional
+	EndpointPreference BedrockEndpointPreference `json:"endpointPreference,omitempty"`
 }
+
+// BedrockEndpointPreference selects the Bedrock API endpoint preference.
+// +k8s:enum
+type BedrockEndpointPreference string
+
+const (
+	// BedrockEndpointPreferenceRuntimePreferred uses Runtime by default and routes to
+	// Mantle only for models the catalog tags `mantle` but not `runtime`. This is the default.
+	BedrockEndpointPreferenceRuntimePreferred BedrockEndpointPreference = "RuntimePreferred"
+	// BedrockEndpointPreferenceMantlePreferred uses Mantle by default and routes to
+	// Runtime only for models the catalog tags `runtime` but not `mantle`.
+	BedrockEndpointPreferenceMantlePreferred BedrockEndpointPreference = "MantlePreferred"
+	// BedrockEndpointPreferenceMantleOnly always uses the Mantle endpoint, regardless of catalog tags.
+	BedrockEndpointPreferenceMantleOnly BedrockEndpointPreference = "MantleOnly"
+	// BedrockEndpointPreferenceRuntimeOnly always uses the Runtime endpoint, regardless of catalog tags.
+	BedrockEndpointPreferenceRuntimeOnly BedrockEndpointPreference = "RuntimeOnly"
+)
 
 type BedrockConfig struct {
 	BedrockSettings `json:",inline"`
@@ -549,8 +623,7 @@ type MCPBackend struct {
 	// +listType=map
 	// +listMapKey=name
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=32
-	// +kubebuilder:validation:XValidation:message="target names must be unique",rule="self.all(t1, self.exists_one(t2, t1.name == t2.name))"
+	// +kubebuilder:validation:MaxItems=128
 	// +required
 	Targets []McpTargetSelector `json:"targets"`
 

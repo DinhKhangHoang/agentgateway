@@ -13,6 +13,31 @@ use crate::*;
 const REQUEST_PATH: &str = "request";
 const RESPONSE_PATH: &str = "response";
 
+#[derive(Clone, Copy)]
+pub(super) struct EvaluationContext<'a> {
+	request: Option<&'a RequestSnapshot>,
+	llm_request: Option<&'a serde_json::Value>,
+}
+
+impl<'a> EvaluationContext<'a> {
+	pub(super) fn new(
+		request: Option<&'a RequestSnapshot>,
+		llm_request: Option<&'a serde_json::Value>,
+	) -> Self {
+		Self {
+			request,
+			llm_request,
+		}
+	}
+
+	fn executor(self) -> cel::Executor<'a> {
+		match self.llm_request {
+			Some(llm_request) => cel::Executor::new_llm(self.request, llm_request),
+			None => cel::Executor::new_request_snapshot(self.request),
+		}
+	}
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct GuardrailsPromptRequest {
@@ -123,33 +148,33 @@ pub enum MaskActionBody {
 
 fn build_request_for_request(
 	webhook: &Webhook,
-	original: Option<&RequestSnapshot>,
+	context: EvaluationContext<'_>,
 	http_headers: &HeaderMap,
 	messages: Vec<Message>,
 ) -> anyhow::Result<crate::http::Request> {
 	let body = GuardrailsPromptRequest {
 		body: PromptMessages { messages },
 	};
-	build_request(&body, REQUEST_PATH, webhook, original, http_headers)
+	build_request(&body, REQUEST_PATH, webhook, context, http_headers)
 }
 
 fn build_request_for_response(
 	webhook: &Webhook,
-	original: Option<&RequestSnapshot>,
+	context: EvaluationContext<'_>,
 	http_headers: &HeaderMap,
 	choices: Vec<ResponseChoice>,
 ) -> anyhow::Result<crate::http::Request> {
 	let body = GuardrailsResponseRequest {
 		body: ResponseChoices { choices },
 	};
-	build_request(&body, RESPONSE_PATH, webhook, original, http_headers)
+	build_request(&body, RESPONSE_PATH, webhook, context, http_headers)
 }
 
 fn build_request<T: serde::Serialize>(
 	body: &T,
 	path: &str,
 	webhook: &Webhook,
-	original: Option<&RequestSnapshot>,
+	context: EvaluationContext<'_>,
 	http_headers: &HeaderMap,
 ) -> anyhow::Result<crate::http::Request> {
 	let body_bytes = serde_json::to_vec(body)?;
@@ -167,7 +192,7 @@ fn build_request<T: serde::Serialize>(
 	let mut req = rb
 		.header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
 		.body(crate::http::Body::from(body_bytes))?;
-	apply_header_expressions(&mut req, webhook, original);
+	apply_header_expressions(&mut req, webhook, context);
 	Ok(req)
 }
 
@@ -180,13 +205,20 @@ fn build_request<T: serde::Serialize>(
 fn apply_header_expressions(
 	req: &mut crate::http::Request,
 	webhook: &Webhook,
-	original: Option<&RequestSnapshot>,
+	context: EvaluationContext<'_>,
 ) {
 	if webhook.headers.is_empty() {
 		return;
 	}
-	let exec = cel::Executor::new_request_snapshot(original);
+	let exec = context.executor();
 	for (k, expr) in &webhook.headers {
+		if matches!(
+			k,
+			crate::http::HeaderOrPseudo::Scheme | crate::http::HeaderOrPseudo::Status
+		) {
+			debug!("unsupported webhook pseudo-header {k}; skipping");
+			continue;
+		}
 		let v = match exec.eval(expr) {
 			Ok(v) => Some(v),
 			Err(e) => {
@@ -206,45 +238,53 @@ fn apply_header_expressions(
 	}
 }
 
-pub async fn send_request(
+pub(super) async fn send_request(
 	client: &PolicyClient,
 	webhook: &Webhook,
-	original: Option<&RequestSnapshot>,
+	context: EvaluationContext<'_>,
 	http_headers: &HeaderMap,
 	messages: Vec<Message>,
 ) -> anyhow::Result<GuardrailsPromptResponse> {
 	let whr = with_default_timeout(build_request_for_request(
 		webhook,
-		original,
+		context,
 		http_headers,
 		messages,
 	)?);
 	let res = Box::pin(
 		client
 			.with_outbound(OutboundCallKind::Policy, OutboundCallSubtype::Guardrail)
-			.call_reference(whr, &webhook.target),
+			.call_reference_with_policies(
+				whr,
+				&webhook.target.target,
+				webhook.target.policies.as_slice(),
+			),
 	)
 	.await?;
 	let parsed = json::from_response_body(res).await?;
 	Ok(parsed)
 }
 
-pub async fn send_response(
+pub(super) async fn send_response(
 	client: &PolicyClient,
 	webhook: &Webhook,
-	original: Option<&RequestSnapshot>,
+	context: EvaluationContext<'_>,
 	http_headers: &HeaderMap,
 	choices: Vec<ResponseChoice>,
 ) -> anyhow::Result<GuardrailsResponseResponse> {
 	let whr = with_default_timeout(build_request_for_response(
 		webhook,
-		original,
+		context,
 		http_headers,
 		choices,
 	)?);
 	let res = client
 		.with_outbound(OutboundCallKind::Policy, OutboundCallSubtype::Guardrail)
-		.call_reference(whr, &webhook.target)
+		.call_reference_with_policies(
+			whr,
+			&webhook.target.target,
+			webhook.target.policies.as_slice(),
+		)
 		.await?;
 	let parsed = json::from_response_body(res).await?;
 	Ok(parsed)
@@ -259,15 +299,19 @@ mod tests {
 	use super::*;
 	use crate::http::HeaderOrPseudo;
 	use crate::http::jwt::Claims;
-	use crate::llm::policy::FailureMode;
-	use crate::types::agent::SimpleBackendReference;
+	use crate::llm::policy::{FailureMode, RejectAuditAction};
+	use crate::types::agent::{SimpleBackendReference, SimpleBackendReferenceWithPolicies};
 
 	fn webhook(headers: Vec<(HeaderOrPseudo, Arc<cel::Expression>)>) -> Webhook {
 		Webhook {
-			target: SimpleBackendReference::Invalid,
+			target: SimpleBackendReferenceWithPolicies {
+				target: Arc::new(SimpleBackendReference::Invalid),
+				policies: vec![],
+			},
 			headers,
 			forward_header_matches: vec![],
 			failure_mode: FailureMode::FailClosed,
+			action: RejectAuditAction::Reject,
 		}
 	}
 
@@ -300,9 +344,21 @@ mod tests {
 	#[test]
 	fn default_paths_are_preserved() {
 		let wh = webhook(vec![]);
-		let req = build_request_for_request(&wh, None, &HeaderMap::new(), vec![]).unwrap();
+		let req = build_request_for_request(
+			&wh,
+			EvaluationContext::new(None, None),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.unwrap();
 		assert_eq!(req.uri().path(), "/request");
-		let resp = build_request_for_response(&wh, None, &HeaderMap::new(), vec![]).unwrap();
+		let resp = build_request_for_response(
+			&wh,
+			EvaluationContext::new(None, None),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.unwrap();
 		assert_eq!(resp.uri().path(), "/response");
 	}
 
@@ -313,7 +369,13 @@ mod tests {
 			expr(r#""/v3/guardrails/agentgateway/request""#),
 		)]));
 		let snap = original(None);
-		let req = build_request_for_request(&wh, Some(&snap), &HeaderMap::new(), vec![]).unwrap();
+		let req = build_request_for_request(
+			&wh,
+			EvaluationContext::new(Some(&snap), None),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.unwrap();
 		assert_eq!(req.uri().path(), "/v3/guardrails/agentgateway/request");
 	}
 
@@ -329,14 +391,25 @@ mod tests {
 				HeaderOrPseudo::Header(::http::HeaderName::from_static("x-tenant")),
 				expr(r#"request.headers["x-tenant"]"#),
 			),
+			(
+				HeaderOrPseudo::Header(::http::HeaderName::from_static("x-model")),
+				expr("llmRequest.model"),
+			),
 		]));
 		let snap = original(None);
-		let req = build_request_for_request(&wh, Some(&snap), &HeaderMap::new(), vec![]).unwrap();
+		let req = build_request_for_request(
+			&wh,
+			EvaluationContext::new(Some(&snap), Some(&serde_json::json!({"model": "llama3.2"}))),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.unwrap();
 		assert_eq!(
 			req.headers().get("x-orig-path").unwrap(),
 			"/v1/chat/completions"
 		);
 		assert_eq!(req.headers().get("x-tenant").unwrap(), "acme");
+		assert_eq!(req.headers().get("x-model").unwrap(), "llama3.2");
 		// The webhook path itself is untouched by non-:path expressions.
 		assert_eq!(req.uri().path(), "/request");
 	}
@@ -348,7 +421,13 @@ mod tests {
 			expr("jwt.sub"),
 		)]));
 		let snap = original(Some(claims()));
-		let req = build_request_for_request(&wh, Some(&snap), &HeaderMap::new(), vec![]).unwrap();
+		let req = build_request_for_request(
+			&wh,
+			EvaluationContext::new(Some(&snap), None),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.unwrap();
 		assert_eq!(req.headers().get("x-user").unwrap(), "user-123");
 	}
 
@@ -359,7 +438,13 @@ mod tests {
 			expr("jwt.sub"),
 		)]));
 		let snap = original(Some(claims()));
-		let req = build_request_for_request(&wh, Some(&snap), &HeaderMap::new(), vec![]).unwrap();
+		let req = build_request_for_request(
+			&wh,
+			EvaluationContext::new(Some(&snap), None),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.unwrap();
 		// Claims are only exposed to CEL evaluation; leaking them onto the request
 		// would hand the raw JWT to the webhook backend's policy chain (e.g.
 		// backendAuth passthrough).
@@ -378,7 +463,13 @@ mod tests {
 			(HeaderOrPseudo::Path, expr("jwt.missing_claim")),
 		]));
 		let snap = original(None);
-		let req = build_request_for_request(&wh, Some(&snap), &HeaderMap::new(), vec![]).unwrap();
+		let req = build_request_for_request(
+			&wh,
+			EvaluationContext::new(Some(&snap), None),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.unwrap();
 		assert!(req.headers().get("x-missing").is_none());
 		assert_eq!(req.uri().path(), "/request");
 	}
@@ -394,10 +485,130 @@ mod tests {
 				expr("jwt.sub"),
 			),
 		]));
-		let req = build_request_for_request(&wh, None, &HeaderMap::new(), vec![]).unwrap();
+		let req = build_request_for_request(
+			&wh,
+			EvaluationContext::new(None, None),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.unwrap();
 		// Static expressions still work without a snapshot...
 		assert_eq!(req.uri().path(), "/prefixed/request");
 		// ...but context-dependent ones are skipped.
 		assert!(req.headers().get("x-user").is_none());
+	}
+
+	/// `target` accepts the same `policies` slot extAuthz has: explicit
+	/// `backendTLS`, or an `https://` host that implies it. The historical
+	/// `{host}` form yields no policies, so existing configs are unchanged.
+	#[test]
+	fn target_policies_deserialize_and_https_scheme_implies_tls() {
+		use crate::types::agent::{BackendTrafficPolicy, Target};
+
+		let plain: Webhook = serde_json::from_value(serde_json::json!({
+			"target": {"host": "127.0.0.1:8000"}
+		}))
+		.unwrap();
+		assert!(plain.target.policies.is_empty());
+		let serialized = serde_json::to_value(&plain).unwrap();
+		assert!(serialized["target"].get("policies").is_none());
+
+		let explicit: Webhook = serde_json::from_value(serde_json::json!({
+			"target": {"host": "guard.example.com:8443", "policies": {"backendTLS": {}}}
+		}))
+		.unwrap();
+		assert!(matches!(
+			explicit.target.policies.as_slice(),
+			[BackendTrafficPolicy::BackendTLS(_)]
+		));
+
+		let scheme: Webhook = serde_json::from_value(serde_json::json!({
+			"target": {"host": "https://guard.example.com"}
+		}))
+		.unwrap();
+		assert!(matches!(
+			scheme.target.target.as_ref(),
+			SimpleBackendReference::InlineBackend(Target::Hostname(host, 443))
+				if host.as_str() == "guard.example.com"
+		));
+		assert!(matches!(
+			scheme.target.policies.as_slice(),
+			[BackendTrafficPolicy::BackendTLS(_)]
+		));
+	}
+
+	/// The policies are honored on the wire: an https webhook is reached with
+	/// the target's `backendTLS`, and the same target without it (plaintext to
+	/// a TLS listener) fails.
+	#[cfg(feature = "crypto-aws-lc")]
+	#[tokio::test]
+	async fn https_target_is_dialed_with_backend_tls() {
+		use wiremock::matchers::{method, path};
+		use wiremock::{Mock, MockServer, ResponseTemplate};
+
+		use crate::http::backendtls::{BackendTLS, ResolvedBackendTLS};
+		use crate::transport::tls;
+		use crate::types::agent::{BackendTrafficPolicy, Target};
+
+		let _ = rustls::crypto::CryptoProvider::install_default(Arc::unwrap_or_clone(tls::provider()));
+		let certs = wiremock::tls_certs::MockTlsCertificates::random();
+		let server = MockServer::builder()
+			.start_https(certs.get_server_config())
+			.await;
+		Mock::given(method("POST"))
+			.and(path("/request"))
+			.respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+				"action": {"body": "blocked by guard", "status_code": 403}
+			})))
+			.mount(&server)
+			.await;
+		let target = Arc::new(SimpleBackendReference::InlineBackend(Target::Address(
+			*server.address(),
+		)));
+		let tls: BackendTLS = ResolvedBackendTLS {
+			root: Some(certs.root_cert.pem().into_bytes()),
+			insecure_host: true,
+			..Default::default()
+		}
+		.try_into()
+		.unwrap();
+		let client = crate::test_helpers::policy_client();
+
+		let mut wh = webhook(vec![]);
+		wh.target = SimpleBackendReferenceWithPolicies {
+			target: target.clone(),
+			policies: vec![BackendTrafficPolicy::BackendTLS(tls)],
+		};
+		let verdict = send_request(
+			&client,
+			&wh,
+			EvaluationContext::new(None, None),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.await
+		.expect("https webhook reachable with backendTLS");
+		assert!(matches!(
+			verdict.action,
+			RequestAction::Reject(RejectAction { ref body, status_code: 403, .. })
+				if body == "blocked by guard"
+		));
+
+		wh.target = SimpleBackendReferenceWithPolicies {
+			target,
+			policies: vec![],
+		};
+		let plaintext = send_request(
+			&client,
+			&wh,
+			EvaluationContext::new(None, None),
+			&HeaderMap::new(),
+			vec![],
+		)
+		.await;
+		assert!(
+			plaintext.is_err(),
+			"plaintext dial to a TLS webhook must fail"
+		);
 	}
 }

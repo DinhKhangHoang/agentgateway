@@ -2,7 +2,7 @@ use agent_core::prelude::Strng;
 use agent_core::strng;
 use serde::{Deserialize, Serialize};
 
-use crate::types::RequestType;
+use crate::types::{ContentScope, RequestType};
 use crate::{
 	AIError, InputFormat, LLMRequest, LLMRequestParams, SimpleChatCompletionMessage, json,
 };
@@ -49,8 +49,15 @@ impl TryInto<typed::Request> for &Request {
 }
 
 impl RequestType for Request {
+	fn body_is_json(&self) -> bool {
+		true
+	}
 	fn model(&mut self) -> &mut Option<String> {
 		&mut self.model
+	}
+
+	fn to_value(&self) -> serde_json::Result<serde_json::Value> {
+		serde_json::to_value(self)
 	}
 
 	fn prepend_prompts(&mut self, _prompts: Vec<SimpleChatCompletionMessage>) {
@@ -97,6 +104,12 @@ impl RequestType for Request {
 	fn set_messages(&mut self, _messages: Vec<SimpleChatCompletionMessage>) {
 		unimplemented!("set_messages is used for prompt guard; prompt guard is disable for embeddings.")
 	}
+
+	fn visit_text_mut(&mut self, _f: &mut dyn FnMut(ContentScope, &mut String)) {
+		unimplemented!(
+			"visit_text_mut is used for prompt guard; prompt guard is disable for embeddings."
+		)
+	}
 }
 
 impl crate::types::ResponseType for Response {
@@ -112,6 +125,7 @@ impl crate::types::ResponseType for Response {
 			output_text_tokens: None,
 			output_audio_tokens: None,
 			service_tier: None,
+			provider_model: Some(strng::new(&self.model)),
 			..Default::default()
 		}
 	}
@@ -130,6 +144,8 @@ impl crate::types::ResponseType for Response {
 	fn serialize(&self) -> serde_json::Result<Vec<u8>> {
 		serde_json::to_vec(self)
 	}
+
+	fn visit_text_mut(&mut self, _f: &mut dyn FnMut(&mut String)) {}
 }
 
 /// 'typed' provides a strictly-typed internal representation of the OpenAI embeddings API.

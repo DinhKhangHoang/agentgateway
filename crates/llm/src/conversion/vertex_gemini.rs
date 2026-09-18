@@ -31,6 +31,75 @@ fn join_tool_call_id(base: String, signature: Option<&str>) -> String {
 	}
 }
 
+/// Passthrough for native Gemini inbound: forward the `:streamGenerateContent?alt=sse` SSE
+/// bytes untouched while extracting usage for telemetry. Gemini attaches cumulative
+/// `usageMetadata` to chunks with the full totals on the final event, so updating on every
+/// chunk leaves the last event's counts in the log even on early client disconnect.
+pub fn passthrough_stream(
+	b: agent_http::Body,
+	buffer_limit: usize,
+	log: crate::StreamingUsageGuard,
+	log_content: crate::LogContentFields,
+) -> agent_http::Body {
+	use std::time::Instant;
+	let mut saw_token = false;
+	crate::parse::sse::json_passthrough::<vg::GenerateContentResponse>(b, buffer_limit, move |f| {
+		// Gemini never sends a [DONE] sentinel, so f(None) does not fire; all bookkeeping
+		// happens per-chunk and the guard flushes on drop.
+		let Some(Ok(chunk)) = f else {
+			return;
+		};
+		if !saw_token {
+			saw_token = true;
+			log.update(|r| r.response.first_token = Some(Instant::now()));
+		}
+		if let Some(m) = &chunk.model_version {
+			log.update(|r| {
+				if r.response.provider_model.is_none() {
+					r.response.provider_model = Some(strng::new(m));
+				}
+			});
+		}
+		if let Some(um) = &chunk.usage_metadata {
+			let (prompt, completion, total) = um.counts();
+			log.update(|r| {
+				r.response.input_tokens = Some(prompt);
+				r.response.output_tokens = Some(completion);
+				r.response.total_tokens = Some(total);
+				r.response.cached_input_tokens = um.cached_content_token_count;
+				r.response.reasoning_tokens = um.thoughts_token_count;
+			});
+		}
+		if log_content.completion {
+			let text: String = chunk
+				.candidates
+				.first()
+				.and_then(|c| c.content.as_ref())
+				.map(|c| {
+					c.parts
+						.iter()
+						.filter_map(|p| match p {
+							vg::Part::Text(t) if t.thought != Some(true) => Some(t.text.as_str()),
+							_ => None,
+						})
+						.collect()
+				})
+				.unwrap_or_default();
+			if !text.is_empty() {
+				log.update(|r| {
+					let completion = r
+						.response
+						.completion
+						.get_or_insert_with(|| vec![String::new()]);
+					if let Some(first) = completion.first_mut() {
+						first.push_str(&text);
+					}
+				});
+			}
+		}
+	})
+}
+
 pub mod from_completions {
 	use serde::Deserialize;
 	use serde_json::{Value, json};
@@ -80,22 +149,18 @@ pub mod from_completions {
 			mime_from_ext_token(hint).map(str::to_string)
 		}
 	}
-	pub fn translate(
-		req: &types::completions::Request,
-		configured_model: Option<&str>,
-	) -> Result<Vec<u8>, AIError> {
-		let out = build_request(req, configured_model)?;
+	pub fn translate(req: &types::completions::Request) -> Result<Vec<u8>, AIError> {
+		let out = build_request(req)?;
 		serde_json::to_vec(&out).map_err(AIError::RequestMarshal)
 	}
 
 	pub(super) fn build_request(
 		req: &types::completions::Request,
-		configured_model: Option<&str>,
 	) -> Result<vg::GenerateContentRequest, AIError> {
-		let model = configured_model
-			.or(req.model.as_deref())
-			.unwrap_or_default()
-			.to_string();
+		let model = req
+			.model
+			.as_deref()
+			.ok_or_else(|| AIError::MissingField("model not specified".into()))?;
 
 		let (system_text, contents) = messages_to_contents(&req.messages)?;
 
@@ -118,7 +183,7 @@ pub mod from_completions {
 
 		let tools = build_tools(req);
 		let tool_config = build_tool_config(req);
-		let generation_config = build_generation_config(req, &model);
+		let generation_config = build_generation_config(req, model);
 
 		let cached_content = req
 			.rest
@@ -170,6 +235,7 @@ pub mod from_completions {
 			safety_settings,
 			cached_content,
 			labels,
+			rest: Default::default(),
 		})
 	}
 
@@ -251,8 +317,8 @@ pub mod from_completions {
 
 		// Vertex rejects `id` and correlates functionResponse to functionCall positionally, so each
 		// response group must follow the assistant's tool_calls order even when a client returns the
-		// `tool` messages out of order. Reorder only the functionResponse parts (leaving any filler
-		// text in place), then drop the now-unused correlation id.
+		// `tool` messages out of order. Reorder the functionResponse parts, then drop the now-unused
+		// correlation id.
 		for content in &mut contents {
 			let mut ordered: Vec<vg::Part> = content
 				.parts
@@ -323,6 +389,9 @@ pub mod from_completions {
 						"image_url" => {
 							parts.push(image_part(p.rest.get("image_url"))?);
 						},
+						"file" => {
+							parts.push(file_part(p.rest.get("file"))?);
+						},
 						_ => {},
 					}
 				}
@@ -332,6 +401,28 @@ pub mod from_completions {
 		Ok(parts)
 	}
 
+	fn inline_data_part(mime: &str, data: &str) -> vg::Part {
+		vg::Part::InlineData(vg::InlineDataPart {
+			inline_data: vg::Blob {
+				mime_type: canonical_mime(mime).to_string(),
+				data: data.to_string(),
+				rest: Value::Null,
+			},
+			rest: Value::Null,
+		})
+	}
+
+	fn file_data_part(mime: &str, uri: &str) -> vg::Part {
+		vg::Part::FileData(vg::FileDataPart {
+			file_data: vg::FileData {
+				mime_type: Some(canonical_mime(mime).to_string()),
+				file_uri: uri.to_string(),
+				rest: Value::Null,
+			},
+			rest: Value::Null,
+		})
+	}
+
 	fn image_part(image_url: Option<&Value>) -> Result<vg::Part, AIError> {
 		let url = image_url
 			.and_then(|u| u.get("url"))
@@ -339,14 +430,7 @@ pub mod from_completions {
 			.unwrap_or_default();
 
 		if let Some((mime, data)) = parse_data_url(url) {
-			return Ok(vg::Part::InlineData(vg::InlineDataPart {
-				inline_data: vg::Blob {
-					mime_type: canonical_mime(mime).to_string(),
-					data: data.to_string(),
-					rest: Value::Null,
-				},
-				rest: Value::Null,
-			}));
+			return Ok(inline_data_part(mime, data));
 		}
 
 		if url.starts_with("gs://") {
@@ -354,24 +438,87 @@ pub mod from_completions {
 			let Some(mime) =
 				explicit_mime_hint(image_url).or_else(|| mime_from_extension(url).map(str::to_string))
 			else {
-				return Err(AIError::InvalidResponse(strng::new(format!(
+				return Err(AIError::UnsupportedConversion(strng::new(format!(
 					"gs:// image_url ({url}) has no recognised extension or MIME hint; pass image_url.format (or mime_type/content_type), or use an object with a known extension"
 				))));
 			};
-			return Ok(vg::Part::FileData(vg::FileDataPart {
-				file_data: vg::FileData {
-					mime_type: Some(canonical_mime(&mime).to_string()),
-					file_uri: url.to_string(),
-					rest: Value::Null,
-				},
-				rest: Value::Null,
-			}));
+			return Ok(file_data_part(&mime, url));
 		}
 
 		// http(s) and anything else are not fetchable by Vertex.
-		Err(AIError::InvalidResponse(strng::new(format!(
+		Err(AIError::UnsupportedConversion(strng::new(format!(
 			"native Gemini path rejects http(s) image_url ({url}); upload to gs:// or send inline data:"
 		))))
+	}
+
+	/// Convert an OpenAI `file` content part into a Gemini part.
+	///
+	/// Mirrors [`image_part`]: inline `data:` payloads become `inlineData`, `gs://`
+	/// objects become `fileData`, and anything Vertex cannot fetch is rejected rather
+	/// than dropped.
+	fn file_part(file: Option<&Value>) -> Result<vg::Part, AIError> {
+		let field = |k: &str| {
+			file
+				.and_then(|f| f.get(k))
+				.and_then(Value::as_str)
+				.unwrap_or_default()
+		};
+		let file_data = field("file_data");
+		let file_id = field("file_id");
+
+		if let Some((mime, data)) = parse_data_url(file_data) {
+			if !mime.is_empty() {
+				return Ok(inline_data_part(mime, data));
+			}
+			// RFC 2397 allows an absent media type; Vertex rejects an empty mimeType.
+			let Some(mime) = explicit_mime_hint(file)
+				.or_else(|| mime_from_extension(field("filename")).map(str::to_string))
+			else {
+				return Err(AIError::UnsupportedConversion(strng::literal!(
+					"data: file_data has no media type; pass file.filename with a known extension (or mime_type/content_type)"
+				)));
+			};
+			return Ok(inline_data_part(&mime, data));
+		}
+
+		// Clients carry a gs:// object in either field; Vertex fetches those directly.
+		if let Some(uri) = [file_data, file_id]
+			.into_iter()
+			.find(|u| u.starts_with("gs://"))
+		{
+			let Some(mime) = explicit_mime_hint(file)
+				.or_else(|| mime_from_extension(field("filename")).map(str::to_string))
+				.or_else(|| mime_from_extension(uri).map(str::to_string))
+			else {
+				return Err(AIError::UnsupportedConversion(strng::new(format!(
+					"gs:// file ({uri}) has no recognised extension or MIME hint; pass file.filename (or mime_type/content_type), or use an object with a known extension"
+				))));
+			};
+			return Ok(file_data_part(&mime, uri));
+		}
+
+		// Raw base64 without a data URL wrapper, as bedrock.rs also accepts; mime from filename.
+		// A malformed `data:` value must not reach here, or its header becomes payload.
+		if !file_data.is_empty() && !file_data.contains("://") && !file_data.starts_with("data:") {
+			let Some(mime) = explicit_mime_hint(file)
+				.or_else(|| mime_from_extension(field("filename")).map(str::to_string))
+			else {
+				return Err(AIError::UnsupportedConversion(strng::literal!(
+					"raw base64 file_data has no MIME source; pass file.filename with a known extension (or mime_type/content_type), or wrap it in a data: URI"
+				)));
+			};
+			return Ok(inline_data_part(&mime, file_data));
+		}
+
+		if !file_id.is_empty() {
+			return Err(AIError::UnsupportedConversion(strng::new(format!(
+				"native Gemini path cannot resolve OpenAI file_id ({file_id}); Vertex has no OpenAI Files store. Send file.file_data as an inline data: URI, or reference a gs:// object"
+			))));
+		}
+
+		Err(AIError::UnsupportedConversion(strng::new(
+			"file content part has neither an inline data: file_data nor a gs:// reference",
+		)))
 	}
 
 	fn text_part(text: &str) -> vg::Part {
@@ -418,25 +565,38 @@ pub mod from_completions {
 		})
 	}
 
-	/// Append `parts` as a content entry of `role`, merging into the previous entry
-	/// when the role matches (Gemini requires user/model alternation).
+	/// Append `parts` as a content entry of `role`, merging compatible parts into the
+	/// previous entry when the role matches (Gemini requires user/model alternation).
 	///
-	/// For user entries, also enforces the Vertex invariant that every user turn must
-	/// contain at least one text part (image-only turns are rejected otherwise).
+	/// Function responses must remain in their own user entry: Gemini 3 rejects a
+	/// functionResponse with sibling parts. Other user entries retain a text filler when
+	/// necessary (for example, image-only turns).
 	fn push_content(contents: &mut Vec<vg::Content>, role: &str, mut parts: Vec<vg::Part>) {
 		if parts.is_empty() {
 			return;
 		}
+		let has_function_response = parts
+			.iter()
+			.any(|p| matches!(p, vg::Part::FunctionResponse(_)));
 		if let Some(last) = contents.last_mut()
 			&& last.role.as_deref() == Some(role)
+			&& last
+				.parts
+				.iter()
+				.any(|p| matches!(p, vg::Part::FunctionResponse(_)))
+				== has_function_response
 		{
-			if role == "user" && !last.parts.iter().any(is_text_part) && !parts.iter().any(is_text_part) {
+			if role == "user"
+				&& !has_function_response
+				&& !last.parts.iter().any(is_text_part)
+				&& !parts.iter().any(is_text_part)
+			{
 				parts.push(text_part(" "));
 			}
 			last.parts.extend(parts);
 			return;
 		}
-		if role == "user" && !parts.iter().any(is_text_part) {
+		if role == "user" && !has_function_response && !parts.iter().any(is_text_part) {
 			parts.push(text_part(" "));
 		}
 		contents.push(vg::Content {
@@ -464,6 +624,7 @@ pub mod from_completions {
 					.and_then(Value::as_str)
 					.map(str::to_string),
 				parameters: f.get("parameters").map(normalize_gemini_schema),
+				rest: Default::default(),
 			})
 			.collect();
 		if decls.is_empty() {
@@ -471,6 +632,7 @@ pub mod from_completions {
 		} else {
 			vec![vg::Tool {
 				function_declarations: decls,
+				rest: Default::default(),
 			}]
 		}
 	}
@@ -500,12 +662,14 @@ pub mod from_completions {
 				vg::FunctionCallingConfig {
 					mode: Some("ANY".into()),
 					allowed_function_names: name.map(|n| vec![n.to_string()]).unwrap_or_default(),
+					rest: Default::default(),
 				}
 			},
 			_ => return None,
 		};
 		Some(vg::ToolConfig {
 			function_calling_config: Some(cfg),
+			rest: Default::default(),
 		})
 	}
 
@@ -543,6 +707,7 @@ pub mod from_completions {
 			response_mime_type,
 			response_schema,
 			thinking_config,
+			rest: Default::default(),
 		};
 
 		if cfg == vg::GenerationConfig::default() {
@@ -572,6 +737,9 @@ pub mod from_completions {
 
 	// Gemini's responseSchema / functionDeclarations[].parameters accept only a subset of JSON Schema.
 	// The normalization below is ported from litellm's `_build_vertex_schema` (BerriAI/litellm, MIT).
+	//
+	// Authoritative field list: google/ai/generativelanguage/v1beta/content.proto — Schema message.
+	// Cross-checked against litellm/types/llms/vertex_ai.py Schema TypedDict (both MIT-licensed).
 
 	/// Schema fields Gemini accepts. `format` is further pruned to enum/date-time and `enum` is
 	/// dropped on non-string types.
@@ -594,6 +762,11 @@ pub mod from_completions {
 		"maximum",
 		"exclusiveMinimum",
 		"exclusiveMaximum",
+		"minItems",
+		"maxItems",
+		"minProperties",
+		"maxProperties",
+		"example",
 		"propertyOrdering",
 	];
 
@@ -888,12 +1061,6 @@ pub mod from_completions {
 		model.contains("gemini-3")
 	}
 
-	// Conservative `reasoning_effort` -> Gemini 2.5 `thinkingBudget` mapping, chosen to
-	// be valid for both Flash and Pro (Pro's documented range is 128..=32768).
-	const THINKING_BUDGET_LOW: i32 = 1024;
-	const THINKING_BUDGET_MEDIUM: i32 = 2048;
-	const THINKING_BUDGET_HIGH: i32 = 4096;
-
 	fn thinking_config(req: &types::completions::Request, model: &str) -> Option<vg::ThinkingConfig> {
 		if let Some(tc) = req
 			.rest
@@ -903,51 +1070,51 @@ pub mod from_completions {
 			return vg::ThinkingConfig::deserialize(tc).ok();
 		}
 
-		let effort = req.rest.get("reasoning_effort").and_then(Value::as_str)?;
-		if effort == "none" {
-			// Omit thinkingConfig; on Gemini 2.5 Pro emitting budget 0 is rejected.
-			return None;
-		}
-
+		let effort = req.reasoning_effort.as_ref()?;
 		if uses_thinking_levels(model) {
 			let level = match effort {
-				"minimal" | "low" | "medium" | "high" => effort,
-				_ => "medium",
+				types::completions::typed::ReasoningEffort::None => return None,
+				types::completions::typed::ReasoningEffort::Minimal => "minimal",
+				types::completions::typed::ReasoningEffort::Low => "low",
+				types::completions::typed::ReasoningEffort::Medium => "medium",
+				types::completions::typed::ReasoningEffort::High
+				| types::completions::typed::ReasoningEffort::Xhigh
+				| types::completions::typed::ReasoningEffort::Max => "high",
 			};
 			Some(vg::ThinkingConfig {
-				thinking_level: Some(level.to_string()),
+				thinking_level: Some(level.into()),
 				thinking_budget: None,
 				include_thoughts: Some(true),
+				rest: Default::default(),
 			})
 		} else {
-			// Gemini 2.5: map to a conservative integer budget valid for Flash and Pro.
-			// "minimal" is coerced to "low" (no 2.5 analogue).
-			let budget = match effort {
-				"minimal" | "low" => THINKING_BUDGET_LOW,
-				"medium" => THINKING_BUDGET_MEDIUM,
-				"high" => THINKING_BUDGET_HIGH,
-				_ => THINKING_BUDGET_MEDIUM,
-			};
+			// Gemini 2.5 takes the shared conservative budget scale. Some models cap the
+			// thinking budget at 32K; check every target model's limit before raising it.
+			// `none` omits thinkingConfig instead of sending budget 0.
+			let budget = crate::types::thinking_budget_for_reasoning_effort(effort)? as i32;
 			Some(vg::ThinkingConfig {
 				thinking_level: None,
 				thinking_budget: Some(budget),
 				include_thoughts: Some(true),
+				rest: Default::default(),
 			})
 		}
 	}
 }
 
 pub mod to_completions {
+	use std::collections::HashMap;
 	use std::time::Instant;
 
-	use axum_core::body::Body;
-	use futures_util::StreamExt;
-	use futures_util::stream::{self, BoxStream};
+	use agent_http::Body;
 	use serde_json::Value;
 
 	use super::*;
 	use crate::types::completions::typed as completions;
 	use crate::{StreamingUsageGuard, json, parse};
+
+	type LoggedToolCall = (Option<String>, Option<String>, String);
+	type LoggedToolCalls = HashMap<u32, LoggedToolCall>;
 
 	pub fn translate_response(bytes: &Bytes) -> Result<Box<dyn ResponseType>, AIError> {
 		let resp: vg::GenerateContentResponse =
@@ -1047,6 +1214,7 @@ pub mod to_completions {
 				completions::FinishReason::Stop
 			};
 			vec![completions::ChatChoice {
+				rest: Default::default(),
 				index: 0,
 				message: assistant_message(Some(String::new()), None, None),
 				finish_reason: Some(finish),
@@ -1114,6 +1282,7 @@ pub mod to_completions {
 		let tool_calls = has_tool_calls.then_some(tool_calls);
 
 		completions::ChatChoice {
+			rest: Default::default(),
 			index,
 			message: assistant_message(content, reasoning, tool_calls),
 			finish_reason: Some(finish),
@@ -1275,6 +1444,7 @@ pub mod to_completions {
 				.map(build_usage);
 			let choices = if has_delta || finish.is_some() {
 				vec![completions::ChatChoiceStream {
+					rest: Default::default(),
 					index: 0,
 					delta,
 					finish_reason: finish,
@@ -1308,9 +1478,13 @@ pub mod to_completions {
 		buffer_limit: usize,
 		model: Strng,
 		log: StreamingUsageGuard,
+		log_content: crate::LogContentFields,
 	) -> Body {
 		let mut state = StreamState::new();
 		let mut saw_token = false;
+		let mut last_token_at: Option<Instant> = None;
+		let mut completion = log_content.completion.then(String::new);
+		let mut tool_calls: Option<LoggedToolCalls> = log_content.tool_calls.then(HashMap::new);
 		let body = parse::sse::json_transform_multi::<
 			vg::GenerateContentResponse,
 			completions::StreamResponse,
@@ -1322,12 +1496,19 @@ pub mod to_completions {
 					tracing::debug!("failed to parse gemini stream chunk: {e}");
 					return vec![];
 				},
-				parse::sse::SseJsonEvent::Done => return vec![],
+				parse::sse::SseJsonEvent::Done
+				| parse::sse::SseJsonEvent::Eof
+				| parse::sse::SseJsonEvent::Error => return vec![],
 			};
 
+			let now = Instant::now();
 			if !saw_token {
 				saw_token = true;
-				log.update(|r| r.response.first_token = Some(Instant::now()));
+				last_token_at = Some(now);
+				log.update(|r| r.response.first_token = Some(now));
+			} else if let Some(prev) = last_token_at.replace(now) {
+				let gap = now.duration_since(prev);
+				log.update(|r| r.response.inter_chunk_latencies.record(gap));
 			}
 			if let Some(m) = &chunk.model_version {
 				log.update(|r| {
@@ -1337,7 +1518,7 @@ pub mod to_completions {
 				});
 			}
 			if let Some(um) = &chunk.usage_metadata {
-				let (prompt, completion, total) = usage_counts(um);
+				let (prompt, completion, total) = um.counts();
 				log.update(|r| {
 					r.response.input_tokens = Some(prompt);
 					r.response.output_tokens = Some(completion);
@@ -1353,49 +1534,66 @@ pub mod to_completions {
 					if sr.model.is_empty() {
 						sr.model = model.to_string();
 					}
+					if let Some(choice) = sr.choices.first() {
+						if let Some(content) = &choice.delta.content
+							&& let Some(completion) = completion.as_mut()
+						{
+							completion.push_str(content);
+						}
+						if let Some(calls) = &choice.delta.tool_calls {
+							for call in calls {
+								if let Some(tool_calls) = tool_calls.as_mut() {
+									let entry = tool_calls.entry(call.index).or_default();
+									if let Some(id) = &call.id {
+										entry.0 = Some(id.clone());
+									}
+									if let Some(function) = &call.function {
+										if let Some(name) = &function.name {
+											entry.1 = Some(name.clone());
+										}
+										if let Some(arguments) = &function.arguments {
+											entry.2.push_str(arguments);
+										}
+									}
+								}
+							}
+						}
+						if let Some(finish_reason) = choice
+							.finish_reason
+							.as_ref()
+							.and_then(crate::types::serialize_str)
+						{
+							let tool_parts = tool_calls.as_mut().and_then(|tool_calls| {
+								crate::conversion::completions::finalize_streaming_tool_calls(
+									tool_calls
+										.drain()
+										.map(|(idx, (id, name, arguments))| (idx, id, name, arguments)),
+								)
+							});
+							let mut tool_parts = tool_parts;
+							let mut finish_reason = Some(finish_reason);
+							log.update(|r| {
+								if let Some(completion) = completion.take() {
+									r.response.completion = Some(vec![completion]);
+								}
+								crate::conversion::completions::build_output_messages(
+									&mut r.response,
+									tool_parts.take(),
+									finish_reason.take(),
+								);
+							});
+						}
+					}
 					vec![("", sr)]
 				},
 				None => vec![],
 			}
 		});
-		append_done_on_close(body.into_data_stream())
-	}
-
-	/// Gemini ends the HTTP stream without a `[DONE]` sentinel; append one on successful close
-	/// (mirrors `conversion::bedrock::from_completions::append_done_on_success`).
-	fn append_done_on_close<S>(stream: S) -> Body
-	where
-		S: futures_core::Stream<Item = Result<Bytes, axum_core::Error>> + Send + 'static,
-	{
-		let done = crate::parse::encode_sse_event("", Bytes::from_static(b"[DONE]"));
-		let stream = stream::unfold(
-			(Some(stream.boxed()), Some(done)),
-			|(stream, done): (
-				Option<BoxStream<'static, Result<Bytes, axum_core::Error>>>,
-				Option<Bytes>,
-			)| async move {
-				let mut stream = stream?;
-				match stream.next().await {
-					Some(Ok(chunk)) => Some((Ok(chunk), (Some(stream), done))),
-					Some(Err(err)) => Some((Err(err), (None, None))),
-					None => done.map(|done| (Ok(done), (None, None))),
-				}
-			},
-		);
-		Body::from_stream(stream)
-	}
-
-	/// Prompt, completion, and total token counts from Gemini usage metadata
-	/// (total falls back to prompt + completion when absent).
-	fn usage_counts(um: &vg::UsageMetadata) -> (u64, u64, u64) {
-		let prompt = um.prompt_token_count.unwrap_or(0);
-		let completion = um.candidates_token_count.unwrap_or(0);
-		let total = um.total_token_count.unwrap_or(prompt + completion);
-		(prompt, completion, total)
+		parse::sse::append_done_on_success(body)
 	}
 
 	fn build_usage(um: &vg::UsageMetadata) -> completions::Usage {
-		let (prompt, completion, total) = usage_counts(um);
+		let (prompt, completion, total) = um.counts();
 		completions::Usage {
 			prompt_tokens: prompt as u32,
 			completion_tokens: completion as u32,

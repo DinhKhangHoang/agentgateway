@@ -111,11 +111,6 @@ func NewControllerBuilder(ctx context.Context, cfg StartConfig) (*ControllerBuil
 
 	setupLog.Info("initializing agentgateway extensions")
 
-	// TODO: re-enable metrics processing https://github.com/agentgateway/agentgateway/issues/970
-	// Begin background processing of resource sync metrics.
-	// This only effects metrics in the resources subsystem and is not required for other metrics.
-	//metrics.StartResourceSyncMetricsProcessing(ctx)
-
 	if cfg.JWKSLookup == nil {
 		return nil, errors.New("jwks lookup is not configured")
 	}
@@ -151,6 +146,8 @@ func NewControllerBuilder(ctx context.Context, cfg StartConfig) (*ControllerBuil
 		agwSyncer.CacheSyncs(),
 		cfg.ExtraAgwResourceStatusHandlers,
 		cfg.AgwCollections.Settings.EnableInferExt,
+		cfg.AgwCollections.Settings.EnableAgentgatewayModels,
+		cfg.AgwCollections.Settings.EnableXBackend,
 	)
 	if err := cfg.Manager.Add(agwStatusSyncer); err != nil {
 		setupLog.Error(err, "unable to add agentgateway StatusSyncer runnable")

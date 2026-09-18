@@ -36,11 +36,13 @@ on:
         type: string
 
 env:
+  # Disable the Go cache program injected by Blacksmith runners.
+  GOCACHEPROG: ""
   CARGO_TERM_COLOR: always
   CI: true
-  RUST_VERSION: "1.97.0"
+  RUST_VERSION: "1.98.0"
   CARGO_BUILD_WARNINGS: deny
-  GO_VERSION: "1.26.4"
+  GO_VERSION: "1.27.1"
   REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/agentgateway
   CONTROLLER_REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/controller
   VEX_FILE: .github/vex/openvex.json
@@ -122,8 +124,6 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         tags: ${{ env.REGISTRY_IMAGE }}
         outputs: type=image,push-by-digest=true,name-canonical=true,push=true
-        cache-from: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache
-        cache-to: type=registry,ref=${{ env.REGISTRY_IMAGE }}:buildcache,mode=max
 
     - name: Export digest
       run: |
@@ -279,8 +279,6 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         tags: ${{ env.CONTROLLER_REGISTRY_IMAGE }}
         outputs: type=image,push-by-digest=true,name-canonical=true,push=true
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
 
     - name: Export digest
       run: |
@@ -416,7 +414,7 @@ jobs:
           - os: blacksmith-4vcpu-ubuntu-2404-arm
             target: aarch64-unknown-linux-musl
             # arm64 musl fails with jemalloc: https://github.com/tikv/jemallocator/issues/146
-            extra_cargo_args: "--no-default-features --features agentgateway-app/mimalloc,agentgateway-app/tls-aws-lc"
+            extra_cargo_args: "--no-default-features --features agentgateway-app/mimalloc,agentgateway-app/crypto-aws-lc"
             name: linux-arm
           - os: macos-26
             target: aarch64-apple-darwin
@@ -431,18 +429,12 @@ jobs:
         persist-credentials: false
     - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
       with:
-        node-version: 24
+        node-version-file: ui/.nvmrc
     - name: Install Rust
       uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
       with:
         toolchain: "${{ env.RUST_VERSION }}"
         targets: ${{ matrix.target }}
-    # TODO: build this in a separate job and just copy it over
-    - name: Build UI
-      run: |
-        cd ui
-        npm install
-        npm run build
     - name: Prepare Linux target
       if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
       run: |
@@ -551,6 +543,7 @@ jobs:
           outputs/agentgateway-*
           outputs/agctl-*
         tag_name: ${{ github.ref_name }}
+        prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
         generate_release_notes: true
         body: |
           🎉 Welcome to the ${{ env.VERSION }} release of the agentgateway project!
@@ -570,7 +563,7 @@ jobs:
 
           ## Quick Start
 
-          Follow the [Kubernetes](https://agentgateway.dev/docs/kubernetes/latest/quickstart/) or [Standalone](https://agentgateway.dev/docs/standalone/latest/quickstart/) quick start guide to get started!
+          Follow the [Kubernetes](https://agentgateway.dev/docs/kubernetes/latest/documentation/quickstart/) or [Standalone](https://agentgateway.dev/docs/standalone/latest/documentation/quickstart/) quick start guide to get started!
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       if: startsWith(github.ref, 'refs/tags/')

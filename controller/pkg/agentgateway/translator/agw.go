@@ -196,7 +196,7 @@ func CreateAgwRewriteFilter(filter *gwv1.HTTPURLRewriteFilter) *api.TrafficPolic
 		case gwv1.PrefixMatchHTTPPathModifier:
 			ff.Path = &api.UrlRewrite_Prefix{Prefix: strings.TrimSuffix(*filter.Path.ReplacePrefixMatch, "/")}
 		case gwv1.FullPathHTTPPathModifier:
-			ff.Path = &api.UrlRewrite_Full{Full: strings.TrimSuffix(*filter.Path.ReplaceFullPath, "/")}
+			ff.Path = &api.UrlRewrite_Full{Full: *filter.Path.ReplaceFullPath}
 		}
 	}
 	return &api.TrafficPolicySpec{
@@ -218,10 +218,8 @@ func CreateAgwMirrorFilter(
 	}
 	var weightOne int32 = 1
 	dst, err := buildAgwDestination(ctx, gwv1.HTTPBackendRef{
-		BackendRef: gwv1.BackendRef{
-			BackendObjectReference: filter.BackendRef,
-			Weight:                 &weightOne,
-		},
+		BackendObjectReference: filter.BackendRef,
+		Weight:                 &weightOne,
 	}, ns, k)
 	if err != nil {
 		return nil, err
@@ -258,10 +256,8 @@ func CreateAgwExternalAuthFilter(
 		return nil, nil
 	}
 	dst, err := buildAgwDestination(ctx, gwv1.HTTPBackendRef{
-		BackendRef: gwv1.BackendRef{
-			BackendObjectReference: filter.BackendRef,
-			Weight:                 new(int32(1)),
-		},
+		BackendObjectReference: filter.BackendRef,
+		Weight:                 new(int32(1)),
 	}, ns, k)
 	if err != nil {
 		return nil, err
@@ -361,7 +357,7 @@ func CreateAgwRedirectFilter(filter *gwv1.HTTPRequestRedirectFilter) *api.Reques
 		case gwv1.PrefixMatchHTTPPathModifier:
 			ff.Path = &api.RequestRedirect_Prefix{Prefix: strings.TrimSuffix(*filter.Path.ReplacePrefixMatch, "/")}
 		case gwv1.FullPathHTTPPathModifier:
-			ff.Path = &api.RequestRedirect_Full{Full: strings.TrimSuffix(*filter.Path.ReplaceFullPath, "/")}
+			ff.Path = &api.RequestRedirect_Full{Full: *filter.Path.ReplaceFullPath}
 		}
 	}
 	return ff

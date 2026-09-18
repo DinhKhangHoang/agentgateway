@@ -90,7 +90,9 @@ pub(crate) fn route_type_string(route_type: RouteType) -> &'static str {
 		| RouteType::Models
 		| RouteType::Embeddings
 		| RouteType::Realtime
-		| RouteType::Rerank => "llm/v1/chat",
+		| RouteType::Rerank
+		| RouteType::GenerateContent
+		| RouteType::GeminiCountTokens => "llm/v1/chat",
 	}
 }
 
