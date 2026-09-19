@@ -1577,7 +1577,7 @@ message BackendPolicySpec {
         optional bool enabled = 2;
       }
     }
-    WebSearch web_search = 10;
+    WebSearch web_search = 1001;
 
     // RouteType specifies how incoming requests should be processed
     // based on the URL path.
@@ -1915,8 +1915,8 @@ message BackendPolicySpec {
     // the concrete model from which the provider was lowered.
     TrafficPolicySpec.RBAC authorization = 19;
     SessionAffinity session_affinity = 20;
-    Sticky sticky = 21;
-    Capacity capacity = 22;
+    Sticky sticky = 1002;
+    Capacity capacity = 1003;
   }
 }
 
