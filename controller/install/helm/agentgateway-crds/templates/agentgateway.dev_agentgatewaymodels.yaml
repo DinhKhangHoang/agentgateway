@@ -272,6 +272,20 @@ spec:
                       rule: '!self.contains(''*'') || (self.indexOf(''*'') == self.lastIndexOf(''*'')
                         && (self.indexOf(''*'') == 0 || self.indexOf(''*'') == size(self)
                         - 1))'
+                  paths:
+                    description: |-
+                      `paths` lists additional request paths routed to the model router, beyond
+                      the built-in OpenAI-shaped surface (`/v1/chat/completions`, `/v1/messages`,
+                      `/v1/responses`, `/v1/embeddings`, `/v1/rerank` and friends).
+
+                      Paths are unioned across every model on the same listener, so a path opened
+                      by one model becomes reachable for all of them. The request body's `model`
+                      field still selects which model serves it. Pair each entry with a
+                      `policies.routes` entry naming the route type for that path.
+                    items:
+                      type: string
+                    maxItems: 32
+                    type: array
                 type: object
               parentRefs:
                 description: |-
@@ -1687,6 +1701,49 @@ spec:
                     description: Health checking and eviction behavior for this model
                       provider.
                     properties:
+                      activeProbe:
+                        description: |-
+                          FR-5.1-5.3 active health probe settings. Drives a background prober
+                          that periodically sends a tiny request to each endpoint and feeds the
+                          outcome into the same health/eviction machinery as real traffic — so a
+                          dead backend is evicted before the next real request hits it. When
+                          unset, health is purely reactive (real-request outcomes only).
+                        properties:
+                          consecutiveFailures:
+                            description: |-
+                              Number of consecutive probe failures required before the prober evicts
+                              an endpoint. Default 2 when unset. This is independent of
+                              `BackendEviction.consecutiveFailures` (which counts real-request
+                              failures); both feed the same eviction decision.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          interval:
+                            default: 30s
+                            description: |-
+                              Interval between probe sweeps across all endpoints. Default 30s when
+                              unset. Shorter intervals detect failures faster but add load; the probe
+                              payload is tiny (`max_tokens: 1`) and deduped per endpoint.
+                            maxLength: 32
+                            type: string
+                            x-kubernetes-validations:
+                            - message: invalid duration value
+                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                            - message: probeInterval must be at least 1 second
+                              rule: duration(self) >= duration('1s')
+                          timeout:
+                            default: 5s
+                            description: |-
+                              Per-probe connect+read timeout. Default 5s when unset. A probe that
+                              times out is recorded as a failure (same as a real-request timeout).
+                            maxLength: 32
+                            type: string
+                            x-kubernetes-validations:
+                            - message: invalid duration value
+                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                            - message: probeTimeout must be at least 1 second
+                              rule: duration(self) >= duration('1s')
+                        type: object
                       eviction:
                         description: Settings for evicting unhealthy backends.
                         properties:
@@ -4910,6 +4967,35 @@ spec:
                         be set
                       rule: '[has(self.request),has(self.response)].filter(x,x==true).size()
                         >= 1'
+                  routes:
+                    additionalProperties:
+                      description: |-
+                        How the AI gateway should process incoming requests
+                        based on the URL path and the API format expected.
+                      enum:
+                      - AnthropicTokenCount
+                      - Completions
+                      - Detect
+                      - Embeddings
+                      - GeminiCountTokens
+                      - GenerateContent
+                      - Messages
+                      - Models
+                      - Passthrough
+                      - Realtime
+                      - Rerank
+                      - Responses
+                      type: string
+                    description: |-
+                      Rules for identifying the type of traffic to handle for this model.
+                      The keys are URL path suffixes matched using ends-with comparison, for
+                      example `"/v1/chat/completions"`.
+                      The special `*` wildcard matches any path.
+                      Setting this field *replaces* the built-in default route table wholesale
+                      rather than extending it, so the map must restate every suffix it still
+                      wants, including a `"*"` wildcard entry if one is desired.
+                      If not specified, the built-in defaults apply.
+                    type: object
                   tls:
                     description: TLS settings for connections to this model provider.
                     properties:
@@ -5186,9 +5272,9 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: at least one of the fields in [auth authorization finalTransformations
-                    headers health promptGuard tls transformations tunnel] must be
-                    set
-                  rule: '[has(self.auth),has(self.authorization),has(self.finalTransformations),has(self.headers),has(self.health),has(self.promptGuard),has(self.tls),has(self.transformations),has(self.tunnel)].filter(x,x==true).size()
+                    headers health promptGuard routes tls transformations tunnel]
+                    must be set
+                  rule: '[has(self.auth),has(self.authorization),has(self.finalTransformations),has(self.headers),has(self.health),has(self.promptGuard),has(self.routes),has(self.tls),has(self.transformations),has(self.tunnel)].filter(x,x==true).size()
                     >= 1'
               provider:
                 description: |-

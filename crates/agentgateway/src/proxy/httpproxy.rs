@@ -3187,8 +3187,49 @@ async fn make_backend_call(
 		// reroute. Late backend auth (AWS SigV4) is skipped for the sidecar:
 		// the sidecar is internal and carries its own `x-ai-ws-llm-auth-*`.
 		let ws_reroute = req.extensions().get::<ws::WebSearchReroute>().cloned();
-		if let Some(reroute) = &ws_reroute {
-			backend_call.target = reroute.target.clone();
+		if let Some(_reroute) = &ws_reroute {
+			// Forward the resolved LLM endpoint + auth to the sidecar via
+			// x-ai-ws-llm-* headers, mirroring Kong's web-search-prepare.lua
+			// `llm_forward_headers`. The sidecar's search loop calls this LLM
+			// directly to synthesize search results; without these headers it
+			// has no LLM target and the loop fails ("unsupported protocol
+			// scheme"). Capture BEFORE swapping the target to the sidecar.
+			{
+				let hostport = backend_call.target.hostport();
+				let path = req.uri().path();
+				let normalized = if path.ends_with("/responses") {
+					format!(
+						"{}chat/completions",
+						&path[..path.len() - "/responses".len()]
+					)
+				} else {
+					path.to_string()
+				};
+				if let Ok(hv) =
+					HeaderValue::try_from(format!("https://{hostport}{normalized}"))
+				{
+					req.headers_mut().insert(
+						HeaderName::from_static("x-ai-ws-llm-url"),
+						hv,
+					);
+				}
+			}
+			// Forward the backend auth (already applied to req by late backend
+			// auth in the else branch above) so the sidecar can authenticate
+			// to the LLM. The auth header name is canonicalized to
+			// "Authorization" (the standard bearer-token header the sidecar
+			// forwards verbatim).
+			if let Some(auth_val) = req.headers().get(header::AUTHORIZATION).cloned() {
+				req.headers_mut().insert(
+					HeaderName::from_static("x-ai-ws-llm-auth-header"),
+					HeaderValue::from_static("Authorization"),
+				);
+				req.headers_mut().insert(
+					HeaderName::from_static("x-ai-ws-llm-auth-value"),
+					auth_val,
+				);
+			}
+			backend_call.target = ws_reroute.as_ref().unwrap().target.clone();
 			http::modify_req_uri(&mut req, |uri| {
 				uri.path_and_query = Some(PathAndQuery::from_static("/v1/chat/completions"));
 				Ok(())

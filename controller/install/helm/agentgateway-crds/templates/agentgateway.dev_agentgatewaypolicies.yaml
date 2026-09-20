@@ -3573,12 +3573,70 @@ spec:
                         x-kubernetes-list-map-keys:
                         - field
                         x-kubernetes-list-type: map
+                      webSearch:
+                        description: |-
+                          WebSearch configures web-search server-tool augmentation (FR-2.6).
+                          When a request's tools[] contains a registered web_search server tool,
+                          reroute the request to a web-search sidecar that runs the search loop
+                          and emits x-ai-ws-* SSE markers, which the gateway reshapes into the
+                          client's protocol. Mirrors Kong's model.server_tools_config block.
+                        properties:
+                          clientTools:
+                            default: true
+                            description: |-
+                              clientTools forwards the client's own function tools to the sidecar.
+                              Defaults to true. When false, only server-side web_search runs — a
+                              client tool call can never suspend the loop.
+                            type: boolean
+                          enabledTools:
+                            description: |-
+                              enabledTools lists server tools enabled on this target ({name, enabled}).
+                              Currently only "web_search" is registered. When empty, configuring
+                              web_search at all implies web_search enabled (legacy shape).
+                            items:
+                              description: |-
+                                EnabledServerTool is a server tool enabled on a target. Mirrors a
+                                model.server_tools[] entry.
+                              properties:
+                                enabled:
+                                  default: true
+                                  description: Whether this tool is enabled on the
+                                    target. Defaults to true when absent.
+                                  type: boolean
+                                name:
+                                  description: Registered tool name (e.g. "web_search").
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                          lazyDefer:
+                            default: false
+                            description: |-
+                              lazyDefer defers same-batch server tool calls to the next turn
+                              (Anthropic parity). Defaults to false. Forwarded to the sidecar via
+                              the x-ai-ws-config.lazy_defer marker.
+                            type: boolean
+                          sidecarUrl:
+                            description: |-
+                              sidecarUrl is the base URL of the web-search sidecar.
+                              The reroute sends requests to `<sidecarUrl>/v1/chat/completions`.
+                              Required to enable hijack; when unset, web_search is a no-op (bypass).
+                            type: string
+                          streaming:
+                            default: true
+                            description: |-
+                              streaming selects whether the sidecar streams (data: SSE) or buffers
+                              (one JSON body). Defaults to true. When false, a client stream=true is
+                              downgraded to stream=false and the buffered shaper runs.
+                            type: boolean
+                        type: object
                     type: object
                     x-kubernetes-validations:
                     - message: at least one of the fields in [defaults finalTransformations
                         modelAliases overrides prompt promptCaching promptGuard routes
-                        transformations] must be set
-                      rule: '[has(self.defaults),has(self.finalTransformations),has(self.modelAliases),has(self.overrides),has(self.prompt),has(self.promptCaching),has(self.promptGuard),has(self.routes),has(self.transformations)].filter(x,x==true).size()
+                        transformations webSearch] must be set
+                      rule: '[has(self.defaults),has(self.finalTransformations),has(self.modelAliases),has(self.overrides),has(self.prompt),has(self.promptCaching),has(self.promptGuard),has(self.routes),has(self.transformations),has(self.webSearch)].filter(x,x==true).size()
                         >= 1'
                   auth:
                     description: Settings for managing authentication to the backend
@@ -5338,6 +5396,31 @@ spec:
                         be set
                       rule: (has(self.key)?1:0)+(has(self.secretRef)?1:0)+(has(self.passthrough)?1:0)+(has(self.aws)?1:0)+(has(self.azure)?1:0)+(has(self.gcp)?1:0)+(has(self.oauthTokenExchange)?1:0)+(has(self.crossAppAccess)?1:0)+(has(self.jwtSign)?1:0)
                         <= 1
+                  capacity:
+                    description: 'G7: per-endpoint inflight + TPM hard caps.'
+                    properties:
+                      cooldown:
+                        description: Hold-rejected duration. Default 3s (reuses Retry-After).
+                        maxLength: 32
+                        type: string
+                        x-kubernetes-validations:
+                        - message: invalid duration value
+                          rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                        - message: cooldown must be at least 1 second
+                          rule: duration(self) >= duration('1s')
+                      inflightCap:
+                        description: Max concurrent in-flight requests per endpoint.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      tpmPerMinute:
+                        description: |-
+                          Per-endpoint tokens-per-minute budget. Pre-debited at select,
+                          trued-up on completion.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                    type: object
                   extAuth:
                     description: |-
                       External authentication configuration for requests
@@ -5608,6 +5691,49 @@ spec:
                   health:
                     description: Settings for passive and active health checking.
                     properties:
+                      activeProbe:
+                        description: |-
+                          FR-5.1-5.3 active health probe settings. Drives a background prober
+                          that periodically sends a tiny request to each endpoint and feeds the
+                          outcome into the same health/eviction machinery as real traffic — so a
+                          dead backend is evicted before the next real request hits it. When
+                          unset, health is purely reactive (real-request outcomes only).
+                        properties:
+                          consecutiveFailures:
+                            description: |-
+                              Number of consecutive probe failures required before the prober evicts
+                              an endpoint. Default 2 when unset. This is independent of
+                              `BackendEviction.consecutiveFailures` (which counts real-request
+                              failures); both feed the same eviction decision.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          interval:
+                            default: 30s
+                            description: |-
+                              Interval between probe sweeps across all endpoints. Default 30s when
+                              unset. Shorter intervals detect failures faster but add load; the probe
+                              payload is tiny (`max_tokens: 1`) and deduped per endpoint.
+                            maxLength: 32
+                            type: string
+                            x-kubernetes-validations:
+                            - message: invalid duration value
+                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                            - message: probeInterval must be at least 1 second
+                              rule: duration(self) >= duration('1s')
+                          timeout:
+                            default: 5s
+                            description: |-
+                              Per-probe connect+read timeout. Default 5s when unset. A probe that
+                              times out is recorded as a failure (same as a real-request timeout).
+                            maxLength: 32
+                            type: string
+                            x-kubernetes-validations:
+                            - message: invalid duration value
+                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                            - message: probeTimeout must be at least 1 second
+                              rule: duration(self) >= duration('1s')
+                        type: object
                       eviction:
                         description: Settings for evicting unhealthy backends.
                         properties:
@@ -6174,6 +6300,28 @@ spec:
                     required:
                     - source
                     type: object
+                  sticky:
+                    description: 'G6: soft api-key→backend affinity for prompt-cache
+                      hit rate.'
+                    properties:
+                      key:
+                        description: |-
+                          CEL expression resolving to the affinity key. Defaults to the request's
+                          api-key sha256 when unset.
+                        maxLength: 16384
+                        minLength: 1
+                        type: string
+                      ttl:
+                        description: How long a pin survives after last use. Default
+                          10m.
+                        maxLength: 32
+                        type: string
+                        x-kubernetes-validations:
+                        - message: invalid duration value
+                          rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                        - message: ttl must be at least 1 second
+                          rule: duration(self) >= duration('1s')
+                    type: object
                   tcp:
                     description: Settings for managing TCP connections to the backend
                     properties:
@@ -6709,9 +6857,10 @@ spec:
                       rule: '!has(self.url) || self.url.matches(''^https?://[^/?#]+$'')'
                 type: object
                 x-kubernetes-validations:
-                - message: at least one of the fields in [ai auth extAuth health http
-                    mcp sessionAffinity tcp tls transformation tunnel] must be set
-                  rule: '[has(self.ai),has(self.auth),has(self.extAuth),has(self.health),has(self.http),has(self.mcp),has(self.sessionAffinity),has(self.tcp),has(self.tls),has(self.transformation),has(self.tunnel)].filter(x,x==true).size()
+                - message: at least one of the fields in [ai auth capacity extAuth
+                    health http mcp sessionAffinity sticky tcp tls transformation
+                    tunnel] must be set
+                  rule: '[has(self.ai),has(self.auth),has(self.capacity),has(self.extAuth),has(self.health),has(self.http),has(self.mcp),has(self.sessionAffinity),has(self.sticky),has(self.tcp),has(self.tls),has(self.transformation),has(self.tunnel)].filter(x,x==true).size()
                     >= 1'
               frontend:
                 description: |-
@@ -10588,6 +10737,42 @@ spec:
                         maxLength: 16384
                         minLength: 1
                         type: string
+                      maxReplayBytes:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: |-
+                          `maxReplayBytes` is the maximum amount of the request body buffered in memory
+                          so a retry can replay it. A request whose body exceeds this is sent once and
+                          not retried, and the gateway logs a warning.
+
+                          Must be between `1Ki` and `100Mi`. `kubectl apply` rejects a value outside
+                          that range. A value that reaches the control plane without passing CRD
+                          admission is reported on this policy's status and ignored, so the data plane
+                          falls back to its own default of 64 KiB -- the same default that applies when
+                          the field is left unset.
+
+                          Set this to at least the listener's `maxBufferSize` when large requests must
+                          stay retriable. The cap is per in-flight request, so the worst case memory it
+                          admits is the cap times the number of retriable requests in flight; size it
+                          against request concurrency, not against one request.
+
+                          Suffixes follow the Kubernetes quantity rules, where the plain suffixes are
+                          decimal and the `i` suffixes are binary: `64K` is 64000 while `64Ki` is 65536,
+                          and `50M` is 50000000 while `50Mi` is 52428800. Use the binary suffixes.
+                        maxLength: 32
+                        minLength: 1
+                        pattern: ^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)(([KMGTPE]i)|[numkMGTPE]|[eE](\+?0*([0-9]|1[0-8])|-0*[0-9]))?$
+                        x-kubernetes-int-or-string: true
+                        x-kubernetes-validations:
+                        - message: maxReplayBytes must be at least 1Ki (1024 bytes)
+                          rule: '!quantity(string(self)).isLessThan(quantity(''1024''))'
+                        - message: maxReplayBytes must be at most 100Mi (104857600
+                            bytes)
+                          rule: '!quantity(string(self)).isGreaterThan(quantity(''104857600''))'
+                        - message: value must be at least 1 byte and fit within uint32
+                          rule: (self >= 1 && self <= 4294967295) || self.size() >
+                            0
                       precondition:
                         description: |-
                           `precondition` is a CEL expression evaluated against the request before any
@@ -11158,12 +11343,91 @@ spec:
                     - message: conditional cannot be set with any other field
                       rule: 'has(self.conditional) ? [has(self.request),has(self.response)].filter(x,x==true).size()
                         == 0 : true'
+                  usageReport:
+                    description: Reports final LLM token usage to an external endpoint
+                      on request completion.
+                    properties:
+                      backendRef:
+                        description: |-
+                          Endpoint that receives usage reports.
+                          Supported types: `Service` and `Backend`.
+                        properties:
+                          group:
+                            default: ""
+                            description: Group of the referent, for example `gateway.networking.k8s.io`.
+                              Empty selects the core API group
+                            maxLength: 253
+                            pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
+                          kind:
+                            default: Service
+                            description: Kubernetes resource kind of the referent,
+                              for example `Service`. Defaults to `Service`
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
+                            type: string
+                          name:
+                            description: Name is the name of the referent.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          namespace:
+                            description: Namespace of the referent. Defaults to the
+                              local namespace. A cross-namespace reference requires
+                              a ReferenceGrant in the referent namespace
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                          port:
+                            description: Destination port number. Required when the
+                              referent is a Kubernetes `Service`
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                        required:
+                        - name
+                        type: object
+                        x-kubernetes-validations:
+                        - message: Must have port for Service reference
+                          rule: '(size(self.group) == 0 && self.kind == ''Service'')
+                            ? has(self.port) : true'
+                      dimensions:
+                        additionalProperties:
+                          description: A Common Expression Language (CEL) expression.
+                          maxLength: 16384
+                          minLength: 1
+                          type: string
+                        description: |-
+                          Additional dimensions to include in the report, as CEL expressions
+                          evaluated against the original incoming request.
+                        maxProperties: 32
+                        type: object
+                      maxRetries:
+                        description: |-
+                          Number of retries after a failed delivery attempt. Defaults to 2
+                          (three attempts total). Set to 0 to disable retries.
+                        format: int32
+                        maximum: 5
+                        minimum: 0
+                        type: integer
+                      path:
+                        description: Request path on the endpoint. Defaults to `/usage`.
+                        type: string
+                      timeout:
+                        description: Per-attempt timeout. Defaults to 2s.
+                        type: string
+                    required:
+                    - backendRef
+                    type: object
                 type: object
                 x-kubernetes-validations:
                 - message: phase PreRouting only supports extAuth, authorization,
                     transformation, extProc, jwtAuthentication, basicAuthentication,
                     apiKeyAuthentication and cors
-                  rule: 'has(self.phase) && self.phase == ''PreRouting'' ? [has(self.buffer),has(self.csrf),has(self.delay),has(self.directResponse),has(self.headerModifiers),has(self.hostRewrite),has(self.rateLimit),has(self.retry),has(self.timeouts)].filter(x,x==true).size()
+                  rule: 'has(self.phase) && self.phase == ''PreRouting'' ? [has(self.buffer),has(self.csrf),has(self.delay),has(self.directResponse),has(self.headerModifiers),has(self.hostRewrite),has(self.rateLimit),has(self.retry),has(self.timeouts),has(self.usageReport)].filter(x,x==true).size()
                     == 0 : true'
             type: object
             x-kubernetes-validations:

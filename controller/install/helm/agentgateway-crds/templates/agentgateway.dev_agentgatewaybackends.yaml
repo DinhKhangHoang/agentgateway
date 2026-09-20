@@ -4482,13 +4482,73 @@ spec:
                                         x-kubernetes-list-map-keys:
                                         - field
                                         x-kubernetes-list-type: map
+                                      webSearch:
+                                        description: |-
+                                          WebSearch configures web-search server-tool augmentation (FR-2.6).
+                                          When a request's tools[] contains a registered web_search server tool,
+                                          reroute the request to a web-search sidecar that runs the search loop
+                                          and emits x-ai-ws-* SSE markers, which the gateway reshapes into the
+                                          client's protocol. Mirrors Kong's model.server_tools_config block.
+                                        properties:
+                                          clientTools:
+                                            default: true
+                                            description: |-
+                                              clientTools forwards the client's own function tools to the sidecar.
+                                              Defaults to true. When false, only server-side web_search runs — a
+                                              client tool call can never suspend the loop.
+                                            type: boolean
+                                          enabledTools:
+                                            description: |-
+                                              enabledTools lists server tools enabled on this target ({name, enabled}).
+                                              Currently only "web_search" is registered. When empty, configuring
+                                              web_search at all implies web_search enabled (legacy shape).
+                                            items:
+                                              description: |-
+                                                EnabledServerTool is a server tool enabled on a target. Mirrors a
+                                                model.server_tools[] entry.
+                                              properties:
+                                                enabled:
+                                                  default: true
+                                                  description: Whether this tool is
+                                                    enabled on the target. Defaults
+                                                    to true when absent.
+                                                  type: boolean
+                                                name:
+                                                  description: Registered tool name
+                                                    (e.g. "web_search").
+                                                  type: string
+                                              required:
+                                              - name
+                                              type: object
+                                            type: array
+                                          lazyDefer:
+                                            default: false
+                                            description: |-
+                                              lazyDefer defers same-batch server tool calls to the next turn
+                                              (Anthropic parity). Defaults to false. Forwarded to the sidecar via
+                                              the x-ai-ws-config.lazy_defer marker.
+                                            type: boolean
+                                          sidecarUrl:
+                                            description: |-
+                                              sidecarUrl is the base URL of the web-search sidecar.
+                                              The reroute sends requests to `<sidecarUrl>/v1/chat/completions`.
+                                              Required to enable hijack; when unset, web_search is a no-op (bypass).
+                                            type: string
+                                          streaming:
+                                            default: true
+                                            description: |-
+                                              streaming selects whether the sidecar streams (data: SSE) or buffers
+                                              (one JSON body). Defaults to true. When false, a client stream=true is
+                                              downgraded to stream=false and the buffered shaper runs.
+                                            type: boolean
+                                        type: object
                                     type: object
                                     x-kubernetes-validations:
                                     - message: at least one of the fields in [defaults
                                         finalTransformations modelAliases overrides
-                                        prompt promptCaching promptGuard routes transformations]
-                                        must be set
-                                      rule: '[has(self.defaults),has(self.finalTransformations),has(self.modelAliases),has(self.overrides),has(self.prompt),has(self.promptCaching),has(self.promptGuard),has(self.routes),has(self.transformations)].filter(x,x==true).size()
+                                        prompt promptCaching promptGuard routes transformations
+                                        webSearch] must be set
+                                      rule: '[has(self.defaults),has(self.finalTransformations),has(self.modelAliases),has(self.overrides),has(self.prompt),has(self.promptCaching),has(self.promptGuard),has(self.routes),has(self.transformations),has(self.webSearch)].filter(x,x==true).size()
                                         >= 1'
                                   auth:
                                     description: Settings for managing authentication
@@ -6462,6 +6522,51 @@ spec:
                                     description: Settings for passive and active health
                                       checking.
                                     properties:
+                                      activeProbe:
+                                        description: |-
+                                          FR-5.1-5.3 active health probe settings. Drives a background prober
+                                          that periodically sends a tiny request to each endpoint and feeds the
+                                          outcome into the same health/eviction machinery as real traffic — so a
+                                          dead backend is evicted before the next real request hits it. When
+                                          unset, health is purely reactive (real-request outcomes only).
+                                        properties:
+                                          consecutiveFailures:
+                                            description: |-
+                                              Number of consecutive probe failures required before the prober evicts
+                                              an endpoint. Default 2 when unset. This is independent of
+                                              `BackendEviction.consecutiveFailures` (which counts real-request
+                                              failures); both feed the same eviction decision.
+                                            format: int32
+                                            minimum: 0
+                                            type: integer
+                                          interval:
+                                            default: 30s
+                                            description: |-
+                                              Interval between probe sweeps across all endpoints. Default 30s when
+                                              unset. Shorter intervals detect failures faster but add load; the probe
+                                              payload is tiny (`max_tokens: 1`) and deduped per endpoint.
+                                            maxLength: 32
+                                            type: string
+                                            x-kubernetes-validations:
+                                            - message: invalid duration value
+                                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                                            - message: probeInterval must be at least
+                                                1 second
+                                              rule: duration(self) >= duration('1s')
+                                          timeout:
+                                            default: 5s
+                                            description: |-
+                                              Per-probe connect+read timeout. Default 5s when unset. A probe that
+                                              times out is recorded as a failure (same as a real-request timeout).
+                                            maxLength: 32
+                                            type: string
+                                            x-kubernetes-validations:
+                                            - message: invalid duration value
+                                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                                            - message: probeTimeout must be at least
+                                                1 second
+                                              rule: duration(self) >= duration('1s')
+                                        type: object
                                       eviction:
                                         description: Settings for evicting unhealthy
                                           backends.
@@ -13651,12 +13756,70 @@ spec:
                         x-kubernetes-list-map-keys:
                         - field
                         x-kubernetes-list-type: map
+                      webSearch:
+                        description: |-
+                          WebSearch configures web-search server-tool augmentation (FR-2.6).
+                          When a request's tools[] contains a registered web_search server tool,
+                          reroute the request to a web-search sidecar that runs the search loop
+                          and emits x-ai-ws-* SSE markers, which the gateway reshapes into the
+                          client's protocol. Mirrors Kong's model.server_tools_config block.
+                        properties:
+                          clientTools:
+                            default: true
+                            description: |-
+                              clientTools forwards the client's own function tools to the sidecar.
+                              Defaults to true. When false, only server-side web_search runs — a
+                              client tool call can never suspend the loop.
+                            type: boolean
+                          enabledTools:
+                            description: |-
+                              enabledTools lists server tools enabled on this target ({name, enabled}).
+                              Currently only "web_search" is registered. When empty, configuring
+                              web_search at all implies web_search enabled (legacy shape).
+                            items:
+                              description: |-
+                                EnabledServerTool is a server tool enabled on a target. Mirrors a
+                                model.server_tools[] entry.
+                              properties:
+                                enabled:
+                                  default: true
+                                  description: Whether this tool is enabled on the
+                                    target. Defaults to true when absent.
+                                  type: boolean
+                                name:
+                                  description: Registered tool name (e.g. "web_search").
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                          lazyDefer:
+                            default: false
+                            description: |-
+                              lazyDefer defers same-batch server tool calls to the next turn
+                              (Anthropic parity). Defaults to false. Forwarded to the sidecar via
+                              the x-ai-ws-config.lazy_defer marker.
+                            type: boolean
+                          sidecarUrl:
+                            description: |-
+                              sidecarUrl is the base URL of the web-search sidecar.
+                              The reroute sends requests to `<sidecarUrl>/v1/chat/completions`.
+                              Required to enable hijack; when unset, web_search is a no-op (bypass).
+                            type: string
+                          streaming:
+                            default: true
+                            description: |-
+                              streaming selects whether the sidecar streams (data: SSE) or buffers
+                              (one JSON body). Defaults to true. When false, a client stream=true is
+                              downgraded to stream=false and the buffered shaper runs.
+                            type: boolean
+                        type: object
                     type: object
                     x-kubernetes-validations:
                     - message: at least one of the fields in [defaults finalTransformations
                         modelAliases overrides prompt promptCaching promptGuard routes
-                        transformations] must be set
-                      rule: '[has(self.defaults),has(self.finalTransformations),has(self.modelAliases),has(self.overrides),has(self.prompt),has(self.promptCaching),has(self.promptGuard),has(self.routes),has(self.transformations)].filter(x,x==true).size()
+                        transformations webSearch] must be set
+                      rule: '[has(self.defaults),has(self.finalTransformations),has(self.modelAliases),has(self.overrides),has(self.prompt),has(self.promptCaching),has(self.promptGuard),has(self.routes),has(self.transformations),has(self.webSearch)].filter(x,x==true).size()
                         >= 1'
                   auth:
                     description: Settings for managing authentication to the backend
@@ -15416,6 +15579,31 @@ spec:
                         be set
                       rule: (has(self.key)?1:0)+(has(self.secretRef)?1:0)+(has(self.passthrough)?1:0)+(has(self.aws)?1:0)+(has(self.azure)?1:0)+(has(self.gcp)?1:0)+(has(self.oauthTokenExchange)?1:0)+(has(self.crossAppAccess)?1:0)+(has(self.jwtSign)?1:0)
                         <= 1
+                  capacity:
+                    description: 'G7: per-endpoint inflight + TPM hard caps.'
+                    properties:
+                      cooldown:
+                        description: Hold-rejected duration. Default 3s (reuses Retry-After).
+                        maxLength: 32
+                        type: string
+                        x-kubernetes-validations:
+                        - message: invalid duration value
+                          rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                        - message: cooldown must be at least 1 second
+                          rule: duration(self) >= duration('1s')
+                      inflightCap:
+                        description: Max concurrent in-flight requests per endpoint.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      tpmPerMinute:
+                        description: |-
+                          Per-endpoint tokens-per-minute budget. Pre-debited at select,
+                          trued-up on completion.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                    type: object
                   extAuth:
                     description: |-
                       External authentication configuration for requests
@@ -15686,6 +15874,49 @@ spec:
                   health:
                     description: Settings for passive and active health checking.
                     properties:
+                      activeProbe:
+                        description: |-
+                          FR-5.1-5.3 active health probe settings. Drives a background prober
+                          that periodically sends a tiny request to each endpoint and feeds the
+                          outcome into the same health/eviction machinery as real traffic — so a
+                          dead backend is evicted before the next real request hits it. When
+                          unset, health is purely reactive (real-request outcomes only).
+                        properties:
+                          consecutiveFailures:
+                            description: |-
+                              Number of consecutive probe failures required before the prober evicts
+                              an endpoint. Default 2 when unset. This is independent of
+                              `BackendEviction.consecutiveFailures` (which counts real-request
+                              failures); both feed the same eviction decision.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          interval:
+                            default: 30s
+                            description: |-
+                              Interval between probe sweeps across all endpoints. Default 30s when
+                              unset. Shorter intervals detect failures faster but add load; the probe
+                              payload is tiny (`max_tokens: 1`) and deduped per endpoint.
+                            maxLength: 32
+                            type: string
+                            x-kubernetes-validations:
+                            - message: invalid duration value
+                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                            - message: probeInterval must be at least 1 second
+                              rule: duration(self) >= duration('1s')
+                          timeout:
+                            default: 5s
+                            description: |-
+                              Per-probe connect+read timeout. Default 5s when unset. A probe that
+                              times out is recorded as a failure (same as a real-request timeout).
+                            maxLength: 32
+                            type: string
+                            x-kubernetes-validations:
+                            - message: invalid duration value
+                              rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                            - message: probeTimeout must be at least 1 second
+                              rule: duration(self) >= duration('1s')
+                        type: object
                       eviction:
                         description: Settings for evicting unhealthy backends.
                         properties:
@@ -16252,6 +16483,28 @@ spec:
                     required:
                     - source
                     type: object
+                  sticky:
+                    description: 'G6: soft api-key→backend affinity for prompt-cache
+                      hit rate.'
+                    properties:
+                      key:
+                        description: |-
+                          CEL expression resolving to the affinity key. Defaults to the request's
+                          api-key sha256 when unset.
+                        maxLength: 16384
+                        minLength: 1
+                        type: string
+                      ttl:
+                        description: How long a pin survives after last use. Default
+                          10m.
+                        maxLength: 32
+                        type: string
+                        x-kubernetes-validations:
+                        - message: invalid duration value
+                          rule: matches(self, '^([0-9]{1,5}(h|m|s|ms)){1,4}$')
+                        - message: ttl must be at least 1 second
+                          rule: duration(self) >= duration('1s')
+                    type: object
                   tcp:
                     description: Settings for managing TCP connections to the backend
                     properties:
@@ -16787,9 +17040,10 @@ spec:
                       rule: '!has(self.url) || self.url.matches(''^https?://[^/?#]+$'')'
                 type: object
                 x-kubernetes-validations:
-                - message: at least one of the fields in [ai auth extAuth health http
-                    mcp sessionAffinity tcp tls transformation tunnel] must be set
-                  rule: '[has(self.ai),has(self.auth),has(self.extAuth),has(self.health),has(self.http),has(self.mcp),has(self.sessionAffinity),has(self.tcp),has(self.tls),has(self.transformation),has(self.tunnel)].filter(x,x==true).size()
+                - message: at least one of the fields in [ai auth capacity extAuth
+                    health http mcp sessionAffinity sticky tcp tls transformation
+                    tunnel] must be set
+                  rule: '[has(self.ai),has(self.auth),has(self.capacity),has(self.extAuth),has(self.health),has(self.http),has(self.mcp),has(self.sessionAffinity),has(self.sticky),has(self.tcp),has(self.tls),has(self.transformation),has(self.tunnel)].filter(x,x==true).size()
                     >= 1'
               static:
                 description: Static hostname, IP address, or Unix Domain Socket backend.
