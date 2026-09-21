@@ -3188,6 +3188,15 @@ async fn make_backend_call(
 		// the sidecar is internal and carries its own `x-ai-ws-llm-auth-*`.
 		let ws_reroute = req.extensions().get::<ws::WebSearchReroute>().cloned();
 		if let Some(_reroute) = &ws_reroute {
+			// Apply backend auth BEFORE swapping the target, so the auth
+			// headers (Authorization / x-api-key) are on the request and
+			// can be forwarded to the sidecar via x-ai-ws-llm-auth-*.
+			auth::apply_late_backend_auth(
+				backend_call.backend_policies.backend_auth.as_ref(),
+				&mut req,
+			)
+			.assert_size::<{ 2 * 1024 }>()
+			.await?;
 			// Forward the resolved LLM endpoint + auth to the sidecar via
 			// x-ai-ws-llm-* headers, mirroring Kong's web-search-prepare.lua
 			// `llm_forward_headers`. The sidecar's search loop calls this LLM
@@ -3214,11 +3223,9 @@ async fn make_backend_call(
 					);
 				}
 			}
-			// Forward the backend auth (already applied to req by late backend
-			// auth in the else branch above) so the sidecar can authenticate
-			// to the LLM. The auth header name is canonicalized to
-			// "Authorization" (the standard bearer-token header the sidecar
-			// forwards verbatim).
+			// Forward the backend auth (just applied above) so the sidecar
+			// can authenticate to the LLM. Try Authorization first, then
+			// x-api-key (Anthropic-style).
 			if let Some(auth_val) = req.headers().get(header::AUTHORIZATION).cloned() {
 				req.headers_mut().insert(
 					HeaderName::from_static("x-ai-ws-llm-auth-header"),
@@ -3228,8 +3235,26 @@ async fn make_backend_call(
 					HeaderName::from_static("x-ai-ws-llm-auth-value"),
 					auth_val,
 				);
+			} else if let Some(api_key) = req.headers().get("x-api-key").cloned() {
+				req.headers_mut().insert(
+					HeaderName::from_static("x-ai-ws-llm-auth-header"),
+					HeaderValue::from_static("x-api-key"),
+				);
+				req.headers_mut().insert(
+					HeaderName::from_static("x-ai-ws-llm-auth-value"),
+					api_key,
+				);
 			}
 			backend_call.target = ws_reroute.as_ref().unwrap().target.clone();
+			// The sidecar is plain HTTP (127.0.0.1:8080). Clear the backend
+			// TLS + auth inherited from the original upstream so the
+			// connection is plaintext and no upstream auth is applied.
+			{
+				let mut policies = (*backend_call.backend_policies).clone();
+				policies.backend_tls = None;
+				policies.backend_auth = None;
+				backend_call.backend_policies = Arc::new(policies);
+			}
 			http::modify_req_uri(&mut req, |uri| {
 				uri.path_and_query = Some(PathAndQuery::from_static("/v1/chat/completions"));
 				Ok(())
