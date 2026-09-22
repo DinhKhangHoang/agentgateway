@@ -2246,6 +2246,21 @@ impl AIProvider {
 			let found = req.web_search_triggers();
 			let selected = cfg.select_enabled(&found);
 			if !selected.is_empty() {
+				// Append the [n]-citation system instruction to the prompt,
+				// mirroring Kong's web-search-prepare.lua (registry-driven
+				// `server_tools.shapes.web_search.system_instruction`). Without
+				// this, models like GLM-5.2 don't produce [n] markers → 0
+				// citations in the provenance frame.
+				req.append_prompts(vec![SimpleChatCompletionMessage {
+					role: Strng::from("system"),
+					content: Strng::from(
+						"When you use the web_search tool, cite each claim with [n] where n is the \
+						 1-indexed ordinal of the search result it came from (results are returned \
+						 in order across all searches). Only cite results that were actually \
+						 returned. Search only when the question needs current information beyond \
+						 your knowledge.",
+					),
+				}]);
 				let route_type = match original_format {
 					InputFormat::Completions => RouteType::Completions,
 					InputFormat::Messages => RouteType::Messages,
